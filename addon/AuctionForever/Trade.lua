@@ -193,7 +193,11 @@ function T.DrawBuy()
 		end
 	end
 	BuyP.Empty:SetShown(#Buy.rows == 0)
-	if #Buy.rows == 0 then BuyP.Empty:SetText(UI().FlipEmptyReason()) end
+	if #Buy.rows == 0 then
+		local D = AuctionForeverData
+		BuyP.Empty:SetText((type(D) == "table" and type(D.items) == "table") and "No flip targets right now."
+			or "No auction data yet: scan at the auction house.")
+	end
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
 	BuyP.Buy:SetEnabled(E ~= nil and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
@@ -384,7 +388,7 @@ local function BuildBuy()
 		Buy.offset = math.max(0, math.min(math.max(0, #Buy.rows - ROWS), (Buy.offset or 0) - Delta * 3))
 		T.DrawBuy()
 	end)
-	P.Empty = Text(P, "GameFontHighlight", 40, -90, 600)
+	P.Empty = Text(P, "GameFontDisable", 20, -66, 600) -- one line in the table, where the first row would be
 	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)

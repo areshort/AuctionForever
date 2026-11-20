@@ -463,7 +463,8 @@ if real:
     ok(L('LookupSpy[1] ~= nil'), 'when it finishes: the waiting refresh runs')
     # empty list explains why
     X('FlipTargets = {}; AF_NS.Trade.RefreshBuy()')
-    ok(L('AuctionForeverBuyPanel.Empty:IsShown()'), 'no targets: shows the reason')
+    ok(L('AuctionForeverBuyPanel.Empty:IsShown()') and L('AuctionForeverBuyPanel.Empty:GetText()') == 'No flip targets right now.',
+       'no targets: one line in the table says so: ' + str(L('AuctionForeverBuyPanel.Empty:GetText()')))
     ok(not L('AuctionForeverBuyPanel.Skip:IsEnabled()'), 'no targets: Next is greyed out')
     ok(L('AuctionForeverBuyPanel.Refresh._template') == 'RefreshButtonTemplate' and L('AuctionForeverSellPanel.Refresh._template') == 'RefreshButtonTemplate',
        "both AF pages use Blizzard's sharp refresh button")
