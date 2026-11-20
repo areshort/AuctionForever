@@ -484,6 +484,22 @@ if real:
       LookupSpy = {}
       Click(AuctionForeverSellTab)""")
     ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
+    # AF Sell agrees with the tooltip: an item whose Rec is Vendor isn't in the queue.
+    X('RealRec = AF_NS.Core.Recommend; AF_NS.Core.Recommend = function(I, V, P) if I and I.id == 2589 then return "Vendor" end return RealRec(I, V, P) end')
+    vq = L('AF_NS.Trade.BuildQueue()')
+    ok(not any(vq[i].id == 2589 for i in range(1, len(vq) + 1)), 'Rec says Vendor: not in the AF Sell list (same advice as the tooltip)')
+    X('AF_NS.Core.Recommend = RealRec')
+    # Not a steady seller with the cheapest listing far above what buyers paid: priced at what buyers paid.
+    X("""RealSt, RealSP = AF_NS.Core.Status, AF_NS.Core.SellPrice
+      AF_NS.Core.Status = function() return "slow" end
+      AF_NS.Core.SellPrice = function(I, Q, Lo) return 3519, 24, 3, Q, "flooding" end
+      MQ = AF_NS.Trade.BuildQueue()
+      AF_NS.Core.Status, AF_NS.Core.SellPrice = RealSt, RealSP""")
+    mg = [L(f'MQ[{i}]') for i in range(1, int(L('#MQ')) + 1)]
+    lg = [g for g in mg if g.id == 2589]
+    mk = L('AF_NS.Core.Market(AF_NS.Core.Info(2589))')
+    ok(lg and lg[0].price == int(max(mk, L('math.ceil(AF_NS.UI.Vendor(2589) / 0.95)'))) and lg[0].flag == 'market',
+       f"slow seller, cheapest listing far above sales: priced at what buyers paid ({lg and lg[0].price} vs market {mk})")
     q = L('AF_NS.Trade.SellQueue()')
     ids = [q[i].id for i in range(1, len(q) + 1)] if q else []
     ok(2589 in ids and 14047 in ids, f'sell queue has the AH items from the bags: {ids}')

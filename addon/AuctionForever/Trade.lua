@@ -431,6 +431,11 @@ local function Suggest(G)
 	local Cut = PaidFloor(G) and Core.CutLoss(I, PaidFloor(G), SaveDB(), G.id)
 	if Cut then Lo = Floor(G) end
 	local Price, H, Idx, Qty, Flag = Core.SellPrice(I, G.count, Lo)
+	-- Not a steady seller: never above what buyers have actually paid (the tooltip's AH price), even when the
+	-- cheapest listing is far higher (nobody is buying at that price).
+	local St = Core.Status(I)
+	local Market = Core.Market(I)
+	if Price and St ~= "good" and St ~= "early" and Market and Price > Market then Price, Flag = math.max(Lo, Market), "market" end
 	if Cut and Price and Price < PaidFloor(G) then Flag = "cutloss" end
 	if not Price then H, Idx, Price, Qty = 2, 1, math.max(Lo, Core.Market(I) or Lo), G.count end
 	G.price, G.durIdx, G.qty, G.flag = math.max(Lo, math.floor(Price)), Idx, Qty, Flag
@@ -454,9 +459,9 @@ function T.BuildQueue()
 	local Q = {}
 	for _, G in ipairs(Order) do
 		local I = Core.Info(G.id)
-		local Market = I and Core.Market(I)
 		G.vendor = UI().Vendor(G.id)
-		if Market and Market > G.vendor then
+		-- Same advice as the item tooltip's Rec line: only what's worth selling on the auction house.
+		if I and Core.Recommend(I, G.vendor, UI().TargetPrice(I)) == "Auction" then
 			G.info = I
 			Suggest(G)
 			G.value = G.price * G.count
@@ -565,6 +570,7 @@ function T.DrawSell()
 		loss = "|cffff4040Being the cheapest would sell below your floor (vendor or what you paid): holding may be better.|r",
 		flooding = "|cffffd100More is being posted than sold: priced 1c under the cheapest; prices may keep falling.|r",
 		guess = "New listings per hour not measured yet: priced 1c under the cheapest to be safe.",
+		market = "|cffffd100Not a steady seller: priced at what buyers have recently paid, not under the (higher) cheapest listing.|r",
 		cutloss = "|cffff4040The market has stayed under what you paid (all day, or it expired twice): priced at the market to cut the loss. Or keep it and wait.|r",
 	}
 	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: the highest price that still sells within 2 h with other sellers posting.")
