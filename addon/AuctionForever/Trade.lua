@@ -144,6 +144,7 @@ local function SyncBar(S, Off, Total)
 	S.Count:SetText(string.format("%d-%d of %d", Off + 1, math.min(Total, Off + ROWS), Total))
 	return Off
 end
+T.ScrollBar, T.SyncBar = ScrollBar, SyncBar -- the AuctionForever window uses them too
 local function Header(Parent, X, Y, Cols, Names)
 	local CX = X + 24
 	for c, W in ipairs(Cols) do

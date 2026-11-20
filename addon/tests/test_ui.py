@@ -22,7 +22,7 @@ setmetatable(_G, { __index = function(_, k)
   if not Allowed[k] then
     local Info = debug.getinfo(2, "S")
     local Src = Info and Info.source or "?"
-    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Mail.lua") or Src:find("Trade.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Mail.lua") or Src:find("Trade.lua") or Src:find("Farm.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
   end
 end })
 """)
@@ -498,7 +498,9 @@ if real:
       C_Container = { GetContainerNumSlots = function(b) return b == 0 and #Bag or 0 end, GetContainerItemInfo = function(b, s) return b == 0 and Bag[s] or nil end }
       ItemLocation = { CreateFromBagAndSlot = function(self, b, s) return { bag = b, slot = s, itemID = Bag[s] and Bag[s].itemID } end }
       RealGI = C_Item.GetItemInfo
-      C_Item.GetItemInfo = function(id) local r = { RealGI(id) }; if id == 10620 then r[11] = 100000000 end return unpack(r, 1, 11) end
+      -- 14047's vendor price pinned low: with the real data file its shipped vendor price (4s) is above the 4s fresh
+      -- listing set up for AF Buy, which (rightly) made it a vendor item and dropped it from the queue.
+      C_Item.GetItemInfo = function(id) local r = { RealGI(id) }; if id == 10620 then r[11] = 100000000 elseif id == 14047 then r[11] = 10 end return unpack(r, 1, 11) end
       LookupSpy = {}
       Click(AuctionForeverSellTab)""")
     ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
@@ -1079,6 +1081,112 @@ X("""Offer = {}; for k = 1, 310 do Offer[k] = Fl(881000 + k, 10, 1, 600) end
   AF_NS.UI.LogFlips(3000)""")
 ok(int(L('#AuctionForeverDB.flipLog')) == 300 and L('AuctionForeverDB.flipLog[1][1]') != 880001, f"log capped at 300 entries, oldest dropped ({L('#AuctionForeverDB.flipLog')})")
 X('AF_NS.UI.FlipRows = RealRows; AuctionForeverDB.flipLog = nil')
+# ---- Farm tab: Gather and Craft views from Farm.lua (fixture data, independent of the real data file) -----------
+toc = [l.strip() for l in open(os.path.join(ADDON, 'AuctionForever.toc'), encoding='utf-8') if l.strip() and not l.startswith('#')]
+ok(toc[:3] == ['Core.lua', 'Recipes.lua', 'Farm.lua'], f'.toc loads Recipes.lua and Farm.lua right after Core.lua: {toc[:3]}')
+ok(L('AF_NS.Farm ~= nil and type(AF_Recipes) == "table"'), 'Farm.lua and Recipes.lua loaded with the add-on')
+X("""SavedData, SavedDB, SavedVer = AuctionForeverData, AuctionForeverDB, AF_NS.Scan.Version
+  AuctionForeverDB = { names = {} }
+  local F = { "low", "qty", "med", "hi", "med24", "medAll", "perHour", "medHour", "hoursSeen", "hoursWithSales", "sales",
+    "sellThrough", "qtyDayAgo", "newHour", "lows", "lowHi24", "ladder" }
+  local function Good(P, PerHour) return { P, 10, P, P, P, P, PerHour, PerHour, 24, 24, 400, 0.9, 10, PerHour, nil, nil, { { P, 10 } } } end
+  local Items, Info = {}, {}
+  Items[2589] = Good(100, 40)     -- Linen Cloth
+  Items[2996] = Good(1000, 5)     -- Bolt of Linen Cloth (2 Linen): a paying craft
+  Items[118] = Good(2000, 5)      -- Minor Healing Potion (First Aid in Forever): vial + spice from vendors, 1 Peacebloom
+  Items[2447] = Good(50, 30)      -- Peacebloom
+  Items[880100] = Good(900000, 5) -- gear: left out of Gather
+  for k = 1, 20 do Items[880200 + k] = Good(1000 + k * 100, 2) end
+  for id in pairs(Items) do Info[id] = { 10, 1, 1 } end
+  Info[880100] = { 10, 3, 0 }
+  AuctionForeverData = { v = 1, time = os.time(), hours = 24, fields = F, items = Items, info = Info, names = {} }
+  AF_NS.Scan.Version = (AF_NS.Scan.Version or 0) + 1
+  RealInstant = C_Item.GetItemInfoInstant
+  C_Item.GetItemInfoInstant = function(id) if id == 880100 then return id, "Armor", "", "", 134400, 4, 0 end return RealInstant(id) end
+  RealSkill = C_SkillInfo
+  C_SkillInfo = nil
+  RealGII = C_Item.GetItemInfo
+  InfoCalls = 0
+  C_Item.GetItemInfo = function(...) InfoCalls = InfoCalls + 1 return RealGII(...) end
+  GatherRows = AF_NS.UI.GatherRows()
+  CraftRows = AF_NS.UI.CraftRows()
+  ComputeInfoCalls = InfoCalls
+  C_Item.GetItemInfo = RealGII""")
+gr = L('GatherRows')
+gids = [gr[i].id for i in range(1, len(gr) + 1)]
+ok(880100 not in gids and 2589 in gids and 2996 in gids and 118 in gids and len(gids) == 24, f'Gather: every item class except gear ({len(gids)} rows)')
+vals = [gr[i].value for i in range(1, len(gr) + 1)]
+ok(vals == sorted(vals, reverse=True), 'Gather: best gold a day first')
+ok(L('ComputeInfoCalls') == 0, f'working out both lists asks the game for no item info (no server flood): {L("ComputeInfoCalls")} calls')
+r = [gr[i] for i in range(1, len(gr) + 1) if gr[i].id == 2589][0]
+# Linen: 100c x 0.97 x 0.95 = 92.15, minus the deposit lost on unsold posts (2 h: 10c x 3/24 x 2 = 2c -> 1c minimum... see
+# EstimatedDeposit) x 0.1/0.9; share = 40 / (40 + 40) = 0.5 -> 480 a day.
+ok(abs(r.perDay - 480) < 0.01 and 90 < r.net < 92.2, f'Gather row: net each after cut and deposits, your share of sales ({r.net:.2f}, {r.perDay:.0f}/day)')
+cr = L('CraftRows')
+cids = [(cr[i].id, cr[i].spell) for i in range(1, len(cr) + 1)]
+ok((2996, 2963) in cids and (118, 1244431) in cids, f'Craft: recipes for items in the data (all professions while unknown): {cids}')
+ok(L('AF_NS.UI.ProfessionsKnown') is False and not L('AF_NS.UI.CraftFiltered'), 'professions not known: all recipes shown')
+
+# The window: Gather view, columns, scroll bar, controls, honest per-day label.
+X('AF_NS.UI.FarmView = "gather"; AF_NS.UI.Toggle(1); if not AuctionForeverFrame:IsShown() then AF_NS.UI.Toggle(1) end')
+heads = [L(f'AuctionForeverFrame.Headers[{i}]:GetText()') for i in range(1, 7)]
+ok(heads == ['Item', 'Net each', 'Sells/day*', 'Gold/day*', 'Your gold/hr', 'Status'], f'Gather columns: {heads}')
+ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'market room' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
+   'per-day numbers labelled as market room: ' + str(L('AuctionForeverFrame.FarmBar.Note:GetText()')))
+ok(L('AuctionForeverFrame.Bar:IsShown()') and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24', 'scroll bar with "1-14 of 24"')
+ok(not L('AuctionForeverFrame.FarmBar.Gather:IsEnabled()') and L('AuctionForeverFrame.FarmBar.Craft:IsEnabled()') and not L('AuctionForeverFrame.FarmBar.Prof:IsShown()'),
+   'Gather selected: its button greyed, no professions button')
+X('AuctionForeverFrame.List:GetScript("OnMouseWheel")(AuctionForeverFrame.List, -1)')
+ok(L('AuctionForeverFrame.Bar.Count:GetText()') == '4-17 of 24', 'mouse wheel scrolls and moves the bar: ' + str(L('AuctionForeverFrame.Bar.Count:GetText()')))
+X('Click(AuctionForeverFrame.FarmBar.Sort)')
+gr2 = L('AF_NS.UI.GatherRows()')
+nets = [gr2[i].net for i in range(1, len(gr2) + 1)]
+ok(L('AF_NS.UI.GatherSort') == 'unit' and nets == sorted(nets, reverse=True) and L('AuctionForeverFrame.FarmBar.Sort:GetText()') == 'Sort: net each',
+   'Sort button: by net each')
+X('Click(AuctionForeverFrame.FarmBar.Sort)')
+ok(L('AF_NS.UI.GatherSort') == 'gold', 'Sort button cycles back to gold/day')
+
+# Craft view.
+X('Click(AuctionForeverFrame.FarmBar.Craft)')
+heads = [L(f'AuctionForeverFrame.Headers[{i}]:GetText()') for i in range(1, 7)]
+ok(heads == ['Item', 'Profession', 'Profit/craft', 'Crafts/day*', 'Gold/day*', 'Added/day*'], f'Craft columns: {heads}')
+ok(L('AuctionForeverFrame.FarmBar.Prof:IsShown()') and 'not known' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
+   'professions unknown: says all are shown')
+X('''Tip = { lines = {} }
+  function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
+  for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
+tip = [str(v) for v in L('Tip.lines').values()]
+ok(any('First Aid' in t for t in tip) and any('yellow 55' in t for t in tip) and any('(vendor)' in t for t in tip)
+   and any('(AH)' in t for t in tip) and any('market room' in t for t in tip) and all(all(ord(c) < 128 for c in t) for t in tip),
+   f'craft tooltip: profession, ranks, reagents with source, market room note (ASCII): {tip}')
+# Your professions from the game: Tailoring known (rank 75), First Aid known through its second skill line.
+X('''C_SkillInfo = { GetSkillLineInfoByID = function(id)
+    if id == 197 then return { skillID = 197, rank = 75 } end
+    if id == 2942 then return { skillID = 2942, rank = 40 } end
+    if id == 171 then return { skillID = 171, rank = 0 } end
+    return nil end }
+  AF_NS.UI.Load()''')
+cr = L('AF_NS.UI.CraftRows()')
+skills = sorted(set(cr[i].skill for i in range(1, len(cr) + 1)))
+ok(L('AF_NS.UI.CraftFiltered') and skills == [129, 197], f'My professions: only Tailoring and First Aid recipes ({skills})')
+ok(L('(function() for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.skill == 197 then return R.myRank end end end)()') == 75, 'your rank kept for the tooltip')
+X('Click(AuctionForeverFrame.FarmBar.Prof)')
+ok(L('AF_NS.UI.CraftAll') and L('AuctionForeverFrame.FarmBar.Prof:GetText()') == 'All professions' and not L('AF_NS.UI.CraftFiltered'), 'All professions button shows every recipe')
+X('Click(AuctionForeverFrame.FarmBar.Prof)')
+# Cached until the data changes: Farm.Crafts runs once per data version.
+X('''RealCrafts = AF_NS.Farm.Crafts; CraftRuns = 0
+  AF_NS.Farm.Crafts = function(...) CraftRuns = CraftRuns + 1 return RealCrafts(...) end
+  AF_NS.UI.CraftRows(); AF_NS.UI.Load(); AF_NS.UI.Refresh(); AF_NS.UI.CraftRows()''')
+ok(L('CraftRuns') == 0, 'redraws reuse the cached craft list')
+X('AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.UI.CraftRows()')
+ok(L('CraftRuns') == 1, 'a new scan works it out again')
+X('AF_NS.Farm.Crafts = RealCrafts')
+# Old Farm list users still work: the quick scan list and name preload take the top of Gather.
+ql = L('AF_NS.UI.QuickList()')
+ok(2589 in [ql[i] for i in range(1, len(ql) + 1)], 'quick scan list still includes good Gather items')
+X('Click(AuctionForeverFrame.FarmBar.Gather); AuctionForeverFrame:Hide()')
+X("""AuctionForeverData, AuctionForeverDB, AF_NS.Scan.Version = SavedData, SavedDB, SavedVer + 100
+  C_Item.GetItemInfoInstant = RealInstant; C_SkillInfo = RealSkill""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

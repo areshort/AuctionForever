@@ -6,6 +6,8 @@
 ## SavedVariablesPerCharacter: AuctionForeverChar
 
 Core.lua
+Recipes.lua
+Farm.lua
 AuctionForeverData.lua
 Scan.lua
 SelfTest.lua

@@ -83,10 +83,6 @@ local function Icon(id)
 	local _, _, _, _, Tex = C_Item.GetItemInfoInstant(id)
 	return Tex or 134400
 end
-local function IsReagent(id)
-	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
-	return ClassID == 7 -- Trade Goods
-end
 -- Does the item stack? The stack size is only known once the game has loaded the item, so until then decide from
 -- its type, which the game always knows: weapons and armor don't stack, trade goods, consumables etc. do.
 local function Stacks(id)
@@ -152,29 +148,180 @@ local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"]
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
 L.StatusText = StatusText
 
--- Lists ----------------------------------------------------------------------------------------------------------
-function L.FarmRows()
+-- Farm tab ---------------------------------------------------------------------------------------------------------
+-- Two views from Farm.lua: Gather (items to farm and sell, gear left out) and Craft (every recipe in Recipes.lua).
+-- Worked out when the view opens and reused until the data or a scan changes (thousands of items: never per redraw).
+-- Per-day numbers are market room: your share of what the market buys a day, if you can supply that much.
+local Farm = AF.Farm
+L.FarmView = "gather"   -- or "craft"
+L.CraftAll = false      -- false: only your professions (when the game tells us which you have)
+L.GatherSort, L.CraftSort = "gold", "gold"
+local GatherCache, CraftCache
+local function DataKey()
+	local D = AuctionForeverData
+	return string.format("%d:%d", AF.Scan and AF.Scan.Version or 0, type(D) == "table" and D.time or 0)
+end
+-- Vendor price without asking the game (thousands of unloaded items would flood the server): names cache, then the
+-- data file's shipped info.
+local function KnownVendor(id)
+	local C = NameCache()[id]
+	if C and C[3] then return C[3] end
+	local I = Shipped(id)
+	return I and I[1] or nil
+end
+-- Deposit estimate for the farm lists (the same share of the vendor price as EstimatedDeposit); nil = not known.
+local function FarmDeposit(I, H, Qty)
+	local V = I and I.id and KnownVendor(I.id)
+	if not V then return nil end
+	return math.max(Core.MinDeposit, math.floor(V * Core.DepositPerHour * H)) * (Qty or 1)
+end
+-- Core.Info once per item per computation (a reagent is used by many recipes).
+local function FarmEnv()
+	local Memo = {}
+	return {
+		info = function(id)
+			local I = Memo[id]
+			if I == nil then I = Core.Info(id) or false; Memo[id] = I end
+			return I or nil
+		end,
+		status = Core.Status,
+		deposit = FarmDeposit,
+		vendorSell = KnownVendor,
+	}
+end
+-- Gear (weapons, armor) isn't something you farm to sell by the stack: left out of Gather.
+local function IsGear(id)
+	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
+	if ClassID then return ClassID == 2 or ClassID == 4 end
+	return Kind(id) == "item"
+end
+L.IsGear = IsGear
+local GATHER_SORT = { gold = "value", unit = "net" }
+local CRAFT_SORT = { gold = "profitPerDay", added = "addedPerDay", craft = "profit" }
+L.SORT_TEXT = { gold = "Sort: gold/day", unit = "Sort: net each", added = "Sort: added/day", craft = "Sort: profit/craft" }
+local function SortBy(Rows, Field)
+	table.sort(Rows, function(a, b)
+		local x, y = a[Field] or -math.huge, b[Field] or -math.huge
+		if x ~= y then return x > y end
+		if a.id ~= b.id then return a.id < b.id end
+		return (a.spell or 0) < (b.spell or 0)
+	end)
+end
+-- Gather view: every item with auction data except gear, best gold a day first; excluded ones (warming up, no
+-- sales...) are left out.
+function L.GatherRows()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
-	local Good, Other = {}, {}
-	for id in pairs(D.items) do
-		if IsReagent(id) then
-			local I = Core.Info(id)
-			local S = Core.Status(I)
-			local Row = { id = id, info = I, status = S, value = Core.ValuePerDay(I) }
-			Row.price = Core.Market(I) or 0
-			if S == "good" then Good[#Good + 1] = Row elseif S ~= "no data" then Other[#Other + 1] = Row end
+	local Key = DataKey()
+	if not (GatherCache and GatherCache.key == Key) then
+		local Ids = {}
+		for id in pairs(D.items) do if not IsGear(id) then Ids[#Ids + 1] = id end end
+		table.sort(Ids)
+		GatherCache = { key = Key, rows = (Farm.RawFarms(Ids, FarmEnv())) }
+	end
+	if GatherCache.sort ~= L.GatherSort then
+		SortBy(GatherCache.rows, GATHER_SORT[L.GatherSort] or "value")
+		GatherCache.sort = L.GatherSort
+	end
+	return GatherCache.rows
+end
+L.FarmRows = L.GatherRows -- quick scan list and name preload use the top of it
+
+-- Forever's professions come with a second skill line each (SkillLine.ParentSkillLineID): either may be the known one.
+local PROF_CHILD = { [171] = 2937, [164] = 2938, [185] = 2939, [333] = 2940, [202] = 2941, [129] = 2942, [165] = 2945,
+	[186] = 2946, [197] = 2948, [40] = 2988 }
+-- Your professions and ranks: { [skillLine] = rank }, or nil when the game doesn't say (then all are shown).
+function L.MyProfessions()
+	local SI = rawget(_G, "C_SkillInfo") -- not every client has it
+	local Get = SI and SI.GetSkillLineInfoByID
+	if not Get then return nil end
+	local Out, Any = {}, false
+	for Line in pairs(AF_RecipeSkills or {}) do
+		for _, id in ipairs({ Line, PROF_CHILD[Line] }) do
+			local Ok, Info = pcall(Get, id)
+			if Ok and type(Info) == "table" and (Info.rank or 0) > 0 then
+				Out[Line] = math.max(Out[Line] or 0, Info.rank)
+				Any = true
+			end
 		end
 	end
-	table.sort(Good, function(a, b) return a.value > b.value end)
-	-- Not proven yet (warming up, slow...): best known sellers first, then by price.
-	table.sort(Other, function(a, b) if a.value ~= b.value then return a.value > b.value end return a.price > b.price end)
-	local Out = {}
-	for i = 1, math.min(#Good, 60) do Out[#Out + 1] = Good[i] end
-	for i = 1, math.min(#Other, 20) do Out[#Out + 1] = Other[i] end
-	return Out
+	return Any and Out or nil
+end
+-- Craft view: recipes that pay one way or the other (buy mats profit, or value added over selling your mats).
+function L.CraftRows()
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
+	local Mine = L.MyProfessions()
+	L.ProfessionsKnown = Mine ~= nil
+	local Filtered = (not L.CraftAll) and Mine ~= nil
+	local PKey = "all"
+	if Filtered then
+		local T = {}
+		for Line, Rank in pairs(Mine) do T[#T + 1] = Line .. "=" .. Rank end
+		table.sort(T)
+		PKey = table.concat(T, ",")
+	end
+	local Key = DataKey() .. ":" .. PKey
+	if not (CraftCache and CraftCache.key == Key) then
+		local _, _, All = Farm.Crafts(FarmEnv(), Filtered and function(R) return Mine[R.skill] ~= nil end or nil)
+		local Rows = {}
+		for _, R in ipairs(All) do
+			R.myRank = Mine and Mine[R.skill]
+			if not R.excluded and ((not R.buyExcluded and (R.profit or 0) > 0) or (R.added or 0) > 0) then Rows[#Rows + 1] = R end
+		end
+		CraftCache = { key = Key, rows = Rows }
+	end
+	L.CraftFiltered = Filtered
+	if CraftCache.sort ~= L.CraftSort then
+		SortBy(CraftCache.rows, CRAFT_SORT[L.CraftSort] or "profitPerDay")
+		CraftCache.sort = L.CraftSort
+	end
+	return CraftCache.rows
+end
+function L.FarmData() return L.FarmView == "craft" and L.CraftRows() or L.GatherRows() end
+function L.SetFarmView(View) L.FarmView = View; L.Load() end
+function L.ToggleCraftAll() L.CraftAll = not L.CraftAll; L.Load() end
+function L.NextFarmSort()
+	local Order = L.FarmView == "craft" and { "gold", "added", "craft" } or { "gold", "unit" }
+	local Cur = L.FarmView == "craft" and L.CraftSort or L.GatherSort
+	local Next = Order[1]
+	for i, K in ipairs(Order) do if K == Cur then Next = Order[i % #Order + 1] end end
+	if L.FarmView == "craft" then L.CraftSort = Next else L.GatherSort = Next end
+	L.Load()
 end
 
+local function Money(C) return C and Core.MoneyColor(C) or "-" end
+-- Tooltip lines for a Farm row (added under the item's own tooltip).
+function L.FarmTooltip(E, Tip)
+	Tip = Tip or GameTooltip
+	local function Line(T, R, G, B) Tip:AddLine(T, R or 1, G or 1, B or 1, true) end
+	Tip:AddLine(" ")
+	if E.spell then
+		local Prof = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
+		local Need = (E.req and E.req > 0) and ("needs " .. E.req) or "needed rank not in the game data"
+		Tip:AddLine("AuctionForever craft: " .. Prof, 1, 0.82, 0)
+		Line(string.format("%s; yellow %d, grey %d%s", Need, E.yellow or 0, E.grey or 0, E.myRank and (" (you: " .. E.myRank .. ")") or ""))
+		Line(E.teach and ("Learned from " .. (ItemName(E.teach))) or "Learned from a trainer (or automatically)")
+		Line(string.format("Makes %d; sells for %s each, %s after the cut and deposits", E.makes or 1, Money(E.price), Money(E.net)))
+		for _, Rg in ipairs(E.reagents or {}) do
+			local Src = Rg.source == "vendor" and "vendor" or (Rg.source == "ah" and "AH" or "no price")
+			Line(string.format("  %dx %s: %s each (%s)", Rg.n, (ItemName(Rg.id)), Money(Rg.each), Src), 0.8, 0.8, 0.8)
+		end
+		if E.buyExcluded then Line("Buy mats: " .. E.buyExcluded, 1, 0.5, 0.25)
+		else Line(string.format("Buy mats: cost %s, profit %s a craft", Money(E.cost), Money(E.profit))) end
+		Line(string.format("Your own mats: they'd sell for %s; crafting adds %s a craft (%s with vendor goods only)",
+			Money(E.matsValue), Money(E.added), Money(E.self)))
+	else
+		Tip:AddLine("AuctionForever farm", 1, 0.82, 0)
+		Line(string.format("Sells for %s; you net %s each after the cut and deposits", Money(E.price), Money(E.net)))
+		Line(string.format("Your share of sales: %d%% -> %.0f a day", math.floor((E.share or 0) * 100 + 0.5), E.perDay or 0))
+		if E.crafted then Line("Also craftable: see the Craft view") end
+	end
+	for _, N in ipairs(E.notes or {}) do Line(N, 1, 0.5, 0.25) end
+	Line("Per day = market room: your share of what the market buys a day, if you can supply that much.", 0.6, 0.6, 0.6)
+end
+
+-- Lists ----------------------------------------------------------------------------------------------------------
 -- Flip budget for this auction house visit: your gold minus MinKeep, measured when you opened the AH or when
 -- your gold went up since (sales, mail). Purchases count against it, so it doesn't halve again after every buy.
 local BudgetBase
@@ -534,7 +681,9 @@ local Frame
 local Rows = {}
 local Data, Offset, Tab = {}, 0, 1
 local Columns = {
-	[1] = { { "Reagent", 200 }, { "Value/day", 90 }, { "Sell at", 80 }, { "Sells/hr", 60 }, { "Your gold/hr", 90 }, { "Status", 80 } },
+	-- Farm: "*" = market room (your share of what the market buys a day), explained under the list.
+	gather = { { "Item", 190 }, { "Net each", 85 }, { "Sells/day*", 65 }, { "Gold/day*", 85 }, { "Your gold/hr", 80 }, { "Status", 70 } },
+	craft = { { "Item", 165 }, { "Profession", 80 }, { "Profit/craft", 85 }, { "Crafts/day*", 60 }, { "Gold/day*", 85 }, { "Added/day*", 85 } },
 	[2] = { { "Item", 190 }, { "Profit", 80 }, { "Buy", 110 }, { "Resell", 80 }, { "Sells/hr", 60 }, { "Time", 40 }, { "Status", 50 } },
 }
 
@@ -556,7 +705,7 @@ local function SetCells(Row, Values)
 end
 
 local function LayoutHeader()
-	local Cols = Columns[Tab]
+	local Cols = Columns[Tab == 1 and L.FarmView or Tab]
 	for i, H in ipairs(Frame.Headers) do
 		local C = Cols and Cols[i]
 		H:SetShown(C ~= nil)
@@ -597,6 +746,8 @@ function L.Refresh()
 	Frame.SessionPane:SetShown(Sessions)
 	if Sessions then L.RefreshSessions() return end
 	LayoutHeader()
+	if Frame.Bar then Offset = AF.Trade.SyncBar(Frame.Bar, Offset, #Data) end
+	L.RefreshFarmBar()
 	for i, R in ipairs(Rows) do
 		local E = Data[i + Offset]
 		R:SetShown(E ~= nil)
@@ -607,10 +758,18 @@ function L.Refresh()
 			R.id = E.id
 			local I = E.info
 			local NameText = (Color and Color.hex or "|cffffffff") .. Name .. "|r"
-			if Tab == 1 then
+			R.entry = E
+			if Tab == 1 and E.spell then
+				local Short = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
+				local Buy = not E.buyExcluded and E.profit
+				SetCells(R, { NameText, Short, Buy and Core.MoneyColor(E.profit) or "-",
+					string.format("%.1f", Buy and E.buyCrafts or E.crafts or 0), Buy and Core.MoneyColor(E.profitPerDay) or "-",
+					(E.addedPerDay or 0) > 0 and Core.MoneyColor(E.addedPerDay) or "-" })
+			elseif Tab == 1 then
 				local Mine = MyGoldPerHour(E.id)
-				SetCells(R, { NameText, E.status == "good" and Core.MoneyColor(E.value) or "-", Core.MoneyColor(Core.Market(I)),
-					string.format("%.0f", I.perHour or 0), Mine and Core.MoneyColor(Mine) or "-", StatusText(E.status) })
+				if E.crafted then NameText = NameText .. " |cff9d9d9d(crafted)|r" end
+				SetCells(R, { NameText, Core.MoneyColor(E.net), string.format("%.0f", E.perDay or 0), Core.MoneyColor(E.value),
+					Mine and Core.MoneyColor(Mine) or "-", StatusText(E.status) })
 			else
 				local F = E.flip
 				SetCells(R, { NameText, Core.MoneyColor(F.profit), F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo),
@@ -620,7 +779,11 @@ function L.Refresh()
 	end
 	Frame.Empty:SetShown(#Data == 0)
 	if #Data == 0 then
-		Frame.Empty:SetText(Tab == 2 and L.FlipEmptyReason() or "Nothing to show yet.")
+		local Text = "Nothing to show yet."
+		if Tab == 2 then Text = L.FlipEmptyReason()
+		elseif Tab == 1 and L.FarmView == "craft" and L.CraftFiltered then
+			Text = "No paying crafts for your professions in the data yet. Click \"My professions\" to see all." end
+		Frame.Empty:SetText(Text)
 	end
 end
 
@@ -653,7 +816,7 @@ function L.RefreshSessions()
 end
 
 function L.Load()
-	if Tab == 1 then Data = L.FarmRows() elseif Tab == 2 then Data = L.FlipRows() else Data = {} end
+	if Tab == 1 then Data = L.FarmData() elseif Tab == 2 then Data = L.FlipRows() else Data = {} end
 	Offset = 0
 	L.Refresh()
 end
@@ -662,6 +825,23 @@ function L.SelectTab(i)
 	Tab = i
 	PanelTemplates_SetTab(Frame, i)
 	L.Load()
+end
+
+-- Farm controls: shown on the Farm tab only; the current view's button is greyed out.
+function L.RefreshFarmBar()
+	local FB = Frame and Frame.FarmBar
+	if not FB then return end
+	FB:SetShown(Tab == 1)
+	if Tab ~= 1 then return end
+	local Craft = L.FarmView == "craft"
+	FB.Gather:SetEnabled(Craft)
+	FB.Craft:SetEnabled(not Craft)
+	FB.Prof:SetShown(Craft)
+	FB.Prof:SetText(L.CraftAll and "All professions" or "My professions")
+	FB.Sort:SetText(L.SORT_TEXT[Craft and L.CraftSort or L.GatherSort] or "Sort")
+	local Note = "* market room: your share of what sells a day, if you supply it (not your gather rate)."
+	if Craft and not L.CraftAll and not L.ProfessionsKnown then Note = "Professions not known yet: showing all. " .. Note end
+	FB.Note:SetText(Note)
 end
 
 local function SavePosition()
@@ -711,7 +891,7 @@ function L.CreateWindow()
 	end
 	for r = 1, ROWS do
 		local R = CreateFrame("Button", nil, Frame.List)
-		R:SetSize(680, ROW_H)
+		R:SetSize(664, ROW_H)
 		R:SetPoint("TOPLEFT", Frame.Inset, "TOPLEFT", 6, -24 - (r - 1) * ROW_H)
 		R:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 		R.Icon = R:CreateTexture(nil, "ARTWORK")
@@ -728,6 +908,7 @@ function L.CreateWindow()
 			if not self.id then return end
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 			GameTooltip:SetItemByID(self.id)
+			if Tab == 1 and self.entry then L.FarmTooltip(self.entry) end
 			GameTooltip:Show()
 		end)
 		R:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -740,6 +921,35 @@ function L.CreateWindow()
 		Offset = math.max(0, math.min(math.max(0, #Data - ROWS), Offset - Delta * 3))
 		L.Refresh()
 	end)
+	-- Scroll bar and "1-14 of N", like AF Buy / AF Sell.
+	if AF.Trade and AF.Trade.ScrollBar then
+		Frame.Bar = AF.Trade.ScrollBar(Frame.List, 676, -24, function(V) Offset = V; L.Refresh() end)
+	end
+	-- Farm controls under the list: Gather / Craft, your professions or all, sort, and what "per day" means.
+	local FB = CreateFrame("Frame", nil, Frame.List)
+	FB:SetPoint("BOTTOMLEFT", Frame.Inset, "BOTTOMLEFT", 6, 4)
+	FB:SetSize(690, 24)
+	Frame.FarmBar = FB
+	local function FarmBtn(Text, X, W, OnClick, Tip)
+		local B = CreateFrame("Button", nil, FB, "UIPanelButtonTemplate")
+		B:SetSize(W, 22); B:SetText(Text); B:SetPoint("LEFT", FB, "LEFT", X, 0); B:SetScript("OnClick", OnClick)
+		B:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(self:GetText())
+			GameTooltip:AddLine(Tip, 1, 1, 1, true)
+			GameTooltip:Show()
+		end)
+		B:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		return B
+	end
+	FB.Gather = FarmBtn("Gather", 0, 70, function() L.SetFarmView("gather") end, "Items to farm and sell (gear left out): what you net a day from your share of the sales.")
+	FB.Craft = FarmBtn("Craft", 74, 70, function() L.SetFarmView("craft") end, "Every recipe: profit when you buy the mats, and what crafting adds over selling mats you gathered.")
+	FB.Prof = FarmBtn("My professions", 152, 120, function() L.ToggleCraftAll() end, "Only recipes of the professions you have, or every recipe in the game (to see what to learn).")
+	FB.Sort = FarmBtn("Sort: gold/day", 276, 120, function() L.NextFarmSort() end, "Change the order of the list.")
+	FB.Note = FB:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	FB.Note:SetPoint("LEFT", FB, "LEFT", 402, 0)
+	FB.Note:SetWidth(285)
+	FB.Note:SetJustifyH("LEFT")
 
 	-- Sessions pane
 	local P = CreateFrame("Frame", nil, Frame.Inset)
@@ -1231,7 +1441,7 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		L.CreateMinimapButton()
 		C_Timer.After(5, function()
 			local Ids = {}
-			for _, R in ipairs(L.FarmRows()) do Ids[#Ids + 1] = R.id end
+			for i, R in ipairs(L.FarmRows()) do if i > 60 then break end Ids[#Ids + 1] = R.id end
 			for _, R in ipairs(L.FlipRows()) do Ids[#Ids + 1] = R.id end
 			for _, id in ipairs(L.QuickList()) do Ids[#Ids + 1] = id end -- includes your bag items (the AF Sell queue)
 			L.Preload(Ids)
