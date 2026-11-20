@@ -1,0 +1,8 @@
+samples/
+test_run_*/
+data/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
