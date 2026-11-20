@@ -478,7 +478,6 @@ function L.ScanDone()
 	if Frame and Frame:IsShown() then L.Load() end
 end
 
-StaticPopupDialogs = StaticPopupDialogs or {}
 StaticPopupDialogs["AUCTIONFOREVER_CLEAR_SESSIONS"] = {
 	text = "Delete all recorded farming sessions?",
 	button1 = YES or "Yes", button2 = NO or "No",

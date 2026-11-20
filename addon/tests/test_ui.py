@@ -23,6 +23,13 @@ if real:
 run(os.path.join(ADDON, 'Scan.lua'), 'AuctionForever', ns)
 run(os.path.join(ADDON, 'UI.lua'), 'AuctionForever', ns)
 fails = 0
+import re
+# Taint guard: reassigning a Blizzard global (even to itself) taints it and gets protected actions blocked
+# ("AuctionForever has been blocked from an action only available to the Blizzard UI").
+BLIZZ = r'StaticPopupDialogs|UISpecialFrames|SlashCmdList|GameTooltip|ItemRefTooltip|UIParent|Minimap|C_[A-Za-z]+|Enum|TooltipDataProcessor'
+taint = [f'{f}:{n}' for f in os.listdir(ADDON) if f.endswith('.lua')
+         for n, line in enumerate(open(os.path.join(ADDON, f), encoding='utf-8'), 1)
+         if re.match(rf'^\s*(?:{BLIZZ})\s*=[^=]', line)]
 
 
 def ok(c, m):
@@ -32,6 +39,7 @@ def ok(c, m):
 
 
 L, X = lua.eval, lua.execute
+ok(not taint, 'no Blizzard globals reassigned (taint): ' + (', '.join(taint) or 'none'))
 S = 'AF_NS.Session'
 X('FireEvent("PLAYER_LOGIN")')
 ok(L('AuctionForeverMinimapButton ~= nil'), 'minimap button created')
