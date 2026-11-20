@@ -501,6 +501,17 @@ if real:
     ok(qty is not None and 1 <= qty <= 25, f'quantity prefilled: {qty}')
     ok(L('AF_NS.Trade.SellDuration()') in (1, 2, 3), 'duration chosen')
     ok('Deposit' in str(L('AuctionForeverSellPanel.Deposit:GetText()')), 'deposit shown: ' + str(L('AuctionForeverSellPanel.Deposit:GetText()')))
+    X('SavedCost = AF_NS.Trade.SelectedSell().cost; AF_NS.Trade.SelectedSell().cost = nil; AF_NS.Trade.UpdateDeposit()')
+    ok('Expected earnings' in str(L('AuctionForeverSellPanel.Deposit:GetText()')), 'not bought: expected earnings shown: ' + str(L('AuctionForeverSellPanel.Deposit:GetText()')))
+    # Expected profit: 10 at 1s, paid 50c each, 80% sell, 20c deposit: 0.8 x (950 - 500) - 0.2 x 20 = 356
+    # 10 at 1s, paid 97c, 50% sell, 1s deposit: 0.5 x (950 - 970) - 0.5 x 100 = -60
+    e = L('(AF_NS.Core.ExpectedPost({ sellThrough = 0.8 }, 100, 10, 20, 50))')
+    ok(e == 356, f'expected profit = chance x (after cut - paid) - deposit lost when unsold: {e}')
+    e2 = L('(AF_NS.Core.ExpectedPost({ sellThrough = 0.5 }, 100, 10, 100, 97))')
+    ok(e2 == -60, f'a thin margin with a big deposit is an expected loss: {e2}')
+    X('AF_NS.Trade.SelectedSell().cost = 3; AF_NS.Trade.UpdateDeposit()')
+    ok('Expected profit' in str(L('AuctionForeverSellPanel.Deposit:GetText()')), 'bought items: expected profit shown')
+    X('AF_NS.Trade.SelectedSell().cost = SavedCost; AF_NS.Trade.UpdateDeposit()')
     # Post (commodity, no confirmation needed): PostCommodity(location, duration, qty, unit price)
     X('Calls = {}; AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("12"); AF_NS.Trade.SetSellDuration(2); Click(AuctionForeverSellPanel.Post)')
     c = L('LastCall("PostCommodity")')

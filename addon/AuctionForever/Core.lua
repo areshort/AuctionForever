@@ -525,6 +525,15 @@ function Core.FlipStatus(I)
 end
 
 local function Chance(I) return math.max(0.05, math.min(1, I.sellThrough or 1)) end
+Core.SellChance = Chance
+-- Expected result of posting Qty at Price (AF Sell): the chance it sells x (what you get after the cut - what you
+-- paid for those units), minus the deposit lost when it doesn't sell. Unsold units come back, so they cost only the
+-- deposit. Cost nil (farmed or vendor items): the expected earnings. Rounded down to whole copper.
+function Core.ExpectedPost(I, Price, Qty, Dep, Cost)
+	local Ch = Chance(I)
+	local Gain = Price * Qty * (1 - Core.Cut) - (Cost or 0) * Qty
+	return math.floor(Ch * Gain - (1 - Ch) * (Dep or 0) + 1e-6), Ch
+end
 -- How fast a resale sells: sales (planned at PlanRateShare) minus other sellers' new listings when known.
 local function ResaleSpeed(I)
 	local Net = Core.NetSpeed(I)

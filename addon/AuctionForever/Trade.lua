@@ -475,7 +475,13 @@ function T.UpdateDeposit()
 	end
 	local Price = T.SellPrice()
 	local Net = Price and Qty > 0 and math.floor(Price * Qty * (1 - Core.Cut)) or nil
-	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s", D and Core.Money(D) or "-", Net and Core.Money(Net) or "-"))
+	local Exp = ""
+	if Price and Qty > 0 and G.info then
+		local E, Ch = Core.ExpectedPost(G.info, Price, Qty, D, G.cost)
+		Exp = string.format("     Expected %s: %s%s%s|r (%d%% sell)", G.cost and "profit" or "earnings",
+			E >= 0 and "|cff1eff00" or "|cffff4040", E < 0 and "-" or "", Core.Money(math.abs(E)), math.floor(Ch * 100 + 0.5))
+	end
+	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s%s", D and Core.Money(D) or "-", Net and Core.Money(Net) or "-", Exp))
 end
 
 -- Redraw whichever of our AH panels is open (item names arriving from the server).
@@ -689,7 +695,7 @@ local function BuildSell()
 	for i, H in ipairs(Core.Durations) do
 		P.Dur[i] = Button(P, H .. " h", X + 100 + (i - 1) * 70, -180, 64, function() T.SetSellDuration(i) end)
 	end
-	P.Deposit = Text(P, "GameFontHighlightSmall", X, -216, 480)
+	P.Deposit = Text(P, "GameFontHighlightSmall", X, -216, 600)
 	P.Hint = Text(P, "GameFontDisableSmall", X, -236, 480)
 	P.Hint:SetText("Prefilled from recent sales: the best price that should sell within the duration.")
 	P.Post = Button(P, "Post", X, -270, 160, function() T.PostClick() end)
