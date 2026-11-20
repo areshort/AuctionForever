@@ -35,6 +35,10 @@ B.ICONS = ICONS
 local DEFAULT = { vendor = 6, auction = 2 }
 B.DEFAULT = DEFAULT
 local function Choice(Kind)
+	-- Picks saved before these defaults (icons version 1) are dropped once, so the new defaults show.
+	if AuctionForeverDB and AuctionForeverDB.icons and AuctionForeverDB.iconsVersion ~= 2 then
+		AuctionForeverDB.icons, AuctionForeverDB.iconsVersion = nil, 2
+	end
 	local Saved = AuctionForeverDB and AuctionForeverDB.icons and AuctionForeverDB.icons[Kind]
 	return ICONS[Kind][Saved] or ICONS[Kind][DEFAULT[Kind]]
 end
@@ -218,6 +222,7 @@ function B.IconCommand(Msg)
 		AuctionForeverDB = AuctionForeverDB or {}
 		AuctionForeverDB.icons = AuctionForeverDB.icons or {}
 		AuctionForeverDB.icons[Kind] = N
+		AuctionForeverDB.iconsVersion = 2
 		for Button in pairs(Buttons) do SkinJunk(Button) end
 		Say(Kind .. " icon is now " .. ChatIcon(ICONS[Kind][N]) .. " (" .. N .. ").")
 		B.Reset()

@@ -148,6 +148,12 @@ X('JUNK_ICON_ON = false')
 ok(L('W("auctionforever_vendor", 9002)') is not None and L('W("auctionforever_vendor", 9006)') is not None, "Baganator's junk icon turned off: AF draws the vendor icon itself")
 X('JUNK_ICON_ON = nil; JUNK_SOURCE = "poor_quality"')
 ok(L('AF_NS.Bags.DEFAULT.vendor') == 6 and L('AF_NS.Bags.DEFAULT.auction') == 2, 'defaults: vendor 6, auction 2 (your picks)')
+X('AuctionForeverDB.icons = { vendor = 2 }; AuctionForeverDB.iconsVersion = nil')
+ok(L('W("auctionforever_vendor", 9002)') == 'atlas:' + L('AF_NS.Bags.ICONS.vendor[6].atlas') and L('AuctionForeverDB.icons') is None,
+   'a pick saved before the new defaults is dropped once: vendor 6 shows')
+X('AF_NS.Bags.IconCommand("icon vendor 3")')
+ok(L('W("auctionforever_vendor", 9002)') == L('AF_NS.Bags.ICONS.vendor[3]'), 'a pick made now is kept')
+X('AuctionForeverDB.icons = nil')
 # Picking icons: /af icon vendor 3 saves the choice and redraws the bags.
 X('AF_NS.Bags.IconCommand("icon vendor 3"); AF_NS.Bags.IconCommand("icon auction 2")')
 ok(L('AuctionForeverDB.icons.vendor') == 3 and L('AuctionForeverDB.icons.auction') == 2 and L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction',
