@@ -25,7 +25,7 @@ local function CheckAPI()
 		{ C_AuctionHouse, "C_AuctionHouse", { "ReplicateItems", "GetNumReplicateItems", "GetReplicateItemInfo", "GetReplicateItemTimeLeft",
 			"SendBrowseQuery", "GetBrowseResults", "RequestMoreBrowseResults", "HasFullBrowseResults", "SendSearchQuery", "MakeItemKey",
 			"GetNumCommoditySearchResults", "GetCommoditySearchResultInfo", "HasFullCommoditySearchResults",
-			"GetNumItemSearchResults", "GetItemSearchResultInfo", "HasFullItemSearchResults", "IsThrottledMessageSystemReady" } },
+			"GetNumItemSearchResults", "GetItemSearchResultInfo", "HasFullItemSearchResults", "IsThrottledMessageSystemReady", "GetItemKeyInfo", "HasSearchResults" } },
 		{ C_Container, "C_Container", { "GetContainerNumSlots", "GetContainerItemInfo" } },
 		{ C_Item, "C_Item", { "GetItemInfo", "GetItemInfoInstant", "RequestLoadItemDataByID" } },
 		{ _G, "global", { "PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_TabResize", "hooksecurefunc", "issecurevariable" } },

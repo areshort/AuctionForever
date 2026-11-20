@@ -14,7 +14,7 @@ local MAX_AUC = 200         -- quick scan: cheapest listings kept per item for e
 local MIN_GAP = 0.25        -- hours between two looks at an item before its sales are measured (15 min)
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
-local ITEM_TIMEOUT = 3      -- item lookup: seconds to wait for one item's results
+local ITEM_TIMEOUT = 5      -- item lookup: seconds to wait for one item (loading its details + answer)
 local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page
 
 local Mode                  -- nil, "full-wait", "full", "lookup", "browse"
@@ -340,20 +340,45 @@ QuickNext = function()
 	C_Timer.After(0.5, Recheck)
 end
 
+-- Send the search for the current item. This client ignores searches for items whose details aren't cached yet
+-- (Auctionator works around the same thing), so wait until GetItemKeyInfo knows the item; asking also loads it.
+local function LookupSend(Ticket)
+	if not (Q and Q.ticket == Ticket and Q.current) then return end
+	if C_AuctionHouse.GetItemKeyInfo and not C_AuctionHouse.GetItemKeyInfo(Q.key) then
+		C_Timer.After(0.1, function() LookupSend(Ticket) end)
+		return
+	end
+	if not C_AuctionHouse.IsThrottledMessageSystemReady() then
+		C_Timer.After(0.1, function() LookupSend(Ticket) end)
+		return
+	end
+	C_AuctionHouse.SendSearchQuery(Q.key, SORTS, false)
+end
+
 function Scan.QuickSend()
 	if not (Q and Q.waitingReady) then return end
 	Q.waitingReady = false
 	local id = Q.ids[Q.i]
-	Q.current, Q.key = id, Scan.Keys[id] or C_AuctionHouse.MakeItemKey(id)
+	Q.current, Q.key, Q.tries = id, Scan.Keys[id] or C_AuctionHouse.MakeItemKey(id), 0
 	Q.ticket = (Q.ticket or 0) + 1
 	local Ticket = Q.ticket
-	C_AuctionHouse.SendSearchQuery(Q.key, SORTS, false)
 	C_Timer.After(ITEM_TIMEOUT, function()
 		if Q and Q.ticket == Ticket and Q.current then
 			Q.current, Q.skipped = nil, Q.skipped + 1
 			QuickNext()
 		end
 	end)
+	LookupSend(Ticket)
+end
+
+-- The server sometimes answers with nothing although there are listings; ask again (up to 3 times) when the
+-- answer says it has no results, or isn't complete yet but holds nothing.
+local function BadAnswer(Has, Full, Qty)
+	return Has == false or (not Full and (Qty or 0) == 0)
+end
+local function Retry()
+	if Q.tries < 3 then Q.tries = Q.tries + 1; LookupSend(Q.ticket) return true end
+	return false
 end
 
 -- Look up these items now, listing by listing. Silent = no chat line; OnDone = called when finished.
@@ -495,6 +520,10 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 	elseif Event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		if Q and Q.current and Arg == Q.current then
 			local id = Q.current
+			local AH = C_AuctionHouse
+			local Has = AH.HasSearchResults and AH.HasSearchResults(AH.MakeItemKey(id))
+			local Qty = AH.GetCommoditySearchResultsQuantity and AH.GetCommoditySearchResultsQuantity(id) or AH.GetNumCommoditySearchResults(id)
+			if BadAnswer(Has, AH.HasFullCommoditySearchResults(id), Qty) and Retry() then return end
 			Q.current = nil
 			ReadCommodity(id)
 			QuickNext()
@@ -502,6 +531,10 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 	elseif Event == "ITEM_SEARCH_RESULTS_UPDATED" then
 		if Q and Q.current and type(Arg) == "table" and Arg.itemID == Q.current then
 			local id, Key = Q.current, Arg
+			local AH = C_AuctionHouse
+			local Has = AH.HasSearchResults and AH.HasSearchResults(Key)
+			local Qty = AH.GetItemSearchResultsQuantity and AH.GetItemSearchResultsQuantity(Key) or AH.GetNumItemSearchResults(Key)
+			if BadAnswer(Has, AH.HasFullItemSearchResults(Key), Qty) and Retry() then return end
 			Q.current = nil
 			ReadItems(id, Key)
 			QuickNext()

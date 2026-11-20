@@ -1,7 +1,6 @@
 -- Minimal fake WoW API for offline tests: frames accept any method call; scripts and events are recorded.
 local Clock = 1000
 function GetTime() return Clock end
-function AdvanceTime(s) Clock = Clock + s end
 time = os.time; date = os.date
 local AllFrames = {}
 AllFramesForTest = AllFrames
@@ -63,8 +62,22 @@ Money = 2000000
 function GetMoney() return Money end
 function GetRealZoneText() return "Arathi Highlands" end
 Timers = {}
-C_Timer = { After = function(_, fn) table.insert(Timers, fn) end }
+-- Timers remember their delay. RunTimers() runs everything pending (old style); AdvanceTime(s) moves a fake clock
+-- and runs only the timers due by then, so timeouts don't fire early.
+-- One fake clock: GetTime() reads it, AdvanceTime moves it.
+TimerDue = setmetatable({}, { __mode = "k" })
+C_Timer = { After = function(d, fn) table.insert(Timers, fn); TimerDue[fn] = Clock + (d or 0) end }
 function RunTimers() local T = Timers; Timers = {}; for _, fn in ipairs(T) do fn() end end
+function AdvanceTime(s)
+	local Target = Clock + s
+	while true do
+		local Best, BestI
+		for i, fn in ipairs(Timers) do local d = TimerDue[fn] or 0; if d <= Target and (not Best or d < TimerDue[Best]) then Best, BestI = fn, i end end
+		if not Best then break end
+		table.remove(Timers, BestI); Clock = math.max(Clock, TimerDue[Best] or 0); Best()
+	end
+	Clock = Target
+end
 LOOT_ITEM_SELF = "You receive loot: %s."
 LOOT_ITEM_SELF_MULTIPLE = "You receive loot: %sx%d."
 GOLD_AMOUNT = "%d Gold"; SILVER_AMOUNT = "%d Silver"; COPPER_AMOUNT = "%d Copper"

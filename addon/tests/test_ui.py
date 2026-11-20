@@ -121,6 +121,7 @@ if real:
     end
     LinenBefore = D.items[2589][LI]
     C_AuctionHouse = {
+      GetItemKeyInfo = function() return {} end, HasSearchResults = function() return true end,
       GetNumItemSearchResults = function() return 0 end, GetItemSearchResultInfo = function() return nil end, HasFullItemSearchResults = function() return true end,
       ReplicateItems = function() ReplicateCalled = true end,
       GetNumReplicateItems = function() return #Listings end,
@@ -283,6 +284,28 @@ if real:
       time = function() return AuctionForeverData.time + 5400 end
       Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); RunTimers(); RunTimers()""")
     ok(not L('AF_NS.Scan.Busy()') and 'stopped answering' in str(L('LastPrint')), 'server goes quiet: stops and keeps what it got: ' + str(L('LastPrint')))
+
+    # The client ignores searches for items it hasn't cached: wait for GetItemKeyInfo before searching.
+    X("""Sent = 0; CacheAsks = 0
+      C_AuctionHouse.SendSearchQuery = function(k) Sent = Sent + 1; LastQuery = k.itemID end
+      C_AuctionHouse.GetItemKeyInfo = function() CacheAsks = CacheAsks + 1; if CacheAsks <= 3 then return nil end return { itemName = "Linen Cloth" } end
+      time = function() return AuctionForeverData.time + 5100 end
+      AF_NS.Scan.Lookup({ 2589 }, true)""")
+    ok(L('Sent') == 0, 'no search sent while the item is not cached yet')
+    X('AdvanceTime(0.1); AdvanceTime(0.1); AdvanceTime(0.1)')
+    ok(L('Sent') == 1, f"search sent once the item is cached (after {L('CacheAsks')} checks)")
+    X('FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", 2589)')
+    ok(not L('AF_NS.Scan.Busy()') and "didn't answer" not in str(L('AF_NS.Scan.LastResult')), 'cached item answered: ' + str(L('AF_NS.Scan.LastResult')))
+    # A bad empty answer ("no results" although there are listings) is asked again.
+    X("""Sent = 0; Answers = 0
+      C_AuctionHouse.GetItemKeyInfo = function() return {} end
+      C_AuctionHouse.HasSearchResults = function() Answers = Answers + 1; return Answers > 1 end
+      time = function() return AuctionForeverData.time + 5150 end
+      AF_NS.Scan.Lookup({ 2589 }, true); FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", 2589)""")
+    ok(L('Sent') == 2 and L('AF_NS.Scan.Busy()'), f"bad empty answer: searched again ({L('Sent')} searches)")
+    X('FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", 2589)')
+    ok(not L('AF_NS.Scan.Busy()') and "didn't answer" not in str(L('AF_NS.Scan.LastResult')), 'second answer accepted: ' + str(L('AF_NS.Scan.LastResult')))
+    X('C_AuctionHouse.GetItemKeyInfo = function() return {} end; C_AuctionHouse.HasSearchResults = function() return true end; C_AuctionHouse.SendSearchQuery = function(k) LastQuery = k.itemID end')
 
     # An item that never answers is skipped after the timeout.
     X("""C_AuctionHouse.SendSearchQuery = function() end
