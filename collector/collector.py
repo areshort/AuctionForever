@@ -390,6 +390,8 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
         for k in ('hourly', 'soldprices', 'daily', 'compared', 'lastDay'):
             state.pop(k, None)
         state['histv'] = HISTV
+    for k in ('hourly', 'soldprices', 'daily'):
+        state.setdefault(k, {})  # may be missing after a reset (or a reset saved by an older run)
     now = listings(items, goods)
     prev = state.get('listings')
     if prev is not None and prev == now:

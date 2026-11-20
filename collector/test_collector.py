@@ -136,5 +136,16 @@ s4 = C.load_state(st4)
 ok(s4.get('histv') == C.HISTV and all(r[0] != 1 for r in s4['hourly'].get('17', [])) and '17' not in s4.get('daily', {}),
    'old-style history dropped once (hourly, sales, daily)')
 ok(s4['hourly'].get('17') and s4['hourly']['17'][-1][6] > 0, 'the comparison right after the reset still counts')
+# The reset when Blizzard has no new snapshot yet (what the live run hit), then again with the same snapshot.
+d3 = tempfile.mkdtemp()
+st5, out5 = os.path.join(d3, 's.gz'), os.path.join(d3, 'o.lua')
+C.save_state(st5, {'hourly': {'17': [[1, 10, 5, 99, 990, 0, 1.0, 0]]}, 'soldprices': {}, 'daily': {},
+                   'listings': C.listings([], g1), 'time': 1_000_000, 'timed': True, 'fmt': C.FMT})
+try:
+    r1 = C.run(st5, out5, [], g1, now_ts=1_001_800)
+    r2 = C.run(st5, out5, [], g1, now_ts=1_002_700)
+    ok(r1 is True and r2 is False and 'AuctionForeverData' in open(out5, encoding='utf-8').read(), 'history reset with an unchanged snapshot: file rewritten, no crash')
+except Exception as e:
+    ok(False, f'history reset with an unchanged snapshot crashed: {e!r}')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
