@@ -158,6 +158,8 @@ function B.UpdateIcon(Icon, Details)
 		Draw(Icon, Choice("auction"))
 		return true
 	elseif Where == "Vendor" then
+		if JunkSource() then return false end -- Baganator's junk icon (now the purse) shows it
+		if Details.quality == POOR then return false end -- Baganator's default junk rule marks greys (purse too)
 		Draw(Icon, Choice("vendor"))
 		return true
 	end
@@ -181,6 +183,18 @@ function B.IsJunk(BagID, SlotID, ID, Link)
 	return Where == "Vendor"
 end
 
+-- Baganator's own junk icon (a coin, top left by default) shows on every junk item: grey items, or AF's vendor
+-- items when AF is its junk source. It gets the chosen vendor icon instead of the coin, and this widget doesn't
+-- draw a second one on those items, so each item shows one icon whatever the Baganator settings.
+local Buttons = setmetatable({}, { __mode = "k" })
+local function SkinJunk(Button)
+	local J = Button and Button.JunkIcon
+	if not J then return end
+	Draw(J, Choice("vendor"))
+	J:SetSize(15, 15)
+end
+B.SkinJunk = SkinJunk
+
 -- /af icons: the choices in chat; /af icon vendor 2 (or auction 3): pick one.
 function B.IconCommand(Msg)
 	local Kind, N = string.match(Msg or "", "^icon%s+(%a+)%s+(%d+)")
@@ -189,6 +203,7 @@ function B.IconCommand(Msg)
 		AuctionForeverDB = AuctionForeverDB or {}
 		AuctionForeverDB.icons = AuctionForeverDB.icons or {}
 		AuctionForeverDB.icons[Kind] = N
+		for Button in pairs(Buttons) do SkinJunk(Button) end
 		Say(Kind .. " icon is now " .. ChatIcon(ICONS[Kind][N]) .. " (" .. N .. ").")
 		B.Reset()
 		return
@@ -229,6 +244,8 @@ function B.SetUp()
 	if SetUp or not (Bag and Bag.API and Bag.API.RegisterCornerWidget) then return false end
 	SetUp = true
 	Bag.API.RegisterCornerWidget("AuctionForever", WIDGET_ID, B.UpdateIcon, function(ItemButton)
+		Buttons[ItemButton] = true
+		SkinJunk(ItemButton)
 		local Icon = ItemButton:CreateTexture(nil, "OVERLAY")
 		Icon:SetSize(15, 15)
 		return Icon

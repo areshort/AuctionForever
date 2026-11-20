@@ -118,11 +118,23 @@ for i in (9001, 9002, 9006):
 # AF draws both icons itself: the chosen purse for vendor items, the chosen auction icon.
 ok(L('Icon(9001)') == 'auction', 'Rec Auction: auction icon')
 ok(L('Icon(9002)') == 'coin', 'Rec Vendor: the vendor (purse) icon')
-ok(L('Icon(9006)') == 'coin', 'grey vendor item: purse too')
+ok(L('Icon(9006)') is None, "grey vendor item: no second icon (Baganator's junk icon, now the purse, shows it)")
 ok(L('Icon(9007)') is None, 'no recommendation: no icon')
 ok(L('Icon(9004)') is None, 'quest item: no icon even with an AH price')
 ok(L('Icon(9005, { isBound = true })') is None and L('Icon(9005)') == 'auction', 'soulbound copy: no icon (unbound copy: auction)')
 
+# AF is Baganator's junk source: vendor items get Baganator's junk icon (the purse), not a second one from AF.
+X('JUNK_SOURCE = "auctionforever"')
+ok(L('Icon(9002)') is None and L('Icon(9001)') == 'auction', 'AF is the junk source: no second vendor icon; auction icon still drawn')
+X('JUNK_SOURCE = "poor_quality"')
+# Baganator's junk coin is replaced with the chosen vendor icon, and follows a new choice.
+X('''JB = CreateFrame("Button"); JB.JunkIcon = { SetTexture = function(s, p) s.path = p end, SetTexCoord = function() end,
+    SetAtlas = function(s, a) s.path = "atlas:" .. a end, SetSize = function() end }
+  WIDGETS.auctionforever.onInit(JB)''')
+ok(L('JB.JunkIcon.path') == L('AF_NS.Bags.ICONS.vendor[1]'), "Baganator's junk coin shows the vendor icon instead")
+X('AF_NS.Bags.IconCommand("icon vendor 2")')
+ok(L('JB.JunkIcon.path') == L('AF_NS.Bags.ICONS.vendor[2]'), 'picking another vendor icon updates the junk icon too')
+X('AuctionForeverDB.icons = nil')
 # Picking icons: /af icon vendor 3 saves the choice and redraws the bags.
 X('AF_NS.Bags.IconCommand("icon vendor 3"); AF_NS.Bags.IconCommand("icon auction 2")')
 ok(L('AuctionForeverDB.icons.vendor') == 3 and L('AuctionForeverDB.icons.auction') == 2 and L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction',
