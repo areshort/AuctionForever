@@ -636,6 +636,27 @@ function L.CreateAHTab()
 	P.QuickInfo = P:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	P.QuickInfo:SetPoint("TOPLEFT", 20, -124)
 	P.QuickInfo:SetJustifyH("LEFT")
+	-- Progress bar shown while a scan runs (same spot as the line above).
+	local Bar = CreateFrame("StatusBar", nil, P)
+	Bar:SetPoint("TOPLEFT", 20, -122)
+	Bar:SetSize(440, 18)
+	Bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+	Bar:SetStatusBarColor(0.1, 0.6, 0.1)
+	Bar:SetMinMaxValues(0, 1)
+	local BarBg = Bar:CreateTexture(nil, "BACKGROUND")
+	BarBg:SetAllPoints()
+	BarBg:SetColorTexture(0, 0, 0, 0.6)
+	Bar.Text = Bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	Bar.Text:SetPoint("CENTER")
+	Bar:Hide()
+	P.Bar = Bar
+	P.Tick = 0
+	P:SetScript("OnUpdate", function(self, Elapsed)
+		self.Tick = self.Tick + Elapsed
+		if self.Tick < 0.1 then return end
+		self.Tick = 0
+		if AF.Scan.Busy() then L.ScanProgress() end
+	end)
 	P.Result = P:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	P.Result:SetPoint("TOPLEFT", 20, -150)
 	P.Result:SetWidth(740)
@@ -665,11 +686,25 @@ function L.RefreshAHPanel()
 end
 function L.ScanProgress()
 	if not (AH.Panel and AH.Panel:IsShown()) then return end
-	local Pct = AF.Scan.Progress and string.format("%d%%", AF.Scan.Progress * 100) or "waiting for the server..."
-	AH.Panel.Quick:SetEnabled(false); AH.Panel.Full:SetEnabled(false)
-	AH.Panel.QuickInfo:SetText("Scanning: " .. Pct)
+	local P = AH.Panel
+	local Text, F = AF.Scan.Status()
+	if not Text then return end
+	P.Quick:SetEnabled(false); P.Full:SetEnabled(false)
+	P.QuickInfo:Hide()
+	P.Bar:Show()
+	P.Bar.Text:SetText(Text)
+	if F then
+		P.Bar:SetStatusBarColor(0.1, 0.6, 0.1)
+		P.Bar:SetValue(F)
+	else
+		-- Waiting for the server: a short block sweeping back and forth, so it's clearly still working.
+		local T = GetTime() % 2
+		P.Bar:SetStatusBarColor(0.6, 0.5, 0.1)
+		P.Bar:SetValue(T < 1 and T or 2 - T)
+	end
 end
 function L.ScanDone()
+	if AH.Panel then AH.Panel.Bar:Hide(); AH.Panel.QuickInfo:Show() end
 	L.RefreshAHPanel()
 	if Frame and Frame:IsShown() then L.Load() end
 end

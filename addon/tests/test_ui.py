@@ -157,10 +157,19 @@ if real:
     X('Click(AuctionForeverAHTab)')
     X('Click(AuctionForeverAHPanel.Full)')
     ok(L('ReplicateCalled == true'), 'Full Scan asks the server for every listing')
+    X('AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
+    ok(L('AuctionForeverAHPanel.Bar:IsShown()') and 'waiting for the server' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')),
+       'progress while waiting: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
+    X("""FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+      for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u and f ~= AuctionForeverAHPanel then u(f, 0.016) end end
+      AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)""")
+    bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
+    ok('reading listings' in bt and ' of ' in bt and '%' in bt and not bt.startswith('Full scan: reading listings 100%'), 'progress while reading: ' + bt)
     X("""function Pump() for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end
           for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end end
-        FireEvent("REPLICATE_ITEM_LIST_UPDATE"); Pump()""")
+        Pump()""")
     ok(not L('AF_NS.Scan.Busy()'), 'full scan finished')
+    ok(not L('AuctionForeverAHPanel.Bar:IsShown()') and L('AuctionForeverAHPanel.QuickInfo:IsShown()'), 'progress bar goes away when done')
     expect = L('LinenBefore[1][2] + LinenBefore[2][2] + (LinenBefore[3][2] - math.floor(LinenBefore[3][2] / 2))')
     obs = L('AuctionForeverDB.obs[2589] and AuctionForeverDB.obs[2589][1]')
     ok(obs is not None and obs[3] == expect and abs(obs[2] - 3300 / 3600) < 1e-6, f'Linen: {obs and obs[3]} sold over 55 min (expected {expect})')

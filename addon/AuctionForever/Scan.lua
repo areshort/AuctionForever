@@ -194,6 +194,27 @@ end
 
 function Scan.Busy() return Mode ~= nil end
 
+local function Commas(N)
+	local S = tostring(math.floor(N))
+	local Out = S:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return (Out:gsub("^,", ""))
+end
+-- What's happening right now, for the progress bar: text, and fraction done (nil while waiting for the server).
+function Scan.Status()
+	if Mode == "full-wait" then
+		return string.format("Full scan: waiting for the server... %d s", GetTime() - (Started or GetTime())), nil
+	elseif Mode == "full" then
+		local Done = math.min(Total or 0, (Index or 1) - 1)
+		local F = (Total or 0) > 0 and Done / Total or 1
+		return string.format("Full scan: reading listings %d%% (%s of %s)", F * 100, Commas(Done), Commas(Total or 0)), F
+	elseif Mode == "quick" and Q then
+		local Done = math.max(0, Q.i - 1)
+		local F = #Q.ids > 0 and Done / #Q.ids or 1
+		return string.format("Quick scan: looking up items %d of %d (%d%%)", Done, #Q.ids, F * 100), F
+	end
+	return nil, nil
+end
+
 local function AHOpen() return AuctionHouseFrame and AuctionHouseFrame:IsShown() end
 
 function Scan.Start()
