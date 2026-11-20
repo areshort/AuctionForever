@@ -4,6 +4,7 @@ function GetTime() return Clock end
 function AdvanceTime(s) Clock = Clock + s end
 time = os.time; date = os.date
 local AllFrames = {}
+AllFramesForTest = AllFrames
 local Methods = {}
 local FrameMT = { __index = function(t, k)
 	if Methods[k] then return Methods[k] end
@@ -79,3 +80,7 @@ Enum = { TooltipDataType = { Item = 0 } }
 TipLines = {}
 function GameTooltip:AddLine(t) table.insert(TipLines, t) end
 function GameTooltip:AddDoubleLine(a, b) table.insert(TipLines, a .. ": " .. b) end
+
+function print(...) LastPrint = table.concat({ tostring((...)) }, " ") end
+function Methods:Disable() self._disabled = true end
+function Methods:Enable() self._disabled = false end

@@ -46,6 +46,9 @@ g2 = [good(20, 17, 100, 20, 'LONG'), good(21, 17, 120, 10, 'VERY_LONG')]
 C.run(st, out, [], g2, now_ts=1_003_600)
 s = C.load_state(st)
 ok(s['soldprices']['17'][-1][1:] == [100, 30], 'new snapshot: 30 sold at 100c recorded')
+n1 = C.item_numbers('17', s, C.market(C.listings([], g2)), 1_003_600)
+ok(n1['hoursSeen'] == 1 and abs(n1['perHour'] - 30) < 1e-9, f"first snapshot isn't a zero-sales hour: {n1['hoursSeen']} h, {n1['perHour']}/h")
+ok('hours=1.0,' in open(out, encoding='utf-8').read(), 'data file says 1 h of sales watched')
 lua = open(out, encoding='utf-8').read()
 ok(lua.startswith('-- Written by the AuctionForever collector') and '[17]=' in lua and 'house=110' in lua, 'data file written with item 17')
 g3 = [good(22, 17, 110, 5, 'VERY_LONG')]

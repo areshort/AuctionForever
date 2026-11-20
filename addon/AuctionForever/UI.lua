@@ -233,7 +233,19 @@ end
 function L.Refresh()
 	if not (Frame and Frame:IsShown()) then return end
 	local Age = Core.DataAge()
-	Frame.Age:SetText(Age and string.format("data %s old", Age < 1 and (math.floor(Age * 60) .. " min") or (string.format("%.1f h", Age))) or "no data yet: start AuctionForever Sync, then /reload")
+	local Watched = Core.HoursWatched() or 0
+	local Basis = Watched <= 0 and "  |cffff8040waiting for the first hour of sales|r"
+		or (Watched < Core.EarlyHours and string.format("  |cffffd100early: %.0f h of sales|r", Watched))
+		or string.format("  %.0f h of sales", Watched)
+	local Fresh = AuctionForeverDB and AuctionForeverDB.fresh
+	local ScanText = ""
+	if Fresh and Fresh.time then
+		local M = math.floor((time() - Fresh.time) / 60)
+		ScanText = "your scan " .. (M < 120 and (M .. " min") or (math.floor(M / 60) .. " h")) .. " ago   "
+		if Watched <= 0 then Basis = "" end
+	end
+	Frame.Age:SetText(ScanText .. (Age and (string.format("cloud data %s old", Age < 1 and (math.floor(Age * 60) .. " min") or (string.format("%.1f h", Age))) .. Basis)
+		or (ScanText ~= "" and "" or "no data yet: scan at the auction house, or start AuctionForever Sync and /reload")))
 	if Age and Age > 3 then Frame.Age:SetTextColor(1, 0.5, 0.25) else Frame.Age:SetTextColor(0.8, 0.8, 0.8) end
 	local Sessions = Tab == 3
 	Frame.List:SetShown(not Sessions)
@@ -435,6 +447,37 @@ function L.Toggle(TabIndex)
 	if Frame:IsShown() then L.Load() else Frame:Show() end
 end
 
+-- Scan button on the auction house -------------------------------------------------------------------------------
+local ScanButton
+function L.CreateScanButton()
+	if ScanButton or not AuctionHouseFrame then return end
+	ScanButton = CreateFrame("Button", "AuctionForeverScanButton", AuctionHouseFrame, "UIPanelButtonTemplate")
+	ScanButton:SetSize(150, 22)
+	ScanButton:SetPoint("TOPRIGHT", AuctionHouseFrame, "TOPRIGHT", -30, -1)
+	ScanButton:SetText("AuctionForever Scan")
+	ScanButton:SetScript("OnClick", function() AF.Scan.Start(); L.ScanProgress() end)
+	ScanButton:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:AddLine("AuctionForever Scan")
+		GameTooltip:AddLine("Reads every listing: fresh prices now, and sales measured", 1, 1, 1)
+		GameTooltip:AddLine("against the cloud data or your last scan (15+ min apart).", 1, 1, 1)
+		GameTooltip:Show()
+	end)
+	ScanButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+function L.ScanProgress()
+	if not ScanButton then return end
+	if AF.Scan.Busy() then
+		ScanButton:SetText(AF.Scan.Progress and string.format("Scanning %d%%", AF.Scan.Progress * 100) or "Waiting for server...")
+		ScanButton:Disable()
+	end
+end
+function L.ScanDone()
+	AF.Scan.Progress = nil
+	if ScanButton then ScanButton:SetText("AuctionForever Scan"); ScanButton:Enable() end
+	if Frame and Frame:IsShown() then L.Load() end
+end
+
 StaticPopupDialogs = StaticPopupDialogs or {}
 StaticPopupDialogs["AUCTIONFOREVER_CLEAR_SESSIONS"] = {
 	text = "Delete all recorded farming sessions?",
@@ -497,7 +540,7 @@ function L.TooltipLines(id)
 	local Lines = {}
 	local S = Core.Status(I)
 	Lines[#Lines + 1] = { "Recent selling price", Core.Money(I.med) }
-	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) }
+	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) .. ((I.scanHours and I.scanHours > 0) and " (incl. your scans)" or "") }
 	Lines[#Lines + 1] = { "Lowest listed", (I.low and Core.Money(I.low) or "-") .. string.format(" (%d listed)", I.qty or 0) }
 	if S == "good" then
 		local H, _, Price = Core.ChooseDuration(I, 1)
@@ -525,6 +568,7 @@ Events:RegisterEvent("PLAYER_LOGOUT")
 Events:RegisterEvent("CHAT_MSG_LOOT")
 Events:RegisterEvent("CHAT_MSG_MONEY")
 Events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+Events:RegisterEvent("AUCTION_HOUSE_SHOW")
 local RefreshQueued
 Events:SetScript("OnEvent", function(_, Event, Msg)
 	if Event == "PLAYER_LOGIN" then
@@ -536,6 +580,8 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 		end
+	elseif Event == "AUCTION_HOUSE_SHOW" then
+		L.CreateScanButton()
 	elseif Event == "PLAYER_LOGOUT" then
 		Session.Pause()
 	elseif Event == "CHAT_MSG_LOOT" then
@@ -556,7 +602,7 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
-	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) else L.Toggle(1) end
+	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start(); L.ScanProgress() else L.Toggle(1) end
 end
 
 AF.UI = L

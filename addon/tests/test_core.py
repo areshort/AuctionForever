@@ -70,6 +70,23 @@ ok(L(f'{C}.Money(12345)') == '1g 23s' and L(f'{C}.Money(250)') == '2s 50c' and L
 v = L(f'{C}.LootValue(MakeItem(), 30, 1)')
 ok(v > 0 and v <= 30 * 1100 * 0.95, f'loot value at what it would sell for: {v}')
 
+# Comparing an earlier ladder with a fresh scan ({price = qty})
+CL = f'{C}.CompareLadders'
+r = L(f'{{{CL}({{{{100,10}},{{110,20}},{{120,30}}}}, {{[110]=5, [120]=30}})}}')
+ok(list(r.values()) == [25, 100*10 + 110*15, 2, 110], f'cheapest gone + next level partly: 25 sold {list(r.values())}')
+r = L(f'{{{CL}({{{{100,10}},{{110,20}}}}, {{[90]=50, [100]=4, [110]=20}})}}')
+ok(list(r.values())[0] == 6, 'a new cheaper listing does not hide real sales')
+r = L(f'{{{CL}({{{{100,10}},{{110,20}}}}, {{[100]=10, [110]=0}})}}')
+ok(list(r.values())[0] == 0, 'level above an untouched one vanished: cancelled, not sold')
+r = L(f'{{{CL}({{{{100,10,4}},{{110,20}}}}, {{[110]=20}})}}')
+ok(list(r.values())[0] == 6, 'listings that were about to expire are not counted as sold')
+# Merging scan observations into an item with no cloud sales yet
+lua.execute("""AuctionForeverDB = { obs = { [1] = { {0, 0.5, 30, 30000, 4, 1100} } } }""")
+lua.execute("MI = AuctionForever.Core.MergeScan(MakeItem({ perHour = 0, hoursSeen = 0, hoursWithSales = 0, sales = 0, med = nil, hi = nil, med24 = nil, medAll = nil, sellThrough = nil, soldQty = 0, qty = 20 }), 0)")
+ok(abs(L('MI.perHour') - 60) < 1e-9 and L('MI.med') == 1000 and L('MI.hi') == 1100, f"scan only: 30 sold in 30 min = {L('MI.perHour')}/h at {L('MI.med')}")
+ok(L(f'{C}.Status(MI)') == 'good', 'one scan 30 min after the cloud data is enough to rate a fast seller: ' + L(f'{C}.Status(MI)'))
+lua.execute("AuctionForeverDB = nil")
+
 # Real data file from the collector loads, and every item gets a status without errors.
 real = sys.argv[1] if len(sys.argv) > 1 else None
 if real and os.path.exists(real):

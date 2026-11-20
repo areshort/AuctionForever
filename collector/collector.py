@@ -15,6 +15,7 @@ import base64, gzip, json, math, os, statistics, sys, time, urllib.request, urll
 REGION = 'us'
 RULESET = 1          # the API returns the same houses for every ruleset
 HOUSE = 110          # PvP Alliance, matched against the user's in-game listings 2026-11-19
+FMT = 2          # data format; 2 = only compared hours count as hours of sales
 HOURS_KEPT = 72
 DAYS_KEPT = 14
 BUCKET_ORDER = {'SHORT': 0, 'MEDIUM': 1, 'LONG': 2, 'VERY_LONG': 3}
@@ -119,8 +120,9 @@ def wmedian(pairs):
     return pairs[-1][0]
 
 
-def update_history(state, now_ts, mk, ev):
-    hourly = state.setdefault('hourly', {})   # item -> [[ts, low, qty, sold_qty, sold_value, expired], ...]
+def update_history(state, now_ts, mk, ev, span=0):
+    # span = hours since the previous snapshot when the two were compared, else 0 (first run or a long gap).
+    hourly = state.setdefault('hourly', {})   # item -> [[ts, low, qty, sold_qty, sold_value, expired, span], ...]
     daily = state.setdefault('daily', {})     # item -> [[day, median_sold, sold_qty, expired], ...]
     soldprices = state.setdefault('soldprices', {})  # item -> [[ts, price, qty], ...] for 72 h
     for item in set(mk) | set(ev):
@@ -128,7 +130,7 @@ def update_history(state, now_ts, mk, ev):
         sq = sum(q for _, q in e['sold'])
         sv = sum(p * q for p, q in e['sold'])
         k = str(item)
-        hourly.setdefault(k, []).append([now_ts, m['low'] if m else None, m['qty'] if m else 0, sq, sv, e['expired']])
+        hourly.setdefault(k, []).append([now_ts, m['low'] if m else None, m['qty'] if m else 0, sq, sv, e['expired'], span])
         if e['sold']:
             soldprices.setdefault(k, []).extend([now_ts, p, q] for p, q in e['sold'])
     # Daily summaries for every day that finished since the last run, before old hourly rows are dropped.
@@ -156,10 +158,11 @@ def update_history(state, now_ts, mk, ev):
 
 def item_numbers(k, state, mk, now_ts):
     """The numbers the add-on needs for one item."""
-    rows = state['hourly'].get(k, [])
+    all_rows = state['hourly'].get(k, [])
+    rows = [r for r in all_rows if len(r) > 6 and r[6] > 0]  # only hours that were compared with the one before
     sp = state['soldprices'].get(k, [])
-    hours = max(1, len(rows))
-    sold_by_hour = [r[3] for r in rows]
+    hours = max(1.0, sum(r[6] for r in rows))
+    sold_by_hour = [r[3] / r[6] for r in rows]
     recent = [(p, q * (2 if now_ts - t <= 86400 else 1)) for t, p, q in sp]  # last 24 h counts double
     med = wmedian(recent) if recent else None
     hi = None
@@ -177,7 +180,7 @@ def item_numbers(k, state, mk, now_ts):
     med24 = wmedian(last24) if last24 else None
     med_all = wmedian([(p, q) for t, p, q in sp]) if sp else None
     qty_now = m['qty'] if m else 0
-    qty_24h_ago = [r[2] for r in rows if 23 * 3600 <= now_ts - r[0] <= 25 * 3600]
+    qty_24h_ago = [r[2] for r in all_rows if 23 * 3600 <= now_ts - r[0] <= 25 * 3600]
     return {
         'low': m['low'] if m else None,
         'qty': qty_now,
@@ -225,7 +228,7 @@ def write_lua(path, state, mk, now_ts):
         row = [n[f] for f in FIELDS] + [n['ladder'][:12]]
         parts.append(f'[{k}]={lua(row)}')
     body = (f'-- Written by the AuctionForever collector. Do not edit.\n'
-            f'AuctionForeverData = {{v=1,house={HOUSE},time={int(now_ts)},hours={state.get("runs", 0)},\n'
+            f'AuctionForeverData = {{v=1,house={HOUSE},time={int(now_ts)},hours={round(sum(c[1] for c in state.get("compared", [])), 1)},\n'
             f'fields={lua(FIELDS + ["ladder"])},\nitems={{\n' + ',\n'.join(parts) + '\n}}\n')
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
@@ -258,15 +261,26 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None):
     prev = state.get('listings')
     if prev is not None and prev == now:
         # Blizzard hasn't published a new snapshot yet: change nothing, so this isn't counted as an hour of no sales.
+        if state.get('fmt') != FMT:
+            # ...but a data file written by an older collector is rewritten right away in the current format.
+            state['fmt'] = FMT
+            save_state(state_path, state)
+            n = write_lua(out_path, state, market(now), state['time'])
+            print(f'house {HOUSE}: no new snapshot yet; data file rewritten in the current format ({n} items)')
+            return True
         print(f'house {HOUSE}: no new snapshot yet ({len(now)} listings unchanged)')
         return False
     hours = (now_ts - state['time']) / 3600 if state.get('time') else None
     ev = compare(prev, now, hours) if prev and hours and hours < 6 else {}
     mk = market(now)
-    update_history(state, now_ts, mk, ev)
+    span = hours if (prev and hours and hours < 6) else 0
+    update_history(state, now_ts, mk, ev, span)
+    # Hours of sales watched in the kept window, shown by the add-on as "based on N h of sales".
+    state['compared'] = [c for c in state.get('compared', []) if c[0] >= now_ts - HOURS_KEPT * 3600] + ([[now_ts, span]] if span else [])
     state['listings'] = now
     state['time'] = now_ts
     state['runs'] = state.get('runs', 0) + 1
+    state['fmt'] = FMT
     save_state(state_path, state)
     n = write_lua(out_path, state, mk, now_ts)
     print(f'house {HOUSE}: {len(now)} listings, {len(ev)} items changed, {n} items written')

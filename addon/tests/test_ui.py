@@ -20,6 +20,7 @@ run(os.path.join(ADDON, 'Core.lua'), 'AuctionForever', ns)
 real = sys.argv[1] if len(sys.argv) > 1 else None
 if real:
     lua.execute(open(real, encoding='utf-8').read())
+run(os.path.join(ADDON, 'Scan.lua'), 'AuctionForever', ns)
 run(os.path.join(ADDON, 'UI.lua'), 'AuctionForever', ns)
 fails = 0
 
@@ -81,5 +82,58 @@ if real:
     X('TooltipPostCalls[1](GameTooltip, {id = 2589})')
     lines = [str(v) for v in L('TipLines').values()]
     ok('AuctionForever' in lines, 'Linen Cloth tooltip: ' + ' | '.join(lines[2:]))
+# Scan: rebuild the auction house from the cloud data's ladders, 40 min later, with Linen Cloth's two cheapest levels bought.
+if real:
+    X("""
+    Listings = {}
+    local D = AuctionForeverData
+    local LI; for i, n in ipairs(D.fields) do if n == "ladder" then LI = i end end
+    for id, Row in pairs(D.items) do
+      local Lad = Row[LI] or {}
+      for j, Step in ipairs(Lad) do
+        local Q = Step[2]
+        if id == 2589 and j <= 2 then Q = 0 elseif id == 2589 and j == 3 then Q = math.floor(Q / 2) end
+        if Q > 0 then table.insert(Listings, { id, Q, Step[1] * Q, 2 }) end
+      end
+    end
+    LinenBefore = D.items[2589][LI]
+    C_AuctionHouse = {
+      ReplicateItems = function() ReplicateCalled = true end,
+      GetNumReplicateItems = function() return #Listings end,
+      GetReplicateItemInfo = function(i) local E = Listings[i]; return "x", 1, E[2], 1, true, 1, "", 0, 0, E[3], 0, false, nil, "o", "o", 0, E[1], true end,
+      GetReplicateItemTimeLeft = function(i) return Listings[i][4] end,
+    }
+    AuctionHouseFrame = CreateFrame("Frame", "AuctionHouseFrame")
+    local RealTime = time
+    time = function() return D.time + 2400 end
+    FireEvent("AUCTION_HOUSE_SHOW")
+    AuctionForeverScanButton:GetScript("OnClick")()
+    FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    """)
+    ok(L('ReplicateCalled == true'), 'Scan button asks the server for the full listing')
+    # Pump the per-frame worker until finished.
+    X("""
+    -- find the worker frame (the one with an OnUpdate set) and pump it
+    for _ = 1, 10000 do
+      if not AF_NS.Scan.Busy() then break end
+      for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end
+    end
+    """)
+    ok(not L('AF_NS.Scan.Busy()'), 'scan finished')
+    expect = L('LinenBefore[1][2] + LinenBefore[2][2] + (LinenBefore[3][2] - math.floor(LinenBefore[3][2] / 2))')
+    obs = L('AuctionForeverDB.obs[2589] and AuctionForeverDB.obs[2589][1]')
+    ok(obs is not None and obs[3] == expect and abs(obs[2] - 2400 / 3600) < 1e-6, f'Linen Cloth: {obs and obs[3]} sold measured over 40 min (expected {expect})')
+    others = L('(function() local n = 0 for id, O in pairs(AuctionForeverDB.obs) do if id ~= 2589 and O[1][3] > 0 then n = n + 1 end end return n end)()')
+    ok(others == 0, f'unchanged items show no sales ({others} false sales)')
+    ok(L('AuctionForeverDB.fresh.items[2589][1]') == L('LinenBefore[3][1]'), 'fresh lowest price for Linen comes from the scan')
+    I = L('AF_NS.Core.Info(2589)')
+    ok(I.fromScan and I.perHour > 0, f'Linen now shows {I.perHour:.0f}/h, status {L("AF_NS.Core.Status(AF_NS.Core.Info(2589))")}')
+    ok('scanned' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
+    # Incomplete scan: only a handful of items comes back
+    X("""time = function() return AuctionForeverData.time + 4800 end; Listings = { Listings[1], Listings[2] }
+    AuctionForeverScanButton:GetScript("OnClick")(); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    for _ = 1, 100 do if not AF_NS.Scan.Busy() then break end for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end""")
+    ok('incomplete' in str(L('LastPrint')) and len(list(L('AuctionForeverDB.obs[2589]').values())) == 1, 'incomplete scan: prices kept, no fake sales')
+
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

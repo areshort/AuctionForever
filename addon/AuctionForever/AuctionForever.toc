@@ -1,10 +1,11 @@
 ## Interface: 16001
 ## Title: AuctionForever
 ## Notes: Auction helper for WoW Forever: what sells, flips, farming value and sessions, from hourly auction data.
-## Version: 0.1
+## Version: 0.2
 ## SavedVariables: AuctionForeverDB
 ## SavedVariablesPerCharacter: AuctionForeverChar
 
 Core.lua
 AuctionForeverData.lua
+Scan.lua
 UI.lua

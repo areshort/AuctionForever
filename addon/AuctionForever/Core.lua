@@ -11,7 +11,8 @@ AF.Core = Core
 Core.Cut = 0.05                 -- auction house cut
 Core.Durations = { 2, 8, 24 }   -- Forever's choices, in hours (index 1/2/3 in the game's post call)
 Core.MinSales = 10              -- fewer sales than this: "warming up"
-Core.MinHours = 3               -- fewer hours watched than this: "warming up"
+Core.MinHours = 1               -- fewer hours of sales watched than this: "warming up"
+Core.EarlyHours = 6             -- under this many hours of sales, numbers are labeled "early"
 Core.SteadyShare = 0.7          -- share of watched hours with at least one sale
 Core.MinSellThrough = 0.6       -- share of ended listings that sold
 Core.LongSellThrough = 0.9      -- needed before an 8 h or 24 h post is chosen
@@ -31,7 +32,72 @@ function Core.Info(id)
 	local I = { id = id }
 	for i, Name in ipairs(D.fields) do I[Name] = Row[i] end
 	I.ladder = I.ladder or {}
+	I.soldQty = (I.perHour or 0) * (I.hoursSeen or 0)
+	return Core.MergeScan(I, D.time)
+end
+
+-- Adds what the player's own auction house scans saw (AuctionForeverDB, written by Scan.lua):
+-- fresher prices when the scan is newer than the cloud data, and the sales measured between scans.
+function Core.MergeScan(I, DataTime)
+	local DB = AuctionForeverDB
+	if type(DB) ~= "table" then return I end
+	local id = I.id
+	local Fresh = DB.fresh
+	if type(Fresh) == "table" and Fresh.items and (Fresh.time or 0) > (DataTime or 0) then
+		local F = Fresh.items[id]
+		if F then I.low, I.qty, I.ladder = F[1], F[2], F[3] or {}
+		else I.low, I.qty, I.ladder = nil, 0, {} end -- nothing listed right now
+		I.fromScan = true
+	end
+	local Obs = DB.obs and DB.obs[id]
+	if type(Obs) == "table" and #Obs > 0 then
+		-- Each observation: { time, gap hours, sold qty, sold value, levels that dropped, highest sold price }
+		local Hours, Sold, Value, Events, WithSales, Hi = 0, 0, 0, 0, 0, 0
+		for _, O in ipairs(Obs) do
+			Hours, Sold, Value, Events = Hours + O[2], Sold + O[3], Value + O[4], Events + O[5]
+			if O[3] > 0 then WithSales = WithSales + O[2] end
+			if (O[6] or 0) > Hi then Hi = O[6] end
+		end
+		local CloudHours = I.hoursSeen or 0
+		local TotalHours = CloudHours + Hours
+		if TotalHours > 0 then
+			I.perHour = ((I.perHour or 0) * CloudHours + Sold) / TotalHours
+			I.hoursWithSales = (I.hoursWithSales or 0) + WithSales
+			I.hoursSeen = TotalHours
+		end
+		I.soldQty = (I.soldQty or 0) + Sold
+		I.sales = (I.sales or 0) + Events
+		if Sold > 0 then
+			local ScanMed = Value / Sold
+			if not I.med then I.med, I.med24, I.medAll = ScanMed, ScanMed, ScanMed
+			else I.med = (I.med * CloudHours + ScanMed * Hours) / TotalHours end
+			if not I.hi or Hi > I.hi then I.hi = math.max(Hi, I.med) end
+		end
+		I.scanHours = Hours
+	end
 	return I
+end
+
+-- Units bought between an earlier ladder (cheapest first, steps { price, qty, expiring qty }) and a fresh one
+-- ({ [price] = qty }). Buyers take the cheapest first, so walk up from the bottom: a level that's completely gone was
+-- bought (minus listings that were under 30 min from expiring), a level that partly dropped was bought up to there,
+-- and anything above the first untouched level is cancellations, not sales. New cheaper listings don't matter.
+-- Returns sold qty, sold value, number of levels that dropped, highest price that dropped.
+function Core.CompareLadders(Before, Fresh)
+	local Sold, Value, Levels, Hi = 0, 0, 0, 0
+	for _, Step in ipairs(Before) do
+		local P, Q, Expiring = Step[1], Step[2], Step[3] or 0
+		local Left = Fresh[P] or 0
+		local Gone = Q - Left
+		if Gone <= 0 then break end
+		local Bought = math.max(0, Gone - (Left == 0 and Expiring or 0))
+		if Bought > 0 then
+			Sold, Value, Levels = Sold + Bought, Value + Bought * P, Levels + 1
+			if P > Hi then Hi = P end
+		end
+		if Left > 0 then break end -- buyers stopped here
+	end
+	return Sold, Value, Levels, Hi
 end
 
 -- Age of the data in hours (nil when there's no data).
@@ -39,6 +105,12 @@ function Core.DataAge(Now)
 	local D = AuctionForeverData
 	if type(D) ~= "table" or not D.time then return nil end
 	return ((Now or time()) - D.time) / 3600
+end
+
+-- Hours of sales the data is based on (nil when there's no data).
+function Core.HoursWatched()
+	local D = AuctionForeverData
+	return type(D) == "table" and D.hours or nil
 end
 
 -- Selling price reference: recent median sold, else the current lowest listing.
@@ -54,9 +126,9 @@ end
 -- Why an item is left out, or "good". Order matters: the first reason that applies is shown.
 function Core.Status(I)
 	if not I then return "no data" end
-	if (I.sales or 0) < Core.MinSales or (I.hoursSeen or 0) < Core.MinHours then return "warming up" end
+	if ((I.sales or 0) < Core.MinSales and (I.soldQty or 0) < Core.MinSales) or (I.hoursSeen or 0) < Core.MinHours * 0.25 then return "warming up" end
 	if (I.perHour or 0) <= 0 then return "slow" end
-	if (I.hoursWithSales or 0) < Core.SteadyShare * (I.hoursSeen or 1) then return "slow" end
+	if (I.hoursWithSales or 0) < Core.SteadyShare * (I.hoursSeen or 1) - 0.001 then return "slow" end
 	if I.sellThrough and I.sellThrough < Core.MinSellThrough then return "slow" end
 	if (I.qty or 0) > Core.FloodDays * 24 * I.perHour then return "flooded" end
 	if I.qtyDayAgo and I.qtyDayAgo > 0 and I.qty > 1.5 * I.qtyDayAgo and (I.med24 or 0) <= (I.medAll or 0) then return "flooded" end
