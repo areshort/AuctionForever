@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Get previous state
@@ -42,3 +42,12 @@ jobs:
         run: |
           gh release view data >/dev/null 2>&1 || gh release create data --title "Latest auction data" --notes "Updated by the collector. AuctionForeverData.lua is what the add-on reads."
           gh release upload data data/state.json.gz data/AuctionForeverData.lua --clobber
+      - name: Keep the schedule alive
+        # GitHub pauses scheduled workflows after 60 days without commits; an empty commit every 30 quiet days prevents that.
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 2592000 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep the collector schedule active"
+            git push
+          fi
