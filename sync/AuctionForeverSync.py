@@ -67,8 +67,26 @@ def once(folder):
     return f'downloaded new data ({size // 1024} KB, collected {age(updated)}): /reload in game to use it'
 
 
+def already_running():
+    """True if another copy is running (a named Windows mutex, released by Windows when that copy closes)."""
+    if os.name != 'nt':
+        return False
+    import ctypes
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    global _MUTEX  # kept for the life of the program
+    _MUTEX = k32.CreateMutexW(None, False, r'Local\AuctionForeverSync')
+    return ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
+
+
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR
+    if already_running():
+        os.system('title AuctionForever Sync (already running)')
+        print('AuctionForever Sync is already running: look for its window on the taskbar.')
+        print('Only one copy is needed. This window closes in 10 seconds.')
+        time.sleep(10)
+        return 0
     os.system('title AuctionForever Sync')
     print('AuctionForever Sync')
     print(f'Add-on folder: {folder}')
