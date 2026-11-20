@@ -22,18 +22,21 @@ setmetatable(_G, { __index = function(_, k)
   if not Allowed[k] then
     local Info = debug.getinfo(2, "S")
     local Src = Info and Info.source or "?"
-    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
   end
 end })
 """)
 lua.execute('AF_NS = {}')
 ns = lua.eval('AF_NS')
-run(os.path.join(ADDON, 'Core.lua'), 'AuctionForever', ns)
+# Load files in the .toc order, like the game does (a file missing from the .toc is never loaded, here or in game).
 real = sys.argv[1] if len(sys.argv) > 1 else None
-if real:
-    lua.execute(open(real, encoding='utf-8').read())
-run(os.path.join(ADDON, 'Scan.lua'), 'AuctionForever', ns)
-run(os.path.join(ADDON, 'UI.lua'), 'AuctionForever', ns)
+TOC = [l.strip() for l in open(os.path.join(ADDON, 'AuctionForever.toc'), encoding='utf-8') if l.strip() and not l.startswith('#')]
+for f in TOC:
+    if f == 'AuctionForeverData.lua':
+        if real: lua.execute(open(real, encoding='utf-8').read())
+    else:
+        run(os.path.join(ADDON, f), 'AuctionForever', ns)
+on_disk = sorted(f for f in os.listdir(ADDON) if f.endswith('.lua') and f != 'AuctionForeverData.lua')
 fails = 0
 import re
 # Taint guard: reassigning a Blizzard global (even to itself) taints it and gets protected actions blocked
@@ -118,6 +121,7 @@ if real:
     end
     LinenBefore = D.items[2589][LI]
     C_AuctionHouse = {
+      GetNumItemSearchResults = function() return 0 end, GetItemSearchResultInfo = function() return nil end, HasFullItemSearchResults = function() return true end,
       ReplicateItems = function() ReplicateCalled = true end,
       GetNumReplicateItems = function() return #Listings end,
       GetReplicateItemInfo = function(i) local E = Listings[i]; return "x", 1, E[2], 1, true, 1, "", 0, 0, E[3], 0, false, nil, "o", "o", 0, E[1], true end,
@@ -312,6 +316,16 @@ X('Money = 2000000; AuctionForeverDB = nil; AF_NS.UI.Toggle(2)')
 reason = str(L('AF_NS.UI.FlipEmptyReason()'))
 ok(('warming up' in reason) or ('steady sellers' in reason), 'empty Flip tab says why: ' + reason.replace('\n', ' '))
 
+# /af selftest runs end to end in the mock (auction house open), saves results, and finds no problems.
+X('AuctionHouseFrame:Show(); AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.selftest = nil')
+X('STok, STerr = pcall(function() SlashCmdList.AUCTIONFOREVER("selftest"); for i = 1, 10 do RunTimers() end end)')
+okr, err = L('STok'), L('STerr')
+st = L('AuctionForeverDB.selftest')
+lines = [str(v) for v in st.lines.values()] if st else []
+ok(okr and st is not None, f'selftest runs and saves results ({err})')
+ok(st is not None and not [l for l in lines if l.startswith('FAIL') and 'cloud data' not in l and 'lookup' not in l and 'minimap' not in l],
+   'selftest in the mock: ' + '; '.join(l for l in lines if l.startswith('FAIL')))
+ok(all(f in TOC for f in on_disk), 'every add-on .lua file is listed in the .toc: ' + ', '.join(f for f in on_disk if f not in TOC))
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

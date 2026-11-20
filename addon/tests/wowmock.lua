@@ -126,3 +126,6 @@ C_Container = {
 	end,
 }
 YES = "Yes"; NO = "No"
+function GetBuildInfo() return "1.16.1", "00000", "Nov 1 2026", 11601 end
+C_AddOns = C_AddOns or { GetAddOnMetadata = function(_, k) if k == "Version" then return "test" end end }
+function issecurevariable() return true end
