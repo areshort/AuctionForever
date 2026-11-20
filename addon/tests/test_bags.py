@@ -53,11 +53,16 @@ function Icon(id, extra)
   local icon = {}
   function icon:SetTexture(p) self.path = p end
   function icon:SetTexCoord(...) self.coords = { ... } end
+  function icon:SetAtlas(a) self.path = "atlas:" .. a end
   local d = { itemID = id, itemLink = "|cffffffff|Hitem:" .. id .. "::::|h[x]|h|r", quality = ITEMS[id] and ITEMS[id][2] or 1 }
   for k, v in pairs(extra or {}) do d[k] = v end
   if not WIDGETS.auctionforever.onUpdate(icon, d) then return nil end
-  if icon.path == [[Interface\\Minimap\\Tracking\\Auctioneer]] then return "auction" end
-  if icon.path == [[Interface\\AddOns\\AuctionForever\\Textures\\UpgradeArrowBig]] and icon.coords[1] == 0 and icon.coords[2] == 0.5 and icon.coords[3] == 0.5 and icon.coords[4] == 1 then return "coin" end
+  local function Is(C) if type(C) == "table" and C.atlas then return icon.path == "atlas:" .. C.atlas end
+    if type(C) == "table" then return icon.path == C[1] and icon.coords[2] == C[3] end
+    return icon.path == C end
+  local Pick = function(K) local n = AuctionForeverDB.icons and AuctionForeverDB.icons[K] or 1 return AF_NS.Bags.ICONS[K][n] end
+  if Is(Pick("auction")) then return "auction" end
+  if Is(Pick("vendor")) then return "coin" end
   return "?"
 end
 function Junk(id, slot) return JUNK.auctionforever.cb(0, slot or 1, id, id and ("|cffffffff|Hitem:" .. id .. "::::|h[x]|h|r") or nil) end
@@ -110,19 +115,22 @@ for i in (9001, 9002, 9006):
     tip = ' '.join(str(v) for v in L(f'(function() local t = {{}} for _, l in ipairs(AF_NS.UI.TooltipLines({i})) do if l[1] == "Rec" then t[1] = l[2] end end return t[1] end)()') .split())
     ok(L(f'(AF_NS.UI.BagAdvice({i}))') in tip, f'item {i}: bag advice matches the tooltip Rec line ({tip})')
 
-# Not Baganator's junk source: AF draws the coin itself (except greys, which Baganator's default junk marks).
+# AF draws both icons itself: the chosen purse for vendor items, the chosen auction icon.
 ok(L('Icon(9001)') == 'auction', 'Rec Auction: auction icon')
-ok(L('Icon(9002)') == 'coin', 'Rec Vendor: coin (Pawn coin texcoords)')
-ok(L('Icon(9006)') is None, 'grey vendor item: no AF coin (Baganator already marks greys as junk)')
+ok(L('Icon(9002)') == 'coin', 'Rec Vendor: the vendor (purse) icon')
+ok(L('Icon(9006)') == 'coin', 'grey vendor item: purse too')
 ok(L('Icon(9007)') is None, 'no recommendation: no icon')
 ok(L('Icon(9004)') is None, 'quest item: no icon even with an AH price')
 ok(L('Icon(9005, { isBound = true })') is None and L('Icon(9005)') == 'auction', 'soulbound copy: no icon (unbound copy: auction)')
 
-# AF is Baganator's junk source: Baganator draws the coin, AF only the auction icon.
-X('JUNK_SOURCE = "auctionforever"')
-ok(L('Icon(9002)') is None and L('Icon(9006)') is None, 'AF is the junk source: no AF coin (Baganator junk icon shows it)')
-ok(L('Icon(9001)') == 'auction', 'AF is the junk source: auction icon still drawn')
-X('JUNK_SOURCE = "poor_quality"')
+# Picking icons: /af icon vendor 3 saves the choice and redraws the bags.
+X('AF_NS.Bags.IconCommand("icon vendor 3"); AF_NS.Bags.IconCommand("icon auction 2")')
+ok(L('AuctionForeverDB.icons.vendor') == 3 and L('AuctionForeverDB.icons.auction') == 2 and L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction',
+   'picked icons are drawn (vendor 3, auction 2 = an atlas)')
+X('AF_NS.Bags.IconCommand("icon vendor 99"); AF_NS.Bags.IconCommand("icons")')
+ok(L('AuctionForeverDB.icons.vendor') == 3, 'a number that is not a choice: ignored (lists the choices)')
+X('AuctionForeverDB.icons = nil')
+ok(L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction', 'defaults: first choice of each')
 
 # Junk callback.
 ok(L('Junk(9002)') is True and L('Junk(9006)') is True, 'junk source: vendor items are junk (greys too)')

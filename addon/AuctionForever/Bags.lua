@@ -9,9 +9,51 @@ local _, AF = ...
 local B = {}
 AF.Bags = B
 
-local AUCTION_ICON = "Interface\\Minimap\\Tracking\\Auctioneer"
--- Pawn's arrow art (the same file Gear Upgrade Forever ships); the coin is its bottom-left quarter.
-local COIN_ICON = "Interface\\AddOns\\AuctionForever\\Textures\\UpgradeArrowBig"
+-- Icon choices (/af icons lists them, /af icon vendor 2 picks one). A file path, or { atlas = name }, or
+-- { file, left, right, top, bottom } for part of a file.
+local ICONS = {
+	vendor = {
+		"Interface\\GossipFrame\\VendorGossipIcon",
+		"Interface\\Minimap\\Tracking\\Banker",
+		"Interface\\Icons\\INV_Misc_Bag_10",
+		"Interface\\Icons\\INV_Misc_Bag_11",
+		"Interface\\Icons\\INV_Misc_Coin_02",
+		{ atlas = "Banker" },
+		{ "Interface\\AddOns\\AuctionForever\\Textures\\UpgradeArrowBig", 0, 0.5, 0.5, 1 }, -- Pawn's coin
+	},
+	auction = {
+		"Interface\\Minimap\\Tracking\\Auctioneer",
+		{ atlas = "Auctioneer" },
+		"Interface\\Icons\\INV_Hammer_15",
+		"Interface\\Icons\\INV_Scroll_03",
+		"Interface\\Icons\\INV_Misc_Note_02",
+		"Interface\\GossipFrame\\BankerGossipIcon",
+	},
+}
+B.ICONS = ICONS
+local function Choice(Kind)
+	local Saved = AuctionForeverDB and AuctionForeverDB.icons and AuctionForeverDB.icons[Kind]
+	return ICONS[Kind][Saved] or ICONS[Kind][1]
+end
+local function Draw(Icon, C)
+	if type(C) == "table" and C.atlas then
+		Icon:SetAtlas(C.atlas)
+	elseif type(C) == "table" then
+		Icon:SetTexture(C[1])
+		Icon:SetTexCoord(C[2], C[3], C[4], C[5])
+	else
+		Icon:SetTexture(C)
+		Icon:SetTexCoord(0, 1, 0, 1)
+	end
+end
+-- The icon as chat text.
+local function ChatIcon(C)
+	if type(C) == "table" and C.atlas then return "|A:" .. C.atlas .. ":18:18|a" end
+	if type(C) == "table" then
+		return string.format("|T%s:18:18:0:0:64:64:%d:%d:%d:%d|t", C[1], C[2] * 64, C[3] * 64, C[4] * 64, C[5] * 64)
+	end
+	return "|T" .. C .. ":18|t"
+end
 local WIDGET_ID = "auctionforever"
 local JUNK_ID = "auctionforever"
 local POOR = 0
@@ -113,14 +155,10 @@ function B.UpdateIcon(Icon, Details)
 	local Where = Status(ID, Bound)
 	if Where == nil then Later(ID, Bound) return false end
 	if Where == "Auction" then
-		Icon:SetTexture(AUCTION_ICON)
-		Icon:SetTexCoord(0, 1, 0, 1)
+		Draw(Icon, Choice("auction"))
 		return true
 	elseif Where == "Vendor" then
-		if JunkSource() then return false end -- Baganator's junk icon shows it
-		if Details.quality == POOR then return false end -- Baganator's default junk rule marks greys
-		Icon:SetTexture(COIN_ICON)
-		Icon:SetTexCoord(0, 0.5, 0.5, 1)
+		Draw(Icon, Choice("vendor"))
 		return true
 	end
 	return false
@@ -141,6 +179,26 @@ function B.IsJunk(BagID, SlotID, ID, Link)
 	local Where = Status(ID, Bound)
 	if Where == nil then Later(ID, Bound) return false end
 	return Where == "Vendor"
+end
+
+-- /af icons: the choices in chat; /af icon vendor 2 (or auction 3): pick one.
+function B.IconCommand(Msg)
+	local Kind, N = string.match(Msg or "", "^icon%s+(%a+)%s+(%d+)")
+	N = tonumber(N)
+	if Kind and ICONS[Kind] and N and ICONS[Kind][N] then
+		AuctionForeverDB = AuctionForeverDB or {}
+		AuctionForeverDB.icons = AuctionForeverDB.icons or {}
+		AuctionForeverDB.icons[Kind] = N
+		Say(Kind .. " icon is now " .. ChatIcon(ICONS[Kind][N]) .. " (" .. N .. ").")
+		B.Reset()
+		return
+	end
+	for _, K in ipairs({ "vendor", "auction" }) do
+		local Parts = {}
+		for i, C in ipairs(ICONS[K]) do Parts[#Parts + 1] = i .. " " .. ChatIcon(C) end
+		Say(K .. ": " .. table.concat(Parts, "   "))
+	end
+	Say("pick with /af icon vendor 2 or /af icon auction 3 (a blank number means that art isn't in this game).")
 end
 
 -- /af keep [item link]: add or remove an item from the keep list; /af keep alone lists it.
