@@ -397,6 +397,11 @@ if real:
     ok(L('AuctionForeverBuyPanel:IsShown() and not AuctionForeverSellPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), 'AF Buy shows its panel only')
     ok(L('AuctionForeverBuyTab._selected and not AuctionForeverSellTab._selected and not AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'AF Buy highlighted, other tabs not')
     ok(L('AF_NS.Trade.SelectedBuy() and AF_NS.Trade.SelectedBuy().id') == 2589, 'first flip target selected')
+    # The list is kept until you refresh: switching tabs or sorting doesn't rebuild it.
+    X('TargetCalls = 0; local F = AF_NS.UI.FlipTargets; AF_NS.UI.FlipTargets = function() TargetCalls = TargetCalls + 1 return F() end')
+    X('Click(AuctionForeverSellTab); Click(AuctionForeverBuyTab); AF_NS.Trade.SetBuySort("profit"); AF_NS.Trade.SetBuySort("plan")')
+    ok(L('TargetCalls') == 0, f"switching back to AF Buy and sorting reuse the loaded list ({L('TargetCalls')} rebuilds)")
+    ok(L('AF_NS.Trade.SelectedBuy() and AF_NS.Trade.SelectedBuy().id') == 2589, 'same list after switching tabs')
     ok('Item 2589' in str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')), 'row shows the item: ' + str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')))
     ok(len(L('LookupSpy')) == 0, 'fresh data: no re-check on select')
     # commodity buy, price rose: cancelled, nothing confirmed
@@ -432,7 +437,7 @@ if real:
     # Refresh prices: re-checks the listed targets on purpose
     ok(L('AuctionForeverBuyPanel.Cover ~= nil and AuctionForeverSellPanel.Cover ~= nil'), "AF pages cover Blizzard's tab strip at the top")
     ok(L('AuctionForeverBuyPanel.Refresh:GetText()') in (None, ''), 'refresh is the round button at the top right (no text)')
-    X('LookupSpy = {}; Click(AuctionForeverBuyPanel.Refresh)')
+    X('TargetCalls = 0; LookupSpy = {}; Click(AuctionForeverBuyPanel.Refresh)')
     ok(L('LookupSpy[1] ~= nil and #LookupSpy[1].ids >= 1 and #LookupSpy[1].ids <= 20'), 'Refresh prices re-checks the listed targets')
     # another lookup running: the refresh waits and runs right after it, not dropped
     X('LookupSpy = {}; RealBusy = AF_NS.Scan.Busy; AF_NS.Scan.Busy = function() return true end; Click(AuctionForeverBuyPanel.Refresh)')

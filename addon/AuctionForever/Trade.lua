@@ -151,8 +151,16 @@ end
 local function GoldText(N) return Core.Money(math.ceil(N / 100) * 100) end
 SORTS = {
 	-- plan: FlipRows order (the plan, then what fits now, then by gold needed)
-	gold = function(a, b) if a.need ~= b.need then return a.need < b.need end return a.best.profit > b.best.profit end,
-	profit = function(a, b) if a.best.profit ~= b.best.profit then return a.best.profit > b.best.profit end return a.bestNeed < b.bestNeed end,
+	gold = function(a, b)
+		local An, Bn = a.need or 0, b.need or 0
+		if An ~= Bn then return An < Bn end
+		return (a.best or a.flip).profit > (b.best or b.flip).profit
+	end,
+	profit = function(a, b)
+		local Ap, Bp = (a.best or a.flip).profit, (b.best or b.flip).profit
+		if Ap ~= Bp then return Ap > Bp end
+		return (a.bestNeed or 0) < (b.bestNeed or 0)
+	end,
 }
 SORT_LABEL = { plan = "Sort: plan", gold = "Sort: gold needed", profit = "Sort: profit" }
 function T.DrawBuy()
@@ -204,21 +212,26 @@ function T.DrawBuy()
 end
 
 function T.Rows() return Buy.rows end
-function T.RefreshBuy()
+-- Put the loaded list in the chosen order (no new work: sorting only reorders what's loaded).
+local function SortRows()
 	local Id = Buy.rows[Buy.sel] and Buy.rows[Buy.sel].id
-	local Src = UI().FlipTargets() or {}
 	Buy.rows = {}
-	for i, E in ipairs(Src) do Buy.rows[i] = E end
+	for i, E in ipairs(Buy.loaded or {}) do Buy.rows[i] = E end
 	if SORTS[Buy.sort] then table.sort(Buy.rows, SORTS[Buy.sort]) end
 	Buy.sel = 1
 	for i, E in ipairs(Buy.rows) do if E.id == Id then Buy.sel = i end end
 	if BuyP and BuyP.Sort then BuyP.Sort:SetText(SORT_LABEL[Buy.sort]) end
 	T.DrawBuy()
 end
+-- Rebuild the list from your data (refresh, after a purchase). Opening the tab and sorting reuse the loaded list.
+function T.RefreshBuy()
+	Buy.loaded = UI().FlipTargets() or {}
+	SortRows()
+end
 function T.SetBuySort(Key)
 	Buy.sort = SORT_LABEL[Key] and Key or "plan"
 	Buy.offset = 0
-	T.RefreshBuy()
+	SortRows()
 end
 
 function T.SelectBuy(i)
@@ -234,7 +247,7 @@ end
 function T.RefreshBuyPrices()
 	local Ids = {}
 	for i = 1, math.min(20, #Buy.rows) do Ids[#Ids + 1] = Buy.rows[i].id end
-	if #Ids == 0 then return end
+	if #Ids == 0 then T.RefreshBuy() return end
 	if Recheck(Ids, function() T.RefreshBuy(); SayBuy("Prices refreshed.") end) then SayBuy("Refreshing prices for " .. #Ids .. " items...") end
 end
 
@@ -322,7 +335,7 @@ end
 
 local function BuildBuy()
 	BuyP = UI().NewAHPage("AF Buy", "AuctionForeverBuyTab", "AuctionForeverBuyPanel",
-		function() T.RefreshBuy(); T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
+		function() if not Buy.loaded then T.RefreshBuy() end; T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -12)
@@ -421,8 +434,9 @@ end
 
 local function Location(G)
 	local L1 = G.locs[1]
-	if not (ItemLocation and ItemLocation.CreateFromBagAndSlot and L1) then return nil end
-	return ItemLocation:CreateFromBagAndSlot(L1[1], L1[2])
+	local IL = rawget(_G, "ItemLocation") -- the game's; read safely in case it isn't loaded
+	if not (IL and IL.CreateFromBagAndSlot and L1) then return nil end
+	return IL:CreateFromBagAndSlot(L1[1], L1[2])
 end
 
 function T.UpdateDeposit()
