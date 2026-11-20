@@ -735,6 +735,16 @@ pa = [r for r in tl2 if r[0] == 'Post at']
 sp = L('(AF_NS.Core.SellPrice(AF_NS.Core.Info(2589), 1))')
 ok(L('AF_NS.Core.Status(AF_NS.Core.Info(2589))') != 'good' or (pa and L(f'AF_NS.Core.MoneyColor({sp})') in str(pa[0][1])),
    f"Post at = AF Sell's price ({pa and pa[0][1]} vs {sp})")
+# With Shift: what selling all you hold would bring (vendor total, AF Sell's post and expected result).
+X('RealGIC = C_Item.GetItemCount; C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end')
+tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+names = [r[0] for r in tl3]
+ok('All 24 to a vendor' in names and L(f"AF_NS.Core.MoneyColor({24 * v})") in str(tl3[names.index('All 24 to a vendor')][1]), 'Shift: all 24 to a vendor, total: ' + str(tl3[names.index('All 24 to a vendor')] if 'All 24 to a vendor' in names else names))
+ok('All 24 on the AH' in names and 'Expected' in names and 'sell, deposit' in str(tl3[names.index('Expected')][1]),
+   'Shift: all 24 on the AH (post, price, duration) and the expected result: ' + str([tl3[names.index(k)] for k in ('All 24 on the AH', 'Expected') if k in names]))
+X('C_Item.GetItemCount = function() return 0 end')
+ok(not any(str(r[0]).startswith('All ') for r in [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]), 'none in your bags: no "All" lines')
+X('C_Item.GetItemCount = RealGIC')
 X('IsShiftKeyDown = function() return false end')
 # Vendor wins when the AH, after the 5% cut, pays no more than the vendor.
 X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')

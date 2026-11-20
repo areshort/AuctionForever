@@ -1086,6 +1086,21 @@ function L.TooltipLines(id)
 	else
 		Lines[#Lines + 1] = { "Status", StatusText(S) }
 	end
+	-- Selling everything in your bags: the vendor total, and AF Sell's suggestion with its expected result.
+	local N = C_Item.GetItemCount and C_Item.GetItemCount(id) or 0
+	if N > 0 then
+		Lines[#Lines + 1] = { "All " .. N .. " to a vendor", Core.MoneyColor(V * N) }
+		local G = AF.Trade and AF.Trade.SuggestFor and AF.Trade.SuggestFor(id, N)
+		if G and G.price and G.qty then
+			local H = Core.Durations[G.durIdx or 1] or Core.Durations[1]
+			local Dep = Core.Deposit and Core.Deposit(I, H, G.qty) or 0
+			local E, Ch = Core.ExpectedPost(I, G.price, G.qty, Dep, G.cost)
+			Lines[#Lines + 1] = { "All " .. N .. " on the AH", string.format("post %d at %s, %d h: %s after the cut%s", G.qty,
+				Core.MoneyColor(G.price), H, Core.MoneyColor(math.floor(G.price * G.qty * (1 - Core.Cut))), G.qty < N and " (rest later)" or "") }
+			Lines[#Lines + 1] = { "Expected", (E < 0 and "|cffff4040-|r" or "") .. Core.MoneyColor(math.abs(E)) ..
+				string.format(" (%d%% sell, deposit %s)", math.floor(Ch * 100 + 0.5), Core.MoneyColor(Dep)) }
+		end
+	end
 	return Lines
 end
 -- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.

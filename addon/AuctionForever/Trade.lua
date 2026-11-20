@@ -481,6 +481,14 @@ local function Suggest(G)
 	if not Price then H, Idx, Price, Qty = 2, 1, math.max(Lo, Core.Market(I) or Lo), G.count end
 	G.price, G.durIdx, G.qty, G.flag = math.max(Lo, math.floor(Price)), Idx, Qty, Flag
 end
+-- What AF Sell would suggest for Count of an item (the tooltip's Shift lines): price, duration index, how many.
+function T.SuggestFor(id, Count)
+	local I = Core.Info(id)
+	if not I or not Count or Count < 1 then return nil end
+	local G = { id = id, count = Count, info = I, vendor = UI().Vendor(id) }
+	Suggest(G)
+	return G
+end
 
 -- Items in the bags that sell on the auction house, grouped by item, most valuable first.
 function T.BuildQueue()
