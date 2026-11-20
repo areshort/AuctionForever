@@ -51,7 +51,13 @@ local function DB()
 end
 
 local function Say(Msg) print("|cffffd100AuctionForever:|r " .. Msg) end
-local function Notify(Fn) if AF.UI and AF.UI[Fn] then AF.UI[Fn]() end end
+-- Scan.Version goes up whenever your auction data changes (a scan or lookup finished, a purchase), so lists that
+-- are expensive to work out (the AF Buy plan) are only redone when something changed.
+Scan.Version = 0
+local function Notify(Fn)
+	if Fn == "ScanDone" then Scan.Version = Scan.Version + 1 end
+	if AF.UI and AF.UI[Fn] then AF.UI[Fn]() end
+end
 
 -- { [price] = qty } -> cheapest LADDER levels { {price, qty, expiringQty}, ... }
 local function ToLadder(L, E)
@@ -77,6 +83,42 @@ local function CloudLadder(id)
 	if type(D) ~= "table" or not D.items or not D.items[id] then return nil end
 	for i, Name in ipairs(D.fields) do if Name == "ladder" then return D.items[id][i] or {} end end
 	return {}
+end
+
+-- You bought Qty of an item: take those units off the cheapest price levels in your data, so the plan doesn't
+-- offer them again, and off the starting point sales are measured from, so your own purchase isn't counted as
+-- other people buying.
+local function TakeCheapest(Ladder, Qty)
+	local Out, Left = {}, Qty
+	for _, Step in ipairs(Ladder or {}) do
+		local Q = Step[2]
+		if Left > 0 then local T = math.min(Left, Q); Q = Q - T; Left = Left - T end
+		if Q > 0 then Out[#Out + 1] = { Step[1], Q, Step[3] or 0 } end
+	end
+	return Out
+end
+function Scan.Consume(id, Qty)
+	if not id or not Qty or Qty <= 0 then return end
+	Scan.Version = (Scan.Version or 0) + 1
+	local S = DB()
+	local D = AuctionForeverData
+	local Now = time()
+	local F = S.fresh.items[id]
+	local Ladder
+	if F and (F[4] or S.fresh.time or 0) > ((type(D) == "table" and D.time) or 0) then Ladder = F[3] else Ladder = CloudLadder(id) end
+	local New = TakeCheapest(Ladder, Qty)
+	local Have = (F and F[2]) or CloudQty(id) or 0
+	S.fresh.items[id] = { New[1] and New[1][1] or nil, math.max(0, Have - Qty), New, Now }
+	local CloudTime = (type(D) == "table" and D.time and CloudLadder(id)) and (D.time - 900) or nil
+	local B = S.base[id]
+	if B and (not CloudTime or B.t > CloudTime) then
+		B.ladder = TakeCheapest(B.ladder, Qty)
+		if B.qty then B.qty = math.max(0, B.qty - Qty) end
+		B.auc = nil -- listing IDs no longer match; compare by price levels next time
+	elseif CloudTime then
+		local Q = CloudQty(id)
+		S.base[id] = { t = CloudTime + 1, ladder = TakeCheapest(CloudLadder(id), Qty), qty = Q and math.max(0, Q - Qty) or nil }
+	end
 end
 
 -- One item seen by a scan. Map = { [price] = qty }, Exp = { [price] = expiring qty } (or nil),

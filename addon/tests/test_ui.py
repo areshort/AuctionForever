@@ -386,6 +386,7 @@ if real:
         { id = 2589, info = AF_NS.Core.Info(2589), flip = { buyQty = 10, buyUpTo = 30, cost = 250, resell = 200, hours = 2, durationIndex = 1, profit = 320 } },
         { id = 14047, info = AF_NS.Core.Info(14047), flip = { buyQty = 1, buyUpTo = 400, cost = 380, resell = 1000, hours = 8, durationIndex = 2, profit = 570 } },
       }
+      RealFlipRows = RealFlipRows or AF_NS.UI.FlipRows
       AF_NS.UI.FlipRows = function() return FlipTargets end
       Click(AuctionForeverBuyTab)""")
     ok(L('AuctionForeverBuyPanel:IsShown() and not AuctionForeverSellPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), 'AF Buy shows its panel only')
@@ -659,11 +660,65 @@ X('AuctionForeverData.info[777002] = { 0, 2, 0 }; C_Item.GetItemMaxStackSizeByID
 ok(L('AF_NS.UI.Flippable(777001)') and not L('AF_NS.UI.Flippable(777002)'), 'commodity flag decides: commodity flips, non-commodity does not')
 ok(L('AF_NS.UI.Kind(777001)') == 'commodity' and L('AF_NS.UI.Kind(777002)') == 'item', 'kind from the data file')
 X('C_Item.GetItemMaxStackSizeByID = OldMax')
+# Tooltip AH line = the target (post) price from your latest data, with how long ago it was checked.
+X("""OldCD, OldStatus2, OldNow = AF_NS.Core.ChooseDuration, AF_NS.Core.Status, time
+  AF_NS.Core.Status = function() return "good" end
+  AF_NS.Core.ChooseDuration = function() return 2, 1, 4321 end
+  AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 } }, 1800000000 }
+  time = function() return 1800000000 + 720 end""")
+tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ah = str(tl[1][1])
+ok('43s' in ah and '21c' in ah and '12 min ago' in ah, 'AH line: target price and age: ' + ah)
+X('AF_NS.Core.Status = function() return "warming up" end')
+tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ok('43s' not in str(tl[1][1]) and 'ago' in str(tl[1][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[1][1]))
+X('AF_NS.Core.ChooseDuration, AF_NS.Core.Status, time = OldCD, OldStatus2, OldNow')
 # Empty flip list says what the budget is.
 X('OldMoney = GetMoney; GetMoney = function() return 15000 end')
 er = str(L('AF_NS.UI.FlipEmptyReason()'))
 X('GetMoney = OldMoney')
 ok('50s' in er or 'budget' in er.lower(), 'empty flip message states the budget: ' + er)
+# Budget plan in AF Buy: best combination for your budget first (buying order), the rest greyed out below.
+X("""AF_NS.UI.FlipRows = RealFlipRows
+  OldOpts, OldFlippable, OldMoney3, OldStatus = AF_NS.Core.FlipOptions, AF_NS.UI.Flippable, GetMoney, AF_NS.Core.Status
+  Gold = 29963
+  GetMoney = function() return Gold end
+  local Opts = {
+    [2589] = { { qty = 150, buyQty = 150, buyUpTo = 20, cost = 3000, resell = 30, hours = 2, durationIndex = 1, profit = 1275 },
+               { qty = 300, buyQty = 300, buyUpTo = 20, cost = 6000, resell = 30, hours = 2, durationIndex = 1, profit = 2550 } },
+    [2592] = { { qty = 20, buyQty = 20, buyUpTo = 60, cost = 1200, resell = 120, hours = 2, durationIndex = 1, profit = 1080 } },
+    [4306] = { { qty = 5, buyQty = 5, buyUpTo = 1500, cost = 7500, resell = 2000, hours = 8, durationIndex = 2, profit = 1600 } },
+  }
+  AF_NS.Core.FlipOptions = function(I, Cap) local O = Opts[I.id] or {} local T = {} for _, o in ipairs(O) do if o.cost <= Cap then T[#T+1] = o end end return T end
+  AF_NS.UI.ResetBudget()""")
+rows = L('AF_NS.UI.FlipRows()')
+lst = [(rows[i].id, rows[i].plan, rows[i].flip.qty) for i in range(1, int(L('#AF_NS.UI.FlipRows()')) + 1)] if rows else []
+lp = L('AF_NS.UI.LastPlan')
+ok(lp is not None and lp.budget == 14981 or (lp and abs(lp.budget - 14981.5) < 1), f'budget = half of 2g 99s 63c ({lp and lp.budget})')
+ok(lst[:2] == [(2592, True, 20), (2589, True, 150)] if len(lst) >= 2 else False, f'plan: Wool first (best return), then Linen within the 40% item cap: {lst}')
+ok(any(r[0] == 4306 and r[1] is False for r in lst) or not any(r[0] == 4306 for r in lst), 'what does not fit is listed after the plan, marked not in plan')
+# Buying uses the budget for this visit: after spending 12s, the budget drops by 12s (not to half of the new gold).
+X('Gold = Gold - 1200')
+b2 = L('AF_NS.UI.FlipBudget()')
+ok(abs(b2 - (14981.5 - 1200)) < 1, f'after spending 12s: budget {b2} (was 14981)')
+X('Gold = Gold + 50000')
+ok(L('AF_NS.UI.FlipBudget()') > 30000, 'gold went up (a sale): budget grows')
+Calls2 = 0
+X("""local Inner = AF_NS.Core.FlipOptions; AF_NS.Core.FlipOptions = function(...) Calls2 = (Calls2 or 0) + 1; return Inner(...) end
+  Calls2 = 0; AF_NS.UI.FlipRows(); First = Calls2; AF_NS.UI.FlipRows(); Second = Calls2 - First""")
+ok(L('First') > 0 and L('Second') == 0, f"plan reused when nothing changed (worked out {L('First')} items, then {L('Second')})")
+X('Gold = Gold - 100; Calls2 = 0; AF_NS.UI.FlipRows()')
+ok(L('Calls2') > 0, 'gold changed: plan worked out again on the next open')
+X('Calls2 = 0; AF_NS.Scan.Consume(2589, 1); AF_NS.UI.FlipRows()')
+ok(L('Calls2') > 0, 'after a purchase: plan worked out again')
+X('AF_NS.Core.FlipOptions, GetMoney = OldOpts, OldMoney3')
+# After a purchase, the bought units leave your data and the sales starting point.
+X("""AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 }, { 30, 200 } }, time() }
+  AuctionForeverDB.base[2589] = { t = time() - 60, ladder = { { 20, 300 }, { 30, 200 } }, qty = 500 }
+  AF_NS.Scan.Consume(2589, 350)""")
+f = L('AuctionForeverDB.fresh.items[2589]')
+ok(f[1] == 30 and f[2] == 150 and f[3][1][2] == 150, f'after buying 350: cheapest level gone, 150 left at 30c ({f[1]}, {f[2]})')
+ok(L('AuctionForeverDB.base[2589].ladder[1][1]') == 30 and L('AuctionForeverDB.base[2589].ladder[1][2]') == 150, 'sales starting point adjusted too (your purchase is not counted as sales)')
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

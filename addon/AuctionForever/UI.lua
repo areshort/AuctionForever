@@ -146,28 +146,62 @@ function L.FarmRows()
 	return Out
 end
 
+-- Flip budget for this auction house visit: half your gold (keeping 1g), measured when you opened the AH or when
+-- your gold went up since (sales, mail). Purchases count against it, so it doesn't halve again after every buy.
+local BudgetBase
+function L.ResetBudget() BudgetBase = GetMoney() end
+function L.FlipBudget()
+	local Now = GetMoney()
+	if not BudgetBase or Now > BudgetBase then BudgetBase = Now end
+	return math.max(0, Core.Budget(BudgetBase) - (BudgetBase - Now))
+end
+
+-- AF Buy's list: the best plan for your budget first (in buying order), then other flips that don't fit it.
+-- Worked out when AF Buy opens (or after a purchase), and reused until your budget or your data changes.
+local PlanCache
 function L.FlipRows()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
-	local Budget = Core.Budget(GetMoney())
+	local Budget = L.FlipBudget()
+	local Key = string.format("%d:%d:%d", Budget, AF.Scan and AF.Scan.Version or 0, D.time or 0)
+	if PlanCache and PlanCache.key == Key then L.LastPlan = PlanCache.plan return PlanCache.rows end
 	local Out = {}
 	if Budget <= 0 then return Out end
+	local Cap = Budget * Core.ItemShare(Budget)
+	local Cands, Info = {}, {}
 	for id in pairs(D.items) do
 		if Flippable(id) then
 			local I = Core.Info(id)
-			local F = Core.Flip(I, Budget)
-			if F then Out[#Out + 1] = { id = id, info = I, flip = F } end
+			local O = Core.FlipOptions(I, Cap)
+			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O }; Info[id] = I end
 		end
 	end
-	table.sort(Out, function(a, b) return a.flip.profit > b.flip.profit end)
+	local Plan = Core.Plan(Cands, Budget)
+	local InPlan = {}
+	for _, P in ipairs(Plan) do
+		InPlan[P.id] = true
+		Out[#Out + 1] = { id = P.id, info = Info[P.id], flip = P.option, plan = true }
+	end
+	local Rest = {}
+	for _, Cd in ipairs(Cands) do
+		if not InPlan[Cd.id] then
+			local Best
+			for _, O in ipairs(Cd.options) do if not Best or O.profit > Best.profit then Best = O end end
+			Rest[#Rest + 1] = { id = Cd.id, info = Info[Cd.id], flip = Best, plan = false }
+		end
+	end
+	table.sort(Rest, function(a, b) return a.flip.profit > b.flip.profit end)
+	for _, E in ipairs(Rest) do Out[#Out + 1] = E end
+	L.LastPlan = { cost = Plan.cost, profit = Plan.profit, count = #Plan, budget = Budget }
+	PlanCache = { key = Key, rows = Out, plan = L.LastPlan }
 	return Out
 end
 
 -- Why the Flip list is empty, in one line.
 function L.FlipEmptyReason()
-	local Budget = Core.Budget(GetMoney())
-	if Budget <= 0 then return "No flip budget: you need more than 1 gold." end
-	local Head = string.format("Flip budget %s (half your gold, keeping 1g; up to %s per item).\n", Core.Money(Budget), Core.Money(Budget * Core.ItemBudgetShare))
+	local Budget = L.FlipBudget()
+	if Budget <= 0 then return "No flip budget left: half your gold (keeping 1g) is used up for this visit." end
+	local Head = string.format("Flip budget %s (half your gold, keeping 1g; up to %s per item).\n", Core.Money(Budget), Core.Money(Budget * Core.ItemShare(Budget)))
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
 	local N = {}
@@ -840,6 +874,36 @@ function L.CreateMinimapButton()
 end
 
 -- Tooltips -------------------------------------------------------------------------------------------------------
+-- When your data on this item was last checked: your latest scan or lookup of it, else the cloud data.
+local function CheckedAt(id)
+	local S = AuctionForeverDB
+	local F = S and S.fresh and S.fresh.items and S.fresh.items[id]
+	local T = F and (F[4] or S.fresh.time) or nil
+	local D = AuctionForeverData
+	local C = type(D) == "table" and D.time or nil
+	if T and C then return math.max(T, C) end
+	return T or C
+end
+local function Ago(T)
+	if not T then return "" end
+	local M = math.max(0, math.floor((time() - T) / 60))
+	if M < 60 then return string.format(" |cff808080(%d min ago)|r", M) end
+	if M < 48 * 60 then return string.format(" |cff808080(%d h ago)|r", math.floor(M / 60)) end
+	return string.format(" |cff808080(%d days ago)|r", math.floor(M / 1440))
+end
+-- The AH price to show: the target price AuctionForever would post at, from your latest data (no live check);
+-- items it can't rate yet show the recent selling price.
+local function TargetPrice(I)
+	if not I then return nil end
+	local S = Core.Status(I)
+	if S == "good" or S == "early" then
+		local _, _, Price = Core.ChooseDuration(I, 1)
+		if Price then return Price end
+	end
+	return Core.Market(I)
+end
+L.TargetPrice = TargetPrice
+
 function L.TooltipLines(id)
 	local I = Core.Info(id)
 	local V = Vendor(id)
@@ -847,8 +911,9 @@ function L.TooltipLines(id)
 	local Lines = {}
 	-- Always: vendor price, AH price and which one to use (per item, in coin colors).
 	Lines[#Lines + 1] = { "Vendor", V > 0 and Core.MoneyColor(V) or "-" }
-	Lines[#Lines + 1] = { "AH", I and Core.Market(I) and Core.MoneyColor(Core.Market(I)) or "no data" }
-	local R = Core.Recommend(I, V)
+	local Target = TargetPrice(I)
+	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. Ago(CheckedAt(id))) or "no data" }
+	local R = Core.Recommend(I, V, Target)
 	Lines[#Lines + 1] = { "Rec", R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-" }
 	if I and (I.mySold or I.myExpired) then
 		local Parts = {}
@@ -910,6 +975,7 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 		end
 	elseif Event == "AUCTION_HOUSE_SHOW" then
+		L.ResetBudget()
 		L.CreateAHTab()
 		L.HideAHPanel()
 	elseif Event == "PLAYER_LOGOUT" then

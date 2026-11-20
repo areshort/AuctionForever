@@ -130,5 +130,28 @@ if real and os.path.exists(real):
     ok(n[0] > 1000 and n[1] == 0, f'real data: {n[0]} items processed, {n[1]} errors')
     linen = L('AuctionForever.Core.Info(2589)')
     ok(linen is not None and linen.low is not None, f'real data: Linen Cloth lowest {linen and linen.low}c')
+# ---- Budget plan: the combination of items and amounts with the most total profit within the budget.
+def opts(*o): return '{' + ','.join('{qty=%d,cost=%d,profit=%d}' % x for x in o) + '}'
+# The user's example: Linen 500 cheap at 20c (8.5c profit each), Wool 20 cheap at 60c (54c profit each).
+LINEN = opts((150, 3000, 1275), (300, 6000, 2550), (500, 10000, 4250))
+WOOL = opts((20, 1200, 1080))
+X = lua.execute
+X(f"Cands = {{ {{ id = 2589, options = {LINEN} }}, {{ id = 2592, options = {WOOL} }} }}")
+X(f"P = {C}.Plan(Cands, 7200)")  # 72s budget
+ids = [L('P[%d].id' % i) for i in range(1, int(L('#P')) + 1)]
+ok(ids == [2592, 2589] and L('P[2].option.qty') == 300, f'72s: Wool first (best return), then the most Linen that fits (300): {ids}, linen {L("P[2] and P[2].option.qty")}')
+ok(L('P.cost') <= 7200 and L('P.profit') == 1080 + 2550, f'plan stays in budget ({L("P.cost")}c) and adds up ({L("P.profit")}c)')
+X(f"P = {C}.Plan(Cands, 3000)")  # 30s: only one fits
+ok(int(L('#P')) == 1 and L('P[1].id') == 2589 and L('P[1].option.qty') == 150, 'tiny budget: picks the single best option that fits (150 Linen, 12s 75c beats Wool 10s 80c)')
+X(f"P = {C}.Plan(Cands, 20000)")
+ok(L('P.profit') == 1080 + 4250, 'big budget: everything worth buying')
+ok(L(f'{C}.ItemShare(15000)') == 0.40 and abs(L(f'{C}.ItemShare(275000)') - 0.30) < 1e-9 and L(f'{C}.ItemShare(600000)') == 0.20,
+   'per-item share: 40% up to a 5g budget, 30% at 27g 50s, 20% from 50g')
+X(f"P = {C}.Plan({{}}, 20000)")
+ok(int(L('#P')) == 0 and L('P.profit') == 0, 'no candidates: empty plan')
+# Flip and FlipOptions agree: Flip is the best option under the per-item cap.
+X(f"I = MakeItem(); O = {C}.FlipOptions(I, 20000 * {C}.ItemShare(20000)); F = {C}.Flip(I, 20000)")
+best = L('(function() local b for _, o in ipairs(O) do if not b or o.profit > b.profit then b = o end end return b and b.profit end)()')
+ok(best == L('F and F.profit'), f'Flip = best of FlipOptions ({best} vs {L("F and F.profit")})')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

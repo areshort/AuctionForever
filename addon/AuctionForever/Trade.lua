@@ -140,7 +140,8 @@ function T.DrawBuy()
 			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.Money(F.buyUpTo))
 			R.Cells[3]:SetText(Core.Money(F.resell))
 			R.Cells[4]:SetText("|cff1eff00" .. Core.Money(F.profit) .. "|r")
-			R.Cells[5]:SetText(UI().StatusText(Core.Status(E.info)))
+			R.Cells[5]:SetText(E.plan and ("|cff1eff00" .. (i + Off) .. ". in plan|r") or "|cff808080doesn't fit|r")
+			if not E.plan then for c = 1, 4 do R.Cells[c]:SetText("|cff808080" .. (R.Cells[c]:GetText() or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") end end
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
 	end
@@ -155,7 +156,12 @@ function T.DrawBuy()
 	else
 		BuyP.Detail:SetText("")
 	end
-	BuyP.Budget:SetText("Flip budget: " .. Core.Money(Core.Budget(GetMoney())))
+	local P = UI().LastPlan
+	if P and P.count > 0 then
+		BuyP.Budget:SetText(string.format("Plan for your %s budget: %d items, cost %s, profit %s", Core.Money(P.budget), P.count, Core.Money(P.cost), Core.Money(P.profit)))
+	else
+		BuyP.Budget:SetText("Flip budget: " .. Core.Money(UI().FlipBudget()))
+	end
 end
 
 function T.RefreshBuy()
@@ -233,6 +239,7 @@ function T.BuyClick()
 	end
 	C_AuctionHouse.PlaceBid(Best.auctionID, Best.buyout)
 	table.remove(List, BestI)
+	Scan.Consume(E.id, Best.qty)
 	Buy.bought = (Buy.bought or 0) + Best.qty
 	SayBuy(string.format("Bought %d for %s (%d of %d).", Best.qty, Core.Money(Best.buyout), Buy.bought, F.buyQty))
 	if Buy.bought >= F.buyQty then BuyNext() else T.DrawBuy() end
@@ -585,6 +592,7 @@ Events:SetScript("OnEvent", function(_, Event, A1, A2)
 			local Pd = Buy.pending
 			ResetPurchase(false)
 			SayBuy(string.format("Bought %d for %s.", Pd.qty, Core.Money(Pd.total)))
+			Scan.Consume(Pd.id, Pd.qty)
 			BuyNext()
 		end
 	elseif Event == "COMMODITY_PURCHASE_FAILED" then

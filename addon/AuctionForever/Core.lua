@@ -21,7 +21,7 @@ Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-
 Core.MinFlipProfit = 1000       -- 10 silver
 Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
 Core.MinWindows = 2             -- separate windows with sales before an item is a steady seller
-Core.ItemBudgetShare = 0.20     -- one flip item may use at most this share of the budget
+Core.PlanRateShare = 0.75       -- flips plan resales at this share of the measured sales speed (the low end)
 Core.ReserveShare = 0.5         -- spend up to half your gold...
 Core.MinKeep = 10000            -- ...always keeping at least 1 gold
 
@@ -265,11 +265,23 @@ end
 
 -- Best flip for an item: buy the cheapest listings (level by level), then resell on the market as it would look
 -- after the purchase. Returns a table {buyQty, buyUpTo, cost, resell, hours, durationIndex, profit} or nil.
-function Core.Flip(I, Budget)
-	if Core.Status(I) ~= "good" then return nil end
+-- How much of the flip budget one item may take: 40% while the budget is small (5g or less), shrinking smoothly to 20%
+-- at a 50g budget, so a bigger budget is always spread over more items.
+function Core.ItemShare(Budget)
+	local G = (Budget or 0) / 10000
+	if G <= 5 then return 0.40 end
+	if G >= 50 then return 0.20 end
+	return 0.40 - 0.20 * (G - 5) / 45
+end
+
+-- Every worthwhile way to flip one item within Cap: buying the cheapest listings up to each price level, resold at
+-- the best price that should sell within 2/8/24 h. Resale speed is planned from the low end (PlanRateShare of the
+-- measured rate), since the estimate can be off and your own listings slow the market.
+function Core.FlipOptions(I, Cap)
+	local Out = {}
+	if Core.Status(I) ~= "good" or not Cap or Cap <= 0 then return Out end
 	local Ladder = I.ladder
-	local Cap = Budget * Core.ItemBudgetShare
-	local Best
+	local J = setmetatable({ perHour = (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
 		local P, Q = Ladder[Level][1], Ladder[Level][2]
@@ -281,16 +293,61 @@ function Core.Flip(I, Budget)
 		if Take < Q then Rest[#Rest + 1] = { P, Q - Take } end
 		for j = Level + 1, #Ladder do Rest[#Rest + 1] = Ladder[j] end
 		local Floor = math.ceil(Cost / Qty / (1 - Core.Cut)) + 1
-		local H, Idx, Price, Fill = Core.ChooseDuration(I, Qty, Floor, Rest)
+		local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest)
 		if H then
 			local Profit = math.floor(Price * Qty * (1 - Core.Cut)) - Cost
-			if Profit >= Core.MinFlipProfit and (not Best or Profit > Best.profit) then
-				Best = { buyQty = Qty, buyUpTo = P, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit }
+			if Profit >= Core.MinFlipProfit then
+				Out[#Out + 1] = { qty = Qty, buyQty = Qty, buyUpTo = P, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit }
 			end
 		end
 		if Take < Q then break end
 	end
+	return Out
+end
+
+-- The best single flip for this item within its share of the budget.
+function Core.Flip(I, Budget)
+	local Best
+	for _, O in ipairs(Core.FlipOptions(I, Budget * Core.ItemShare(Budget))) do
+		if not Best or O.profit > Best.profit then Best = O end
+	end
 	return Best
+end
+
+-- The plan: at most one option per item, total cost within Budget, the most total profit. Cands = { {id, options} }.
+-- Exact search over (cost, profit) combinations, keeping only the ones not beaten by a cheaper, more profitable one.
+-- Returns the chosen { id, option } in buying order (best return on gold first), with .cost and .profit totals.
+function Core.Plan(Cands, Budget)
+	local States = { { cost = 0, profit = 0 } }
+	for _, Cd in ipairs(Cands) do
+		local Next = {}
+		for _, St in ipairs(States) do
+			Next[#Next + 1] = St
+			for _, O in ipairs(Cd.options or {}) do
+				local Cost = St.cost + O.cost
+				if Cost <= Budget then Next[#Next + 1] = { cost = Cost, profit = St.profit + O.profit, pick = { Cd.id, O, St.pick } } end
+			end
+		end
+		table.sort(Next, function(a, b) if a.cost ~= b.cost then return a.cost < b.cost end return a.profit > b.profit end)
+		States = {}
+		local Top = -1
+		for _, St in ipairs(Next) do
+			if St.profit > Top then States[#States + 1] = St; Top = St.profit end
+		end
+		-- Keep the search small: thin very long lists, always keeping the cheapest and the most profitable.
+		if #States > 1500 then
+			local Thin, Step = {}, #States / 1000
+			for k = 1, 1000 do Thin[#Thin + 1] = States[math.floor((k - 1) * Step) + 1] end
+			if Thin[#Thin] ~= States[#States] then Thin[#Thin + 1] = States[#States] end
+			States = Thin
+		end
+	end
+	local Best = States[#States]
+	local Out = { cost = Best.cost, profit = Best.profit }
+	local Pk = Best.pick
+	while Pk do Out[#Out + 1] = { id = Pk[1], option = Pk[2] }; Pk = Pk[3] end
+	table.sort(Out, function(a, b) return a.option.profit / math.max(1, a.option.cost) > b.option.profit / math.max(1, b.option.cost) end)
+	return Out
 end
 
 -- Market value per day for farming: selling price x how much sells a day.
@@ -357,9 +414,9 @@ end
 
 -- Sell to the vendor or on the auction house? Returns "Auction" or "Vendor" (nil when neither has a price),
 -- comparing what the AH pays after its cut with the vendor price, and only trusting the AH when the item sells.
-function Core.Recommend(I, Vendor)
+function Core.Recommend(I, Vendor, Price)
 	Vendor = Vendor or 0
-	local Price = I and Core.Market(I)
+	Price = Price or (I and Core.Market(I))
 	if not Price then return Vendor > 0 and "Vendor" or nil end
 	local Net = Price * (1 - Core.Cut)
 	if Net <= Vendor then return "Vendor" end
