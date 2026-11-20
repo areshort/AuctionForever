@@ -535,10 +535,11 @@ function Core.ExpectedPost(I, Price, Qty, Dep, Cost)
 	local Gain = Price * Qty * (1 - Core.Cut) - (Cost or 0) * Qty
 	return math.floor(Ch * Gain - (1 - Ch) * (Dep or 0) + 1e-6), Ch
 end
--- How fast a resale sells: sales (planned at PlanRateShare) minus other sellers' new listings when known.
+-- How fast a resale sells: measured sales, planned at PlanRateShare. Other sellers' new listings aren't subtracted:
+-- most go up at or above the cheapest price (they don't land in front of you), and you re-undercut when online.
+-- Subtracting them all left almost every item at zero speed. Flooded items are still skipped (Status).
 local function ResaleSpeed(I)
-	local Net = Core.NetSpeed(I)
-	return Net and math.max(0, Net) or (I.perHour or 0) * Core.PlanRateShare
+	return (I.perHour or 0) * Core.PlanRateShare
 end
 -- Highest resale price the data backs: what buyers paid in the last day and over the longer window (both).
 function Core.ResaleCap(I)

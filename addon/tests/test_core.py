@@ -111,6 +111,10 @@ ok(L('#EO') == 1 and L('EO[1].profit') == 2302, f"profit counts the chance of se
 lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000)")
 ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)) <= 120,
    f"flip size capped at 8 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
+# Other sellers posting more than sells doesn't stop a flip: resale speed is measured sales x 0.75 (flooded items are
+# skipped by Status instead).
+lua.execute(f"NH = {C}.FlipOptions(MakeItem({{ newHour = 100 }}), 500000)")
+ok(L('#NH') >= 1, f"new listings outpacing sales (100/h vs 40/h sold): still a flip target ({L('#NH')} options)")
 # Slow sellers (sales in only some hours) can be flipped, marked slow; steady ones aren't marked.
 lua.execute(f"SL = {C}.FlipOptions(MakeItem({{ hoursWithSales = 20 }}), 500000)")
 ok(L(f"{C}.Status(MakeItem({{ hoursWithSales = 20 }}))") == 'slow' and L('#SL') >= 1 and L('SL[1].slow') == True,
