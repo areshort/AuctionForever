@@ -38,6 +38,11 @@ local function Recheck(Ids, Done)
 	return Scan.Lookup(Ids, true, Done)
 end
 function T.OnScanDone()
+	-- New scan data: rebuild AF Buy's list now if it's open (not mid-purchase), or the next time it opens.
+	if Buy.loaded and not Buy.state then
+		Buy.loaded = nil
+		if BuyP and BuyP:IsShown() then T.RefreshBuy() end
+	end
 	if not Pending then return end
 	-- Let whatever just finished run its own follow-up first (e.g. a quick scan's busy-item lookups).
 	C_Timer.After(0.1, function()
@@ -223,9 +228,10 @@ local function SortRows()
 	if BuyP and BuyP.Sort then BuyP.Sort:SetText(SORT_LABEL[Buy.sort]) end
 	T.DrawBuy()
 end
--- Rebuild the list from your data (refresh, after a purchase). Opening the tab and sorting reuse the loaded list.
+-- Rebuild the list from your data (refresh, a purchase, a scan). Opening the tab reuses it unless your gold changed;
+-- sorting always reuses it.
 function T.RefreshBuy()
-	Buy.loaded = UI().FlipTargets() or {}
+	Buy.loaded, Buy.money = UI().FlipTargets() or {}, GetMoney()
 	SortRows()
 end
 function T.SetBuySort(Key)
@@ -335,7 +341,11 @@ end
 
 local function BuildBuy()
 	BuyP = UI().NewAHPage("AF Buy", "AuctionForeverBuyTab", "AuctionForeverBuyPanel",
-		function() if not Buy.loaded then T.RefreshBuy() end; T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
+		function()
+			-- Rebuild only if there's new scan data or your gold changed since the list was made.
+			if not Buy.loaded or Buy.money ~= GetMoney() then T.RefreshBuy() end
+			T.SelectBuy(Buy.sel)
+		end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -12)
