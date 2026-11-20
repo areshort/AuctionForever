@@ -554,6 +554,21 @@ ok(L('(Window(777002, 4, 3))') == 'soon' and L('AuctionForeverDB.base[777002].t'
 ok(L('(Window(777003, 1, 20))') == 'soon', 'any window under 2 min only refreshes prices, even with many purchases')
 ok(L('(Window(777004, 16, 0))') == 'measured', 'slow item: 15+ min counts even with no purchases (it had its fair chance)')
 ok(L('(Window(777005, 6, 1))') == 'soon', 'one buyer taking a lot is one purchase: 6 min window not enough')
+# New listings in a window (other sellers posting): listings that weren't there at the starting point.
+X("""AuctionForeverDB.obs[777010] = nil
+  local A = MkAuc(20)
+  AuctionForeverDB.base[777010] = { t = T0, ladder = {}, auc = A, cov = 1000 }
+  local After = Bought(A, 12)
+  After[99901] = { 7, 95, 40000 }; After[99902] = { 3, 200, 40000 }
+  AF_NS.Scan.Observe(777010, MkMap(After), nil, After, 1000, T0 + 240, true)""")
+o = L('AuctionForeverDB.obs[777010] and AuctionForeverDB.obs[777010][#AuctionForeverDB.obs[777010]]')
+ok(o is not None and o[8] == 10, f'new listings counted from listing IDs: 10 ({o and o[8]})')
+# Ladders only (full scan): stock now - stock before + sold. 10 listed, 6 sold, 6 new at 150c -> 10 now.
+X("""AuctionForeverDB.obs[777011] = nil
+  AuctionForeverDB.base[777011] = { t = T0, ladder = { { 100, 10, 0 } }, qty = 10 }
+  AF_NS.Scan.Observe(777011, { [100] = 4, [150] = 6 }, nil, nil, nil, T0 + 1200, true)""")
+o = L('AuctionForeverDB.obs[777011] and AuctionForeverDB.obs[777011][#AuctionForeverDB.obs[777011]]')
+ok(o is not None and o[3] == 6 and o[8] == 6, f'ladder window: 6 sold, 6 new ({o and o[3]}, {o and o[8]})')
 # Full scan (no auction IDs) then lookups minutes later: the first lookup keeps its IDs as an exact starting point,
 # the next compares listing by listing and measures the busy item.
 X("""AuctionForeverDB.obs[777010] = nil
@@ -678,9 +693,9 @@ ok(L('AF_NS.UI.Flippable(777001)') and not L('AF_NS.UI.Flippable(777002)'), 'com
 ok(L('AF_NS.UI.Kind(777001)') == 'commodity' and L('AF_NS.UI.Kind(777002)') == 'item', 'kind from the data file')
 X('C_Item.GetItemMaxStackSizeByID = OldMax')
 # Tooltip AH line = the target (post) price from your latest data, with how long ago it was checked.
-X("""OldCD, OldStatus2, OldNow = AF_NS.Core.ChooseDuration, AF_NS.Core.Status, time
+X("""OldCD, OldStatus2, OldNow = AF_NS.Core.SellPrice, AF_NS.Core.Status, time
   AF_NS.Core.Status = function() return "good" end
-  AF_NS.Core.ChooseDuration = function() return 2, 1, 4321 end
+  AF_NS.Core.SellPrice = function() return 4321, 2, 1, 1 end
   AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 } }, 1800000000 }
   time = function() return 1800000000 + 720 end""")
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
@@ -692,7 +707,7 @@ ok('43s' in ah2 and 'UI-Dialog-Icon-AlertNew' in ah2, 'data over an hour old: wa
 X('AF_NS.Core.Status = function() return "warming up" end')
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok('43s' not in str(tl[1][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[1][1]))
-X('AF_NS.Core.ChooseDuration, AF_NS.Core.Status, time = OldCD, OldStatus2, OldNow')
+X('AF_NS.Core.SellPrice, AF_NS.Core.Status, time = OldCD, OldStatus2, OldNow')
 # Empty flip list says what the budget is.
 X('OldMoney = GetMoney; GetMoney = function() return 15000 end')
 er = str(L('AF_NS.UI.FlipEmptyReason()'))

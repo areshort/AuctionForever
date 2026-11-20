@@ -88,8 +88,13 @@ function Core.MergeScan(I, DataTime)
 	local Windows = math.floor((I.hoursWithSales or 0) + 0.5)
 	local Obs = DB.obs and DB.obs[id]
 	if type(Obs) ~= "table" then Obs = {} end
-	-- Each observation: { time, gap hours, sold qty, sold value, events, highest sold price, stock before }
+	-- Each observation: { time, gap hours, sold qty, sold value, events, highest sold price, stock before, new listed }
 	for _, O in ipairs(Obs) do Rates[#Rates + 1] = O[3] / O[2] end
+	-- New listings per hour (other sellers posting): cloud hours and scan windows together.
+	local NewQ, NewH = 0, 0
+	if I.newHour then NewQ, NewH = I.newHour * CloudH, CloudH end
+	for _, O in ipairs(Obs) do if O[8] then NewQ, NewH = NewQ + O[8], NewH + O[2] end end
+	if NewH > 0 then I.newHour = NewQ / NewH end
 	local function MedianWithout(Skip)
 		local T = {}
 		for i, R in ipairs(Rates) do if i ~= Skip then T[#T + 1] = R end end
@@ -234,6 +239,47 @@ end
 
 -- The duration to post for: 2 h unless a longer one earns at least 10% more and the item reliably sells.
 -- Returns hours, index (1/2/3), price, fill hours.
+-- How fast the queue in front of a new listing shrinks: sales (planned at PlanRateShare) minus other sellers' new
+-- listings, which land in front (they undercut the lowest price). nil when new listings aren't measured yet.
+function Core.NetSpeed(I)
+	if not I.newHour then return nil end
+	return (I.perHour or 0) * Core.PlanRateShare - I.newHour
+end
+
+-- Your selling price: the highest price where everything cheaper plus your stack clears within 2 h at the net
+-- speed; otherwise 1c under the cheapest listing. Never below Floor. Duration = the shortest that fits your stack;
+-- more than a day of sales posts only what sells in 24 h.
+-- Returns price, hours, duration index, quantity to post, and a flag: "loss" (being in front is below Floor),
+-- "flooding" (more posted than sold), "guess" (new listings not measured yet) or nil.
+function Core.SellPrice(I, Qty, Floor)
+	Qty, Floor = math.max(1, Qty or 1), Floor or 1
+	local Ladder = I.ladder or {}
+	local Net = Core.NetSpeed(I)
+	local Speed = (Net and Net > 0) and Net or (I.perHour or 0) * Core.PlanRateShare
+	local Flag
+	if not Net then Flag = "guess" elseif Net <= 0 then Flag = "flooding" end
+	local Price
+	if not Ladder[1] then
+		Price = Core.Ceiling(I) or Core.Market(I)
+		if not Price then return nil end
+	else
+		if Net and Net > 0 then
+			Price = Core.PostPrice(setmetatable({ perHour = Net }, { __index = I }), Qty, 2, Floor)
+		end
+		Price = Price or (Ladder[1][1] - 1)
+	end
+	if Price < Floor then Price, Flag = Floor, "loss" end
+	Price = math.floor(Price)
+	local Below = 0
+	for _, Step in ipairs(Ladder) do if Step[1] < Price then Below = Below + Step[2] end end
+	local Fill = Speed > 0 and (Below + Qty) / Speed or math.huge
+	local H, Idx = Core.Durations[#Core.Durations], #Core.Durations
+	for i, D in ipairs(Core.Durations) do if Fill <= D then H, Idx = D, i break end end
+	local Post = Qty
+	if Speed > 0 and Fill > H then Post = math.max(1, math.min(Qty, math.floor(Speed * H - Below))) end
+	return Price, H, Idx, Post, Flag
+end
+
 -- Core.Deposit(I, Hours, Qty) -> deposit in copper; set by the UI from the game (nil = not known, counted as 0).
 -- Expected earnings of a post: chance it sells (the item's measured sell-through) x what you get after the cut,
 -- minus the deposit you lose when it doesn't sell.
@@ -370,7 +416,9 @@ function Core.FlipOptions(I, Cap)
 	local Known = 0
 	for _, Step in ipairs(Ladder) do Known = Known + Step[2] end
 	local MoreAbove = (I.qty or 0) > Known
-	local J = setmetatable({ perHour = (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
+	-- Other sellers' new listings land in front of yours too: resale speed is sales minus new listings when known.
+	local Net = Core.NetSpeed(I)
+	local J = setmetatable({ perHour = Net and math.max(0, Net) or (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
 		local P, Q = Ladder[Level][1], Ladder[Level][2]
@@ -480,9 +528,8 @@ end
 -- What a looted item is worth right now if sold: its post price for that amount (after the cut), else vendor value.
 function Core.LootValue(I, Qty, Vendor)
 	if I and Core.Status(I) ~= "no data" then
-		local H, _, Price = Core.ChooseDuration(I, Qty, Vendor and math.ceil(Vendor / (1 - Core.Cut)) or 1)
-		if H then
-			local Sell = Core.PostQuantity(I, Qty, H, Price)
+		local Price, H, _, Sell = Core.SellPrice(I, Qty, Vendor and math.ceil(Vendor / (1 - Core.Cut)) or 1)
+		if Price then
 			return math.floor(Sell * Price * (1 - Core.Cut)) + (Qty - Sell) * (Vendor or 0)
 		end
 	end

@@ -914,7 +914,7 @@ local function TargetPrice(I)
 	if not I then return nil end
 	local S = Core.Status(I)
 	if S == "good" or S == "early" then
-		local _, _, Price = Core.ChooseDuration(I, 1)
+		local Price = Core.SellPrice(I, 1)
 		if Price then return Price end
 	end
 	return Core.Market(I)

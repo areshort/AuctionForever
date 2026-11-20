@@ -315,14 +315,9 @@ local function Suggest(G)
 	local I = G.info
 	G.held, G.cost = Core.Holding(SaveDB(), G.id)
 	local Lo = math.max(Floor(G), PaidFloor(G) or 0)
-	local H, Idx, Price = Core.ChooseDuration(I, G.count, Lo)
-	if not Price then H, Idx, Price = 2, 1, math.max(Lo, Core.Market(I) or Lo) end
-	G.price, G.durIdx = math.max(Lo, math.floor(Price)), Idx
-	if (I.perHour or 0) > 0 then
-		G.qty = math.max(1, Core.PostQuantity(I, G.count, H, G.price))
-	else
-		G.qty = G.count
-	end
+	local Price, H, Idx, Qty, Flag = Core.SellPrice(I, G.count, Lo)
+	if not Price then H, Idx, Price, Qty = 2, 1, math.max(Lo, Core.Market(I) or Lo), G.count end
+	G.price, G.durIdx, G.qty, G.flag = math.max(Lo, math.floor(Price)), Idx, Qty, Flag
 end
 
 -- Items in the bags that sell on the auction house, grouped by item, most valuable first.
@@ -443,6 +438,12 @@ function T.DrawSell()
 		Line = Line .. string.format("\nYou paid %s each (%d bought). At this price: %s%s|r each.", Core.Money(G.cost), G.held,
 			Each >= 0 and "|cff1eff00profit " or "|cffff4040loss ", Core.Money(math.abs(Each)))
 	end
+	local Hint = {
+		loss = "|cffff4040Being the cheapest would sell below your floor (vendor or what you paid): holding may be better.|r",
+		flooding = "|cffffd100More is being posted than sold: priced 1c under the cheapest; prices may keep falling.|r",
+		guess = "New listings per hour not measured yet: priced 1c under the cheapest to be safe.",
+	}
+	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: the highest price that still sells within 2 h with other sellers posting.")
 	SellP.Info:SetText(Line)
 end
 

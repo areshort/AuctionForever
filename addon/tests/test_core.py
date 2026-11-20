@@ -56,6 +56,24 @@ ok(L(f'{C}.ChooseDuration(MakeItem(), 20)')[0] == 2, 'deposit risk outweighs the
 lua.execute(f"{C}.Deposit = nil")
 # Same price at every duration: shortest.
 ok(L(f'{C}.ChooseDuration(MakeItem({{ladder = {{ {{500, 10}} }}, hi = 600, med = 600}}), 5)')[0] == 2, 'no gain from longer: 2 h')
+# Selling price with other sellers posting: everything cheaper than you plus your stack must clear within 2 h at
+# (sales speed x 75%) - new listings per hour, since new listings land in front of you.
+# MakeItem: 40 sold/h -> 30/h planned. Ladder 10 at 5s, 30 at 9s 50c, 100 at 10s, 160 at 10s 50c.
+def sp(over, qty, floor=1):
+    return L(f'{C}.SellPrice(MakeItem({over}), {qty}, {floor})')
+P_, H_, I_, Q_, F_ = sp('{newHour = 0}', 20)
+ok(P_ == 999 and H_ == 2 and Q_ == 20 and not F_, f'nobody posting: can sit above the cheap 40 (they clear in 1.3 h): {P_}, {H_} h')
+P_, H_, I_, Q_, F_ = sp('{newHour = 25}', 20)
+ok(P_ == 499 and H_ == 8 and F_ is None, f'25 new/h leaves 5/h: 1c under the cheapest, 8 h for 20 units: {P_}, {H_} h')
+P_, H_, I_, Q_, F_ = sp('{newHour = 40}', 20)
+ok(P_ == 499 and F_ == 'flooding', f'more posted than sold: 1c under the cheapest, flagged ({F_})')
+P_, H_, I_, Q_, F_ = sp('{}', 20)
+ok(P_ == 499 and F_ == 'guess', f'new listings not measured yet: 1c under the cheapest ({F_})')
+P_, H_, I_, Q_, F_ = sp('{newHour = 25}', 20, 600)
+ok(P_ == 600 and F_ == 'loss', f'in front would be below your floor: floor, flagged ({P_}, {F_})')
+P_, H_, I_, Q_, F_ = sp('{newHour = 0}', 1000)
+ok(P_ == 499 and H_ == 24 and Q_ == 720, f'more than a day of sales: in front, 24 h, posts what sells in a day ({P_}, {H_}, {Q_})')
+ok(sp('{newHour = 0, ladder = {}}', 5)[0] == 1100, 'nothing listed: what buyers recently paid')
 # Quantity: 2 h at 999 -> room 40*2 - 40 below = 40
 ok(L(f'{C}.PostQuantity(MakeItem(), 100, 2, 999)') == 40, 'post only what sells in time')
 # Budget

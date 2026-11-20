@@ -118,8 +118,13 @@ def compare(prev, now, hours):
     - gone, and its time-left bucket could not have run out in `hours`: sold (or cancelled)
     - gone from the last bucket that could run out: expired
     - same listing, smaller quantity (commodities): the difference sold
+    - a listing that wasn't there before: newly posted ('new' quantity)
     """
     ev = {}
+    for lid, (item, price, qty, bucket, kind) in now.items():
+        if lid not in prev:
+            e = ev.setdefault(item, {'sold': [], 'expired': 0})
+            e['new'] = e.get('new', 0) + qty
     for lid, (item, price, qty, bucket, kind) in prev.items():
         cur = now.get(lid)
         e = ev.setdefault(item, {'sold': [], 'expired': 0})
@@ -133,7 +138,7 @@ def compare(prev, now, hours):
                 e['sold'].append((price, qty * (1 - expired_share)))
         elif cur[2] < qty:
             e['sold'].append((price, qty - cur[2]))
-    return {k: v for k, v in ev.items() if v['sold'] or v['expired']}
+    return {k: v for k, v in ev.items() if v['sold'] or v['expired'] or v.get('new')}
 
 
 def market(now):
@@ -166,7 +171,7 @@ def wmedian(pairs):
 
 def update_history(state, now_ts, mk, ev, span=0):
     # span = hours since the previous snapshot when the two were compared, else 0 (first run or a long gap).
-    hourly = state.setdefault('hourly', {})   # item -> [[ts, low, qty, sold_qty, sold_value, expired, span], ...]
+    hourly = state.setdefault('hourly', {})   # item -> [[ts, low, qty, sold_qty, sold_value, expired, span, new_qty], ...]
     daily = state.setdefault('daily', {})     # item -> [[day, median_sold, sold_qty, expired], ...]
     soldprices = state.setdefault('soldprices', {})  # item -> [[ts, price, qty], ...] for 72 h
     for item in set(mk) | set(ev):
@@ -174,7 +179,8 @@ def update_history(state, now_ts, mk, ev, span=0):
         sq = sum(q for _, q in e['sold'])
         sv = sum(p * q for p, q in e['sold'])
         k = str(item)
-        hourly.setdefault(k, []).append([now_ts, m['low'] if m else None, m['qty'] if m else 0, sq, sv, e['expired'], span])
+        hourly.setdefault(k, []).append([now_ts, m['low'] if m else None, m['qty'] if m else 0, sq, sv, e['expired'], span,
+                                         e.get('new', 0)])
         if e['sold']:
             soldprices.setdefault(k, []).extend([now_ts, p, q] for p, q in e['sold'])
     # Daily summaries for every day that finished since the last run, before old hourly rows are dropped.
@@ -225,6 +231,9 @@ def item_numbers(k, state, mk, now_ts):
     med_all = wmedian([(p, q) for t, p, q in sp]) if sp else None
     qty_now = m['qty'] if m else 0
     qty_24h_ago = [r[2] for r in all_rows if 23 * 3600 <= now_ts - r[0] <= 25 * 3600]
+    # New listings per hour (other sellers posting): the average, so a busy posting hour isn't hidden.
+    new_rows = [r for r in rows if len(r) > 7]
+    new_hour = sum(r[7] for r in new_rows) / sum(r[6] for r in new_rows) if new_rows else None
     return {
         'low': m['low'] if m else None,
         'qty': qty_now,
@@ -234,6 +243,7 @@ def item_numbers(k, state, mk, now_ts):
         'hoursSeen': len(rows), 'hoursWithSales': hours_with_sales,
         'sales': sales, 'sellThrough': (sold_total / (sold_total + exp_total)) if (sold_total + exp_total) else None,
         'qtyDayAgo': qty_24h_ago[0] if qty_24h_ago else None,
+        'newHour': new_hour,
         'daily': state['daily'].get(k, []),
     }
 
@@ -259,7 +269,7 @@ def lua(v):
 
 
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
-          'sellThrough', 'qtyDayAgo']
+          'sellThrough', 'qtyDayAgo', 'newHour']
 
 
 def write_lua(path, state, mk, now_ts):

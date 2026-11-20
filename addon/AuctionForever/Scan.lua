@@ -122,6 +122,24 @@ function Scan.Consume(id, Qty)
 	end
 end
 
+-- New listings in a window (other sellers posting), up to the price the look covered. With listing IDs: the ones
+-- that weren't there at the start. With price levels only: stock now - stock before + sold (the starting point keeps
+-- only the cheapest levels, so only prices both looks fully cover are counted).
+local function NewListed(BaseAuc, Auc, BL, Map, Cov, Sold)
+	local Cut = Cov or math.huge
+	if BaseAuc and Auc then
+		local N = 0
+		for Aid, R in pairs(Auc) do if not BaseAuc[Aid] and R[2] <= Cut then N = N + R[1] end end
+		return N
+	end
+	if not BL then return nil end
+	if #BL >= LADDER then Cut = math.min(Cut, BL[#BL][1]) end
+	local Before, After = 0, 0
+	for _, Step in ipairs(BL) do if Step[1] <= Cut then Before = Before + Step[2] end end
+	for P, Q in pairs(Map) do if P <= Cut then After = After + Q end end
+	return math.max(0, After - Before + (Sold or 0))
+end
+
 -- One item seen by a scan. Map = { [price] = qty }, Exp = { [price] = expiring qty } (or nil),
 -- Auc = { [auctionID] = { qty, price, secs } } (quick scans only), Cov = highest price the look covered (nil = all).
 -- Returns "measured", "soon" (under 15 min since its starting point) or "new", and the quantity sold.
@@ -142,7 +160,7 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 	local Status, Sold = "new", 0
 	if BT then
 		local H = (Now - BT) / 3600
-		local Value, Ev, Hi
+		local Value, Ev, Hi, UsedAuc, UsedCov
 		-- Exact second starting point: listing IDs from a lookup that came too soon after a ladder-only start
 		-- (full scans have no IDs). Compared listing by listing, a short window can already count.
 		local XT = B and B == S.base[id] and B.auc2 and Auc and B.t2
@@ -152,6 +170,7 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 			local XS, XV, XE, XHi = Core.CompareAuctions(B.auc2, Auc, XH * 3600, C, Commodity)
 			if XH >= FAIR_WINDOW or (XE or 0) >= MIN_EVENTS then
 				Sold, Value, Ev, Hi, H, BQ = XS, XV, XE, XHi, XH, B.qty2
+				UsedAuc, UsedCov = B.auc2, C
 				Status = "exact"
 			end
 		end
@@ -161,13 +180,14 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 			Status = "soon"
 		elseif H <= 6 then
 			local C = (BC and Cov) and math.min(BC, Cov) or (BC or Cov)
+			UsedAuc, UsedCov = BA, C
 			if BA and Auc then Sold, Value, Ev, Hi = Core.CompareAuctions(BA, Auc, H * 3600, C, Commodity)
 			else Sold, Value, Ev, Hi = Core.CompareLadders(BL or {}, Map, C) end
 			if H < FAIR_WINDOW and (Ev or 0) < MIN_EVENTS then Status, Sold = "soon", 0 end
 		end
 		if Status ~= "soon" and H <= 6 and H >= MIN_WINDOW then
 			local O = S.obs[id] or {}
-			O[#O + 1] = { Now, H, Sold, Value, Ev, Hi, BQ }
+			O[#O + 1] = { Now, H, Sold, Value, Ev, Hi, BQ, NewListed(UsedAuc, Auc, BL, Map, UsedCov, Sold) }
 			local Kept = {}
 			for _, X in ipairs(O) do if X[1] >= Now - KEEP_HOURS * 3600 then Kept[#Kept + 1] = X end end
 			while #Kept > KEEP_OBS do table.remove(Kept, 1) end
