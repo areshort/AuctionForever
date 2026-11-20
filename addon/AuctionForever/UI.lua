@@ -1060,11 +1060,11 @@ function L.TooltipLines(id)
 	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" }
 	local R = Core.Recommend(I, V, Target)
 	local RecText = R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-"
-	-- On the AH: what you make per item there after the 5% cut, over what the vendor pays.
-	if R == "Auction" and Target then
-		RecText = RecText .. "  +" .. Core.MoneyColor(math.max(0, math.floor(Target * (1 - Core.Cut)) - V)) .. " each"
-	end
 	Lines[#Lines + 1] = { "Rec", RecText }
+	-- On the AH: what you make per item there after the 5% cut, over what the vendor pays (its own line).
+	if R == "Auction" and Target then
+		Lines[#Lines + 1] = { "Over vendor", "+" .. Core.MoneyColor(math.max(0, math.floor(Target * (1 - Core.Cut)) - V)) .. " each after the cut" }
+	end
 	if I and (I.mySold or I.myExpired) then
 		local Parts = {}
 		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.MoneyColor(I.mySoldValue)) end
@@ -1080,8 +1080,9 @@ function L.TooltipLines(id)
 	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) .. ((I.scanHours and I.scanHours > 0) and " (incl. your scans)" or "") }
 	Lines[#Lines + 1] = { "Lowest listed", (I.low and Core.MoneyColor(I.low) or "-") .. string.format(" (%d listed)", I.qty or 0) }
 	if S == "good" then
-		local H, _, Price = Core.ChooseDuration(I, 1)
-		if H then Lines[#Lines + 1] = { "Post at", Core.MoneyColor(Price) .. ", " .. H .. " h" } end
+		-- The same price and duration AF Sell suggests (capped at what buyers have recently paid).
+		local Price, H = Core.SellPrice(I, 1)
+		if Price and H then Lines[#Lines + 1] = { "Post at", Core.MoneyColor(Price) .. ", " .. H .. " h" } end
 	else
 		Lines[#Lines + 1] = { "Status", StatusText(S) }
 	end

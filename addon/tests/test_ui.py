@@ -720,15 +720,21 @@ ok(L('AF_NS.Core.MoneyColor(5)') == '|cffeda55f5c|r' and L('AF_NS.Core.MoneyColo
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
 ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
-ok('+' in str(tl[2][1]) and ' each' in str(tl[2][1]), 'Rec Auction shows the profit per item over the vendor: ' + str(tl[2][1]))
+ok(tl[3][0] == 'Over vendor' and '+' in str(tl[3][1]) and ' each' in str(tl[3][1]) and '+' not in str(tl[2][1]),
+   'the profit over the vendor is its own line under Rec: ' + str(tl[3]))
 # The AH price after the 5% cut, minus the vendor price (e.g. 30c -> 28c - 13c = +15c).
 v = L('AF_NS.UI.Vendor(2589)'); ah = L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
 exp = int(ah * 0.95) - v
-ok(L(f'AF_NS.Core.MoneyColor({exp})') in str(tl[2][1]), f'profit = AH price after the 5% cut - vendor price ({ah}c, vendor {v}c -> +{exp}c)')
-ok(len(tl) == 4 and 'Shift' in str(tl[3][0]), 'without Shift: just the three lines and a Shift hint')
+ok(L(f'AF_NS.Core.MoneyColor({exp})') in str(tl[3][1]), f'profit = AH price after the 5% cut - vendor price ({ah}c, vendor {v}c -> +{exp}c)')
+ok(len(tl) == 5 and 'Shift' in str(tl[4][0]), 'without Shift: the four lines and a Shift hint')
 X('IsShiftKeyDown = function() return true end')
 tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok(len(tl2) > 4 and any('Sells' == r[0] for r in tl2), 'with Shift: details shown too')
+ok(len(tl2) > 5 and any('Sells' == r[0] for r in tl2), 'with Shift: details shown too')
+# Post at: the same price and duration as AF Sell (capped), not the deepest listing a long post could reach.
+pa = [r for r in tl2 if r[0] == 'Post at']
+sp = L('(AF_NS.Core.SellPrice(AF_NS.Core.Info(2589), 1))')
+ok(L('AF_NS.Core.Status(AF_NS.Core.Info(2589))') != 'good' or (pa and L(f'AF_NS.Core.MoneyColor({sp})') in str(pa[0][1])),
+   f"Post at = AF Sell's price ({pa and pa[0][1]} vs {sp})")
 X('IsShiftKeyDown = function() return false end')
 # Vendor wins when the AH, after the 5% cut, pays no more than the vendor.
 X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')
