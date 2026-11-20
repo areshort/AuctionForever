@@ -23,12 +23,12 @@ def latest():
     rel = json.load(urllib.request.urlopen(req, timeout=30))
     for a in rel.get('assets', []):
         if a['name'] == ASSET:
-            return a['updated_at'], a['browser_download_url']
+            return a['updated_at'], a['url']  # API asset URL: not cached like the public download link
     raise RuntimeError('no data file published yet')
 
 
 def download(url, dest):
-    req = urllib.request.Request(url, headers={'User-Agent': 'AuctionForeverSync'})
+    req = urllib.request.Request(url, headers={'User-Agent': 'AuctionForeverSync', 'Accept': 'application/octet-stream'})
     body = urllib.request.urlopen(req, timeout=120).read()
     text = body.decode('utf-8')
     if not text.startswith(HEADER):
