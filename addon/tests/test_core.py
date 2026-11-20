@@ -183,8 +183,15 @@ X(f"P = {C}.Plan(Cands, 3000)")  # 30s: only one fits
 ok(int(L('#P')) == 1 and L('P[1].id') == 2589 and L('P[1].option.qty') == 150, 'tiny budget: picks the single best option that fits (150 Linen, 12s 75c beats Wool 10s 80c)')
 X(f"P = {C}.Plan(Cands, 20000)")
 ok(L('P.profit') == 1080 + 4250, 'big budget: everything worth buying')
-ok(L(f'{C}.ItemShare(15000)') == 0.40 and abs(L(f'{C}.ItemShare(275000)') - 0.30) < 1e-9 and L(f'{C}.ItemShare(600000)') == 0.20,
-   'per-item share: 40% up to a 5g budget, 30% at 27g 50s, 20% from 50g')
+# Per-item cap = 40% up to a 5g budget, then 20% of the budget + 1g (always grows with the budget, share eases to 20%).
+ok(L(f'{C}.ItemShare(15000)') == 0.40 and abs(L(f'{C}.ItemShare(100000)') * 100000 - 30000) < 1e-6 and abs(L(f'{C}.ItemShare(1000000)') - 0.21) < 1e-9,
+   'per-item share: 40% up to 5g, 3g of a 10g budget, 21% of 100g')
+caps = [L(f'{C}.ItemShare({b})') * b for b in range(10000, 2000000, 10000)]
+ok(all(caps[i] <= caps[i + 1] for i in range(len(caps) - 1)), 'a bigger budget never lowers the per-item cap')
+# Gold needed for a flip that costs C: the least gold whose budget (half, keeping 1g) gives a big enough item cap.
+# 20s: cap 0.4 x budget -> budget 50s -> gold 1g 50s (keeping 1g). 3g: budget 10g (0.2 x 10g + 1g) -> gold 20g.
+ok(abs(L(f'{C}.GoldFor(2000)') - 15000) <= 1 and abs(L(f'{C}.GoldFor(30000)') - 200000) <= 2,
+   f"gold needed: 20s flip -> {L(f'{C}.GoldFor(2000)')}, 3g flip -> {L(f'{C}.GoldFor(30000)')}")
 X(f"P = {C}.Plan({{}}, 20000)")
 ok(int(L('#P')) == 0 and L('P.profit') == 0, 'no candidates: empty plan')
 # Flip and FlipOptions agree: Flip is the best option under the per-item cap.

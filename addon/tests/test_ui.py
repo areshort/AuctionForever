@@ -182,7 +182,8 @@ if real:
     X('Click(AuctionForeverAHPanel.Full)')
     ok(L('ReplicateCalled == true'), 'Full Scan asks the server for every listing')
     X('AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
-    ok(L('AuctionForeverAHPanel.Bar:IsShown()') and 'waiting for the server' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')),
+    ok(L('AuctionForeverAHPanel.Bar:IsShown()') and 'waiting for the server' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
+       and 's left' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')),
        'progress while waiting: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
     X("""FireEvent("REPLICATE_ITEM_LIST_UPDATE")
       for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u and f ~= AuctionForeverAHPanel then u(f, 0.016) end end
@@ -289,7 +290,9 @@ if real:
     ok(L('AF_NS.Scan.Keys[14047] ~= nil'), "server item keys learned for later lookups")
     ok('Quick scan: prices and stock for 2 items' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
     I = L('AF_NS.Core.Info(14047)')
-    ok(I.low == 515 and I.qty == 14100, 'lists and tooltips use the quick-scan price')
+    # (A busy item may get a detailed lookup right after the quick scan; then that newer look is what counts.)
+    Fr = L('AuctionForeverDB.fresh.items[14047]')
+    ok(I.low == Fr[1] and I.qty == Fr[2] and Fr[4] > L('AuctionForeverData.time'), f"lists and tooltips use the newest scan, not the cloud ({I.low}, {I.qty})")
     # Server goes quiet mid-scan: stops after the timeout, keeps what it got.
     X("""C_AuctionHouse.HasFullBrowseResults = function() return false end
       C_AuctionHouse.RequestMoreBrowseResults = function() end
@@ -388,6 +391,8 @@ if real:
       }
       RealFlipRows = RealFlipRows or AF_NS.UI.FlipRows
       AF_NS.UI.FlipRows = function() return FlipTargets end
+      RealFlipTargets = RealFlipTargets or AF_NS.UI.FlipTargets
+      AF_NS.UI.FlipTargets = function() return FlipTargets end
       Click(AuctionForeverBuyTab)""")
     ok(L('AuctionForeverBuyPanel:IsShown() and not AuctionForeverSellPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), 'AF Buy shows its panel only')
     ok(L('AuctionForeverBuyTab._selected and not AuctionForeverSellTab._selected and not AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'AF Buy highlighted, other tabs not')
@@ -425,6 +430,8 @@ if real:
     X('AuctionForeverDB.fresh.items[14047][4] = Now - 600; LookupSpy = {}; AF_NS.Trade.SelectBuy(2)')
     ok(L('LookupSpy[1] == nil'), 'selecting a flip target does not start a price check (the purchase gets the live price)')
     # Refresh prices: re-checks the listed targets on purpose
+    ok(L('AuctionForeverBuyPanel.Cover ~= nil and AuctionForeverSellPanel.Cover ~= nil'), "AF pages cover Blizzard's tab strip at the top")
+    ok(L('AuctionForeverBuyPanel.Refresh:GetText()') in (None, ''), 'refresh is the round button at the top right (no text)')
     X('LookupSpy = {}; Click(AuctionForeverBuyPanel.Refresh)')
     ok(L('LookupSpy[1] ~= nil and #LookupSpy[1].ids >= 1 and #LookupSpy[1].ids <= 20'), 'Refresh prices re-checks the listed targets')
     # another lookup running: the refresh waits and runs right after it, not dropped
@@ -654,20 +661,30 @@ ok(L('Replicates') == 1, 'full scan asks the server once')
 X('AdvanceTime(5); AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
 bt, bv = str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), L('AuctionForeverAHPanel.Bar:GetValue()')
 ok('%' in bt and 0.1 < bv < 0.3, f'waiting: bar fills with a percentage ({bt}, {bv:.2f})')
-X('AdvanceTime(6)')
-ok(L('Replicates') == 2, 'no answer after 10 s: asked again')
+ok('85 s left' in bt, 'waiting: shows the seconds left: ' + bt)
+X('AdvanceTime(16)')
+ok(L('Replicates') == 2, 'no answer after 20 s: asked again')
 X('AdvanceTime(40)')
-ok(L('Replicates') == 6, 'asks every 10 s up to 50 s: ' + str(L('Replicates')))
-X('AdvanceTime(15)')
-ok(not L('AF_NS.Scan.Busy()') and 'asked 6 times' in str(L('AF_NS.Scan.LastResult')), 'gives up after 60 s: ' + str(L('AF_NS.Scan.LastResult')))
+ok(L('Replicates') == 4, 'asks every 20 s (20, 40, 60): ' + str(L('Replicates')))
+X('AdvanceTime(35)')
+ok(not L('AF_NS.Scan.Busy()') and 'asked 4 times' in str(L('AF_NS.Scan.LastResult')), 'gives up after 90 s: ' + str(L('AF_NS.Scan.LastResult')))
 log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
-ok(log is not None and log[2] == 'no answer' and log[4] == 6, 'scan log records the failed try')
+ok(log is not None and log[2] == 'no answer' and log[4] == 4, 'scan log records the failed try')
+# The server may still answer after we stopped waiting: that answer is used, not dropped.
+X('C_AuctionHouse.GetNumReplicateItems = C_AuctionHouse.GetNumReplicateItems or function() return 0 end; FireEvent("REPLICATE_ITEM_LIST_UPDATE")')
+log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
+ok(log is not None and log[2] == 'answered late', 'a late answer is still read: ' + str(log and log[2]))
+X('for k = 1, 50 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
+ok(not L('AF_NS.Scan.Busy()'), 'the late listing is read to the end')
 # Deposit from the game decides between durations (commodities).
 X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
   C_AuctionHouse.CalculateCommodityDeposit = function(id, idx, q) return idx * 1000 * q end
   AuctionForeverData.info[777001] = AuctionForeverData.info[777001] or { 0, 1, 1 }""")
 ok(L('AF_NS.Core.Deposit({ id = 777001 }, 8, 3)') == 6000, 'deposit for 8 h comes from the game')
 ok(L('AF_NS.Core.Deposit({ id = 777002 }, 8, 3)') == 0, 'not a commodity: deposit not known, 0')
+X('DepCalls = 0; local F = C_AuctionHouse.CalculateCommodityDeposit; C_AuctionHouse.CalculateCommodityDeposit = function(...) DepCalls = DepCalls + 1 return F(...) end')
+ok(L('AF_NS.Core.Deposit({ id = 777001 }, 8, 50)') == 100000 and L('AF_NS.Core.Deposit({ id = 777001 }, 8, 7)') == 14000 and L('DepCalls') == 0,
+   'deposit scales with quantity: one game call per item and duration (other stack sizes reuse it)')
 X('C_AuctionHouse.CalculateCommodityDeposit = OldDep')
 # Stack check: an item whose stack size isn't loaded yet is judged by its type (gear doesn't stack), not hidden.
 X("""OldMax, OldInst = C_Item.GetItemMaxStackSizeByID, C_Item.GetItemInfoInstant
@@ -714,7 +731,7 @@ er = str(L('AF_NS.UI.FlipEmptyReason()'))
 X('GetMoney = OldMoney')
 ok('50s' in er or 'budget' in er.lower(), 'empty flip message states the budget: ' + er)
 # Budget plan in AF Buy: best combination for your budget first (buying order), the rest greyed out below.
-X("""AF_NS.UI.FlipRows = RealFlipRows
+X("""AF_NS.UI.FlipRows, AF_NS.UI.FlipTargets = RealFlipRows, RealFlipTargets
   OldOpts, OldFlippable, OldMoney3, OldStatus = AF_NS.Core.FlipOptions, AF_NS.UI.Flippable, GetMoney, AF_NS.Core.Status
   Gold = 29963
   GetMoney = function() return Gold end
@@ -731,7 +748,20 @@ lst = [(rows[i].id, rows[i].plan, rows[i].flip.qty) for i in range(1, int(L('#AF
 lp = L('AF_NS.UI.LastPlan')
 ok(lp is not None and lp.budget == 14981 or (lp and abs(lp.budget - 14981.5) < 1), f'budget = half of 2g 99s 63c ({lp and lp.budget})')
 ok(lst[:2] == [(2592, True, 20), (2589, True, 150)] if len(lst) >= 2 else False, f'plan: Wool first (best return), then Linen within the 40% item cap: {lst}')
-ok(any(r[0] == 4306 and r[1] is False for r in lst) or not any(r[0] == 4306 for r in lst), 'what does not fit is listed after the plan, marked not in plan')
+ok(not any(r[0] == 4306 for r in lst), 'the Flips list keeps only what you can do now')
+tg = L('AF_NS.UI.FlipTargets()')
+tl2 = [(tg[i].id, tg[i].plan) for i in range(1, int(L('#AF_NS.UI.FlipTargets()')) + 1)]
+ok(tl2[-1] == (4306, False), f'AF Buy also lists targets your gold cannot reach yet, last: {tl2}')
+need = L('(function() for _, E in ipairs(AF_NS.UI.FlipTargets()) do if E.id == 4306 then return E.need end end end)()')
+ok(need is not None and abs(need - L('AF_NS.Core.GoldFor(7500)')) <= 1, f'a target shows the gold it needs: {need}')
+X("""AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SetBuySort("gold")""")
+order = [L(f'AF_NS.Trade.Rows()[{i}].need') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+ok(order == sorted(order), f'sort by gold needed: lowest first {order}')
+X('AF_NS.Trade.SetBuySort("profit")')
+pr = [L(f'AF_NS.Trade.Rows()[{i}].best.profit') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+ok(pr == sorted(pr, reverse=True), f'sort by profit: highest first {pr}')
+X('AF_NS.Trade.SetBuySort("plan")')
+ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
 # Buying uses the budget for this visit: after spending 12s, the budget drops by 12s (not to half of the new gold).
 X('Gold = Gold - 1200')
 b2 = L('AF_NS.UI.FlipBudget()')

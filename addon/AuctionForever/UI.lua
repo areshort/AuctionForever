@@ -129,13 +129,15 @@ Core.Deposit = function(I, H, Qty)
 	local Idx
 	for i, D in ipairs(Core.Durations) do if D == H then Idx = i end end
 	if not Idx then return 0 end
-	local K = I.id .. ":" .. Idx .. ":" .. Qty
+	-- The deposit is per unit, so ask the game once per item and duration (for 100, to keep the copper rounding
+	-- small) and scale. Asking for every stack size the planner tries made opening AF Buy lag.
+	local K = I.id .. ":" .. Idx
 	if DepositCache[K] == nil then
-		local Ok, D = pcall(AH.CalculateCommodityDeposit, I.id, Idx, Qty)
+		local Ok, D = pcall(AH.CalculateCommodityDeposit, I.id, Idx, 100)
 		if not (Ok and type(D) == "number") then return 0 end
-		DepositCache[K] = D
+		DepositCache[K] = D / 100
 	end
-	return DepositCache[K]
+	return math.floor(DepositCache[K] * Qty + 0.5)
 end
 local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
@@ -177,42 +179,87 @@ end
 -- AF Buy's list: the best plan for your budget first (in buying order), then other flips that don't fit it.
 -- Worked out when AF Buy opens (or after a purchase), and reused until your budget or your data changes.
 local PlanCache
-function L.FlipRows()
+-- Everything AF Buy lists: the plan, other flips you can do now, then targets that need more gold.
+function L.FlipTargets()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
 	local Budget = L.FlipBudget()
 	local Key = string.format("%d:%d:%d", Budget, AF.Scan and AF.Scan.Version or 0, D.time or 0)
 	if PlanCache and PlanCache.key == Key then L.LastPlan = PlanCache.plan return PlanCache.rows end
 	local Out = {}
-	if Budget <= 0 then return Out end
 	local Cap = Budget * Core.ItemShare(Budget)
-	local Cands, Info = {}, {}
+	local Cands, Info, Ids = {}, {}, {}
 	for id in pairs(D.items) do
 		if Flippable(id) then
 			local I = Core.Info(id)
+			Ids[#Ids + 1] = id
+			Info[id] = I
 			local O = Core.FlipOptions(I, Cap)
-			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O }; Info[id] = I end
+			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O } end
 		end
 	end
 	local Plan = Core.Plan(Cands, Budget)
+	-- Every row knows: the cheapest way in (start) and the gold that takes (need), and the most profitable way
+	-- (best) and its gold (bestNeed). Options within your budget now are in .now.
+	local Rows = {}
+	local function Row(id)
+		local R = Rows[id]
+		if not R then R = { id = id, info = Info[id] or Core.Info(id), now = {} }; Rows[id] = R end
+		return R
+	end
+	local function Consider(R, O)
+		local Need = Core.GoldFor(O.cost)
+		if not R.start or Need < R.need then R.start, R.need = O, Need end
+		if not R.best or O.profit > R.best.profit then R.best, R.bestNeed = O, Need end
+	end
+	for _, Cd in ipairs(Cands) do
+		local R = Row(Cd.id)
+		for _, O in ipairs(Cd.options) do R.now[O] = true; Consider(R, O) end
+		-- Reachable now: you have the gold, whatever the gold rule says for the cheapest option.
+		R.need = math.min(R.need, GetMoney())
+	end
+	for _, id in ipairs(Ids) do
+		local All = Core.FlipOptions(Info[id], math.huge)
+		if #All > 0 then local R = Row(id); for _, O in ipairs(All) do Consider(R, O) end end
+	end
 	local InPlan = {}
 	for _, P in ipairs(Plan) do
 		InPlan[P.id] = true
-		Out[#Out + 1] = { id = P.id, info = Info[P.id], flip = P.option, plan = true }
+		local R = Row(P.id)
+		R.flip, R.plan = P.option, true
+		Out[#Out + 1] = R
 	end
 	local Rest = {}
-	for _, Cd in ipairs(Cands) do
-		if not InPlan[Cd.id] then
-			local Best
-			for _, O in ipairs(Cd.options) do if not Best or O.profit > Best.profit then Best = O end end
-			Rest[#Rest + 1] = { id = Cd.id, info = Info[Cd.id], flip = Best, plan = false }
+	for id, R in pairs(Rows) do
+		if not InPlan[id] then
+			R.plan = false
+			local BestNow
+			for O in pairs(R.now) do if not BestNow or O.profit > BestNow.profit then BestNow = O end end
+			R.flip = BestNow or R.start
+			Rest[#Rest + 1] = R
 		end
 	end
-	table.sort(Rest, function(a, b) return a.flip.profit > b.flip.profit end)
+	-- After the plan: what you could buy now (most profit first), then what needs more gold (least gold first).
+	table.sort(Rest, function(a, b)
+		local An, Bn = a.now[a.flip] or false, b.now[b.flip] or false
+		if An ~= Bn then return An end
+		if An then return a.flip.profit > b.flip.profit end
+		if a.need ~= b.need then return a.need < b.need end
+		return a.flip.profit > b.flip.profit
+	end)
 	for _, E in ipairs(Rest) do Out[#Out + 1] = E end
 	L.LastPlan = { cost = Plan.cost, profit = Plan.profit, count = #Plan, budget = Budget }
 	PlanCache = { key = Key, rows = Out, plan = L.LastPlan }
 	return Out
+end
+-- Only the flips you can do with your gold now (the Flips list, price checks).
+function L.FlipRows()
+	local All = L.FlipTargets()
+	if PlanCache and PlanCache.rows == All and PlanCache.now then return PlanCache.now end
+	local Now = {}
+	for _, E in ipairs(All) do if E.plan or (E.now and E.now[E.flip]) then Now[#Now + 1] = E end end
+	if PlanCache and PlanCache.rows == All then PlanCache.now = Now end
+	return Now
 end
 
 -- Why the Flip list is empty, in one line.
@@ -705,7 +752,7 @@ local function HookRowButtons()
 	end
 end
 -- A tab on the auction house row with its own panel. Returns the panel (Trade.lua builds AF Buy and AF Sell with it).
-function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide)
+function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide, OnRefresh)
 	local Index = #AH.Pages + 1
 	local Tab = CreateFrame("Button", TabName, AH.Holder, "PanelTabButtonTemplate")
 	Tab:SetText(Text)
@@ -723,6 +770,34 @@ function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide)
 	Bg:SetColorTexture(0.06, 0.06, 0.06, 1)
 	local Inset = CreateFrame("Frame", nil, P, "InsetFrameTemplate")
 	Inset:SetAllPoints()
+	-- Cover the strip above the page (right of the portrait), where Blizzard's last page would show its own sub-tabs
+	-- and refresh button.
+	local Cover = CreateFrame("Frame", nil, P)
+	Cover:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPLEFT", 62, -22)
+	Cover:SetPoint("BOTTOMRIGHT", P, "TOPRIGHT", 0, 0)
+	Cover:EnableMouse(true)
+	local CoverBg = Cover:CreateTexture(nil, "BACKGROUND")
+	CoverBg:SetAllPoints()
+	CoverBg:SetColorTexture(0.06, 0.06, 0.06, 1)
+	P.Cover = Cover
+	if OnRefresh then
+		-- Round refresh button at the top right, where Blizzard's pages have theirs.
+		local R = CreateFrame("Button", nil, Cover)
+		R:SetSize(26, 26)
+		R:SetPoint("TOPRIGHT", AuctionHouseFrame, "TOPRIGHT", -12, -27)
+		R:SetNormalTexture("Interface\\Buttons\\UI-RefreshButton")
+		R:SetPushedTexture("Interface\\Buttons\\UI-RefreshButton-Down")
+		R:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		R:SetScript("OnClick", OnRefresh)
+		R:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine("Refresh prices")
+			GameTooltip:AddLine("Re-checks the current auction house prices for the items listed here.", 1, 1, 1, true)
+			GameTooltip:Show()
+		end)
+		R:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		P.Refresh = R
+	end
 	P:Hide()
 	AH.Pages[Index] = { Tab = Tab, Panel = P, OnShow = OnShow, OnHide = OnHide }
 	return P, Tab
@@ -781,7 +856,7 @@ function L.CreateAHTab()
 	Bar.Text:SetPoint("CENTER")
 	Bar:Hide()
 	P.Bar = Bar
-	P.Tick = 0
+	P.Tick, P.Cool = 0, 0
 	P:SetScript("OnUpdate", function(self, Elapsed)
 		self.Tick = self.Tick + Elapsed
 		if self.Tick < 0.1 then return end

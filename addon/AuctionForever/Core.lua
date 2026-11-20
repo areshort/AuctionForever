@@ -395,13 +395,19 @@ function Core.FlipResults(DB, Now, Days)
 	return Out
 end
 
--- How much of the flip budget one item may take: 40% while the budget is small (5g or less), shrinking smoothly to 20%
--- at a 50g budget, so a bigger budget is always spread over more items.
+-- How much of the flip budget one item may take: 40% while the budget is small (5g or less), then 20% of the budget
+-- plus 1g, so a bigger budget always allows a bigger item but is spread over more items (21% at 100g).
 function Core.ItemShare(Budget)
-	local G = (Budget or 0) / 10000
-	if G <= 5 then return 0.40 end
-	if G >= 50 then return 0.20 end
-	return 0.40 - 0.20 * (G - 5) / 45
+	Budget = Budget or 0
+	if Budget <= 50000 then return 0.40 end
+	return (0.20 * Budget + 10000) / Budget
+end
+
+-- The least gold at which a flip costing Cost becomes a target: its cost fits one item's share of the flip budget
+-- (half your gold, keeping MinKeep).
+function Core.GoldFor(Cost)
+	local Budget = Cost <= 20000 and Cost / 0.40 or (Cost - 10000) / 0.20
+	return math.ceil(math.max(Budget / Core.ReserveShare, Budget + Core.MinKeep))
 end
 
 -- Every worthwhile way to flip one item within Cap: buying the cheapest listings up to each price level, resold at

@@ -14,7 +14,8 @@ local COMMODITY = Status and Status.Commodity or 2
 local ITEM = Status and Status.Item or 1
 
 local BuyP, SellP           -- panels
-local Buy = { rows = {}, sel = 1 }
+local Buy = { rows = {}, sel = 1, sort = "plan" }
+local SORTS, SORT_LABEL
 local Sell = { queue = {}, idx = 1 }
 
 -- Helpers -----------------------------------------------------------------------------------------------------
@@ -133,6 +134,27 @@ end
 
 function T.SelectedBuy() return Buy.rows[Buy.sel] end
 
+-- The option a row shows (and Buy buys): the plan's or the best affordable one; in profit order, the most profitable
+-- at any gold.
+local function Shown(E)
+	if Buy.sort == "profit" then return E.best or E.flip end
+	return E.flip
+end
+-- Gold the shown option needs before it's a target; nil if you can buy it now.
+local function ShownNeed(E)
+	local F = Shown(E)
+	if E.plan and F == E.flip then return nil end
+	if E.now and E.now[F] then return nil end
+	if F == E.best and E.bestNeed then return E.bestNeed end
+	return E.need
+end
+local function GoldText(N) return Core.Money(math.ceil(N / 100) * 100) end
+SORTS = {
+	-- plan: FlipRows order (the plan, then what fits now, then by gold needed)
+	gold = function(a, b) if a.need ~= b.need then return a.need < b.need end return a.best.profit > b.best.profit end,
+	profit = function(a, b) if a.best.profit ~= b.best.profit then return a.best.profit > b.best.profit end return a.bestNeed < b.bestNeed end,
+}
+SORT_LABEL = { plan = "Sort: plan", gold = "Sort: gold needed", profit = "Sort: profit" }
 function T.DrawBuy()
 	if not BuyP then return end
 	local Off = Buy.offset or 0
@@ -141,25 +163,32 @@ function T.DrawBuy()
 		R:SetShown(E ~= nil)
 		R.id = E and E.id
 		if E then
-			local F = E.flip
+			local F = Shown(E)
+			local Need = ShownNeed(E)
 			R.Icon:SetTexture(UI().Icon(E.id))
 			R.Cells[1]:SetText(NameText(E.id))
 			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.Money(F.buyUpTo))
 			R.Cells[3]:SetText(Core.Money(F.resell))
 			R.Cells[4]:SetText("|cff1eff00" .. Core.Money(F.profit) .. "|r")
-			R.Cells[5]:SetText(E.plan and ("|cff1eff00" .. (i + Off) .. ". in plan|r") or "|cff808080doesn't fit|r")
-			if not E.plan then for c = 1, 4 do R.Cells[c]:SetText("|cff808080" .. (R.Cells[c]:GetText() or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") end end
+			local Status
+			if Need then Status = "at " .. GoldText(Need)
+			elseif E.plan and F == E.flip then Status = "|cff1eff00in plan|r"
+			else Status = "|cffffd100fits, not in plan|r" end
+			R.Cells[5]:SetText(Status)
+			if Need then for c = 1, 4 do R.Cells[c]:SetText("|cff808080" .. (R.Cells[c]:GetText() or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") end end
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
 	end
 	BuyP.Empty:SetShown(#Buy.rows == 0)
 	if #Buy.rows == 0 then BuyP.Empty:SetText(UI().FlipEmptyReason()) end
 	local E = T.SelectedBuy()
-	BuyP.Buy:SetEnabled(E ~= nil and Buy.state ~= "price" and Buy.state ~= "buying")
+	local Need = E and ShownNeed(E)
+	BuyP.Buy:SetEnabled(E ~= nil and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
 	if E then
-		local F = E.flip
-		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.",
-			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit)))
+		local F = Shown(E)
+		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s",
+			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit),
+			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is half your gold; one item may use only part of it).") or ""))
 	else
 		BuyP.Detail:SetText("")
 	end
@@ -174,12 +203,22 @@ function T.DrawBuy()
 	end
 end
 
+function T.Rows() return Buy.rows end
 function T.RefreshBuy()
 	local Id = Buy.rows[Buy.sel] and Buy.rows[Buy.sel].id
-	Buy.rows = UI().FlipRows() or {}
+	local Src = UI().FlipTargets() or {}
+	Buy.rows = {}
+	for i, E in ipairs(Src) do Buy.rows[i] = E end
+	if SORTS[Buy.sort] then table.sort(Buy.rows, SORTS[Buy.sort]) end
 	Buy.sel = 1
 	for i, E in ipairs(Buy.rows) do if E.id == Id then Buy.sel = i end end
+	if BuyP and BuyP.Sort then BuyP.Sort:SetText(SORT_LABEL[Buy.sort]) end
 	T.DrawBuy()
+end
+function T.SetBuySort(Key)
+	Buy.sort = SORT_LABEL[Key] and Key or "plan"
+	Buy.offset = 0
+	T.RefreshBuy()
 end
 
 function T.SelectBuy(i)
@@ -201,7 +240,7 @@ end
 
 local function BuyNext()
 	local Next = Buy.rows[Buy.sel + 1] and Buy.rows[Buy.sel + 1].id
-	Buy.rows = UI().FlipRows() or {}
+	T.RefreshBuy()
 	local Pick = 1
 	for i, E in ipairs(Buy.rows) do if E.id == Next then Pick = i end end
 	T.SelectBuy(Pick)
@@ -210,7 +249,8 @@ end
 function T.BuyClick()
 	local E = T.SelectedBuy()
 	if not E then return end
-	local F = E.flip
+	local F = Shown(E)
+	if not Buy.state and ShownNeed(E) then return end
 	if Buy.state == "confirm" then
 		local Pd = Buy.pending
 		C_AuctionHouse.ConfirmCommoditiesPurchase(Pd.id, Pd.qty)
@@ -282,7 +322,7 @@ end
 
 local function BuildBuy()
 	BuyP = UI().NewAHPage("AF Buy", "AuctionForeverBuyTab", "AuctionForeverBuyPanel",
-		function() T.RefreshBuy(); T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end)
+		function() T.RefreshBuy(); T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -12)
@@ -298,8 +338,10 @@ local function BuildBuy()
 	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
-	P.Refresh = Button(P, "Refresh prices", 320, -420, 130, function() T.RefreshBuyPrices() end)
-	P.Status = Text(P, "GameFontHighlightSmall", 460, -425, 300)
+	P.Sort = Button(P, "Sort: plan", 320, -420, 150, function()
+		T.SetBuySort(({ plan = "gold", gold = "profit", profit = "plan" })[Buy.sort])
+	end)
+	P.Status = Text(P, "GameFontHighlightSmall", 480, -425, 190)
 end
 
 -- AF Sell -----------------------------------------------------------------------------------------------------
@@ -571,7 +613,7 @@ local function BuildSell()
 		Sell.queue = T.BuildQueue()
 		Sell.edited = false
 		T.SelectSell(1)
-	end)
+	end, nil, function() T.RefreshSellPrices() end)
 	local P = SellP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Sell")
 	Text(P, "GameFontNormalSmall", 20, -44):SetText("Your items that sell here (click one)")
@@ -602,7 +644,6 @@ local function BuildSell()
 	P.Hint:SetText("Prefilled from recent sales: the best price that should sell within the duration.")
 	P.Post = Button(P, "Post", X, -270, 160, function() T.PostClick() end)
 	P.Skip = Button(P, "Skip", X + 170, -270, 90, function() T.SelectSell(Sell.idx + 1) end)
-	P.Refresh = Button(P, "Refresh prices", X + 270, -270, 130, function() T.RefreshSellPrices() end)
 	P.Status = Text(P, "GameFontHighlightSmall", X, -304, 480)
 end
 

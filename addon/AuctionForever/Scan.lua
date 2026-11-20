@@ -21,9 +21,10 @@ Scan.MIN_EVENTS = MIN_EVENTS
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
 local WAIT_SHARE = 0.3      -- full scan bar: the first 30% is waiting for the server, the rest reading listings
-local RESEND = { 10, 20, 30, 40, 50 } -- full scan: ask again after this many seconds of silence (the server has
-                                     -- answered only right after a repeat, so repeat often)
-local FULL_TIMEOUT = 60
+local RESEND = { 20, 40, 60 } -- full scan: ask again after this many seconds of silence (asking every 10 s got
+                             -- no answer at all; every 20 s was answered after about 40 s)
+local FULL_TIMEOUT = 90
+local LATE_OK = 900          -- an answer that arrives after we stopped waiting is still read, within this long
 local ITEM_TIMEOUT = 5      -- item lookup: seconds to wait for one item (loading its details + answer)
 local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page
 
@@ -308,7 +309,8 @@ function Scan.Status()
 		-- The server gives no progress while it prepares the listing: estimate from how long it took last time.
 		local Expect = math.max(5, DB().fullWait or 15)
 		local F = WAIT_SHARE * math.min(0.95, (GetTime() - (Started or GetTime())) / Expect)
-		return string.format("Full scan: %d%% (waiting for the server)", F * 100), F
+		local Left = math.max(0, math.ceil(FULL_TIMEOUT - (GetTime() - (Started or GetTime()))))
+		return string.format("Full scan: %d%% (waiting for the server, %d s left)", F * 100, Left), F
 	elseif Mode == "full" then
 		local Done = math.min(Total or 0, (Index or 1) - 1)
 		local R = (Total or 0) > 0 and Done / Total or 1
@@ -369,6 +371,7 @@ function Scan.Start()
 	end
 	Mode = "full-wait"
 	Started = GetTime()
+	Scan.WaitGaveUp = nil
 	Scan.Progress, Scan.Sends = nil, 0
 	local Ticket = Started
 	SendReplicate(Ticket)
@@ -378,8 +381,9 @@ function Scan.Start()
 	C_Timer.After(FULL_TIMEOUT, function()
 		if Mode == "full-wait" and Started == Ticket then
 			Mode = nil
+			Scan.WaitGaveUp = true
 			Log({ time(), "no answer", FULL_TIMEOUT, Scan.Sends })
-			Scan.LastResult = string.format("The server didn't send the full listing within %d s (asked %d times). Try again in a few minutes.", FULL_TIMEOUT, Scan.Sends)
+			Scan.LastResult = string.format("The server didn't send the full listing within %d s (asked %d times). If it arrives later it will still be read; otherwise try again in a few minutes.", FULL_TIMEOUT, Scan.Sends)
 			Say(Scan.LastResult)
 			Notify("ScanDone")
 		end
@@ -684,10 +688,18 @@ Events:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
 Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
 Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
 Events:SetScript("OnEvent", function(_, Event, Arg)
-	if Event == "REPLICATE_ITEM_LIST_UPDATE" and Mode == "full-wait" then
+	local Late = Event == "REPLICATE_ITEM_LIST_UPDATE" and not Mode and Scan.WaitGaveUp and Started and GetTime() - Started < LATE_OK
+	if Event == "REPLICATE_ITEM_LIST_UPDATE" and (Mode == "full-wait" or Late) then
 		local S = DB()
-		S.fullWait, S.lastFull = GetTime() - Started, time()
-		Log({ time(), "answered", math.floor(S.fullWait + 0.5), Scan.Sends })
+		Scan.WaitGaveUp = nil
+		S.lastFull = time()
+		if Late then
+			Log({ time(), "answered late", math.floor(GetTime() - Started + 0.5), Scan.Sends })
+			Say("the server's full listing arrived after all; reading it.")
+		else
+			S.fullWait = GetTime() - Started
+			Log({ time(), "answered", math.floor(S.fullWait + 0.5), Scan.Sends })
+		end
 		Mode = "full"
 		Levels, Expiring, Count, Index = {}, {}, 0, 1
 		Total = C_AuctionHouse.GetNumReplicateItems()
