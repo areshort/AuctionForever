@@ -668,10 +668,13 @@ X("""OldCD, OldStatus2, OldNow = AF_NS.Core.ChooseDuration, AF_NS.Core.Status, t
   time = function() return 1800000000 + 720 end""")
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ah = str(tl[1][1])
-ok('43s' in ah and '21c' in ah and '12 min ago' in ah, 'AH line: target price and age: ' + ah)
+ok('43s' in ah and '21c' in ah and '|T' not in ah and 'ago' not in ah, 'AH line: target price, fresh data: no icon, no timestamp: ' + ah)
+X('time = function() return 1800000000 + 7200 end')
+ah2 = str([list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()][1][1])
+ok('43s' in ah2 and 'UI-Dialog-Icon-AlertNew' in ah2, 'data over an hour old: warning icon: ' + ah2)
 X('AF_NS.Core.Status = function() return "warming up" end')
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok('43s' not in str(tl[1][1]) and 'ago' in str(tl[1][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[1][1]))
+ok('43s' not in str(tl[1][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[1][1]))
 X('AF_NS.Core.ChooseDuration, AF_NS.Core.Status, time = OldCD, OldStatus2, OldNow')
 # Empty flip list says what the budget is.
 X('OldMoney = GetMoney; GetMoney = function() return 15000 end')

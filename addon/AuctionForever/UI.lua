@@ -884,12 +884,11 @@ local function CheckedAt(id)
 	if T and C then return math.max(T, C) end
 	return T or C
 end
-local function Ago(T)
-	if not T then return "" end
-	local M = math.max(0, math.floor((time() - T) / 60))
-	if M < 60 then return string.format(" |cff808080(%d min ago)|r", M) end
-	if M < 48 * 60 then return string.format(" |cff808080(%d h ago)|r", math.floor(M / 60)) end
-	return string.format(" |cff808080(%d days ago)|r", math.floor(M / 1440))
+-- A small warning icon when the price data is over an hour old (or its age is unknown); nothing otherwise.
+local STALE_TIP = 3600
+local function StaleMark(T)
+	if T and time() - T <= STALE_TIP then return "" end
+	return " |TInterface\\DialogFrame\\UI-Dialog-Icon-AlertNew:0|t"
 end
 -- The AH price to show: the target price AuctionForever would post at, from your latest data (no live check);
 -- items it can't rate yet show the recent selling price.
@@ -912,7 +911,7 @@ function L.TooltipLines(id)
 	-- Always: vendor price, AH price and which one to use (per item, in coin colors).
 	Lines[#Lines + 1] = { "Vendor", V > 0 and Core.MoneyColor(V) or "-" }
 	local Target = TargetPrice(I)
-	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. Ago(CheckedAt(id))) or "no data" }
+	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" }
 	local R = Core.Recommend(I, V, Target)
 	Lines[#Lines + 1] = { "Rec", R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-" }
 	if I and (I.mySold or I.myExpired) then
