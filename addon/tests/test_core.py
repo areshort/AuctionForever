@@ -77,9 +77,9 @@ ok(sp('{newHour = 0, ladder = {}}', 5)[0] == 1100, 'nothing listed: what buyers 
 # Quantity: 2 h at 999 -> room 40*2 - 40 below = 40
 ok(L(f'{C}.PostQuantity(MakeItem(), 100, 2, 999)') == 40, 'post only what sells in time')
 # Budget
-ok(L(f'{C}.Budget(100000)') == 50000, '10g -> 5g budget')
-ok(L(f'{C}.Budget(15000)') == 5000, '1.5g -> 0.5g (keep 1g)')
-ok(L(f'{C}.Budget(8000)') == 0, 'under 1g: nothing')
+ok(L(f'{C}.Budget(100000)') == 95000, '10g -> 9g 50s budget (keep 50s)')
+ok(L(f'{C}.Budget(15000)') == 10000, '1g 50s -> 1g (keep 50s)')
+ok(L(f'{C}.Budget(4000)') == 0, 'under 50s: nothing')
 # Flip options: you must be the cheapest after buying, reselling 1c under what's left.
 # Buy 10 at 5s -> resell 949, profit planned at 90% of it: floor(949*10*0.95*0.9) - 5000 = 3113. Buying the 30 at
 # 9s 50c too (resell 999) would plan floor(999*40*0.95*0.9) - 33500 = 665, a 2% return: under the 12% minimum.
@@ -206,9 +206,9 @@ ok(L(f'{C}.ItemShare(15000)') == 0.40 and abs(L(f'{C}.ItemShare(100000)') * 1000
    'per-item share: 40% up to 5g, 3g of a 10g budget, 21% of 100g')
 caps = [L(f'{C}.ItemShare({b})') * b for b in range(10000, 2000000, 10000)]
 ok(all(caps[i] <= caps[i + 1] for i in range(len(caps) - 1)), 'a bigger budget never lowers the per-item cap')
-# Gold needed for a flip that costs C: the least gold whose budget (half, keeping 1g) gives a big enough item cap.
-# 20s: cap 0.4 x budget -> budget 50s -> gold 1g 50s (keeping 1g). 3g: budget 10g (0.2 x 10g + 1g) -> gold 20g.
-ok(abs(L(f'{C}.GoldFor(2000)') - 15000) <= 1 and abs(L(f'{C}.GoldFor(30000)') - 200000) <= 2,
+# Gold needed for a flip that costs C: the least gold whose budget (gold minus 50s) gives a big enough item cap.
+# 20s: cap 0.4 x budget -> budget 50s -> gold 1g. 3g: budget 10g (0.2 x 10g + 1g) -> gold 10g 50s.
+ok(abs(L(f'{C}.GoldFor(2000)') - 10000) <= 1 and abs(L(f'{C}.GoldFor(30000)') - 105000) <= 2,
    f"gold needed: 20s flip -> {L(f'{C}.GoldFor(2000)')}, 3g flip -> {L(f'{C}.GoldFor(30000)')}")
 X(f"P = {C}.Plan({{}}, 20000)")
 ok(int(L('#P')) == 0 and L('P.profit') == 0, 'no candidates: empty plan')

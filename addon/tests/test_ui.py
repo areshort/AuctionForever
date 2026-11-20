@@ -808,7 +808,7 @@ ok('50s' in er or 'budget' in er.lower(), 'empty flip message states the budget:
 # Budget plan in AF Buy: best combination for your budget first (buying order), the rest greyed out below.
 X("""AF_NS.UI.FlipRows, AF_NS.UI.FlipTargets = RealFlipRows, RealFlipTargets
   OldOpts, OldFlippable, OldMoney3, OldStatus = AF_NS.Core.FlipOptions, AF_NS.UI.Flippable, GetMoney, AF_NS.Core.Status
-  Gold = 29963
+  Gold = 19981
   GetMoney = function() return Gold end
   local Opts = {
     [2589] = { { qty = 150, buyQty = 150, buyUpTo = 20, cost = 3000, resell = 30, hours = 2, durationIndex = 1, profit = 1275 },
@@ -821,7 +821,7 @@ X("""AF_NS.UI.FlipRows, AF_NS.UI.FlipTargets = RealFlipRows, RealFlipTargets
 rows = L('AF_NS.UI.FlipRows()')
 lst = [(rows[i].id, rows[i].plan, rows[i].flip.qty) for i in range(1, int(L('#AF_NS.UI.FlipRows()')) + 1)] if rows else []
 lp = L('AF_NS.UI.LastPlan')
-ok(lp is not None and lp.budget == 14981 or (lp and abs(lp.budget - 14981.5) < 1), f'budget = half of 2g 99s 63c ({lp and lp.budget})')
+ok(lp is not None and lp.budget == 14981 or (lp and abs(lp.budget - 14981.5) < 1), f'budget = 1g 99s 81c minus the 50s kept ({lp and lp.budget})')
 ok(lst[:2] == [(2592, True, 20), (2589, True, 150)] if len(lst) >= 2 else False, f'plan: Wool first (best return), then Linen within the 40% item cap: {lst}')
 ok(not any(r[0] == 4306 for r in lst), 'the Flips list keeps only what you can do now')
 tg = L('AF_NS.UI.FlipTargets()')
@@ -860,7 +860,7 @@ X('AF_NS.Trade.DrawBuy()')
 bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
 ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
-# Buying uses the budget for this visit: after spending 12s, the budget drops by 12s (not to half of the new gold).
+# Buying uses the budget for this visit: after spending 12s, the budget drops by 12s.
 X('Gold = Gold - 1200')
 b2 = L('AF_NS.UI.FlipBudget()')
 ok(abs(b2 - (14981.5 - 1200)) < 1, f'after spending 12s: budget {b2} (was 14981)')

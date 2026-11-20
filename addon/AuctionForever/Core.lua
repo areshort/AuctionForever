@@ -28,8 +28,7 @@ Core.FallingKnife = 0.30        -- lowest price this far under the 3-day median 
 Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
 Core.MinWindows = 2             -- separate windows with sales before an item is a steady seller
 Core.PlanRateShare = 0.75       -- flips plan resales at this share of the measured sales speed (the low end)
-Core.ReserveShare = 0.5         -- spend up to half your gold...
-Core.MinKeep = 10000            -- ...always keeping at least 1 gold
+Core.MinKeep = 5000             -- the flip budget is all your gold except this (50 silver)
 
 -- One item's numbers from the data file, as a table with named fields. nil when the item isn't in the data.
 function Core.Info(id)
@@ -388,9 +387,9 @@ function Core.PostQuantity(I, Have, Hours, Price, Ladder)
 	return math.max(0, math.min(Have, Room))
 end
 
--- Flip budget: up to half your gold, always keeping at least 1 gold.
+-- Flip budget: your gold, always keeping MinKeep.
 function Core.Budget(Money)
-	return math.max(0, math.min(Money * Core.ReserveShare, Money - Core.MinKeep))
+	return math.max(0, Money - Core.MinKeep)
 end
 
 -- Best flip for an item: buy the cheapest listings (level by level), then resell on the market as it would look
@@ -494,10 +493,10 @@ function Core.ItemShare(Budget)
 end
 
 -- The least gold at which a flip costing Cost becomes a target: its cost fits one item's share of the flip budget
--- (half your gold, keeping MinKeep).
+-- (your gold minus MinKeep).
 function Core.GoldFor(Cost)
 	local Budget = Cost <= 20000 and Cost / 0.40 or (Cost - 10000) / 0.20
-	return math.ceil(math.max(Budget / Core.ReserveShare, Budget + Core.MinKeep))
+	return math.ceil(Budget + Core.MinKeep)
 end
 
 -- Every worthwhile way to flip one item within Cap: buying the cheapest listings up to each price level, resold at

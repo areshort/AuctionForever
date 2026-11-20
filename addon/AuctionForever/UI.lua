@@ -166,7 +166,7 @@ function L.FarmRows()
 	return Out
 end
 
--- Flip budget for this auction house visit: half your gold (keeping 1g), measured when you opened the AH or when
+-- Flip budget for this auction house visit: your gold minus MinKeep, measured when you opened the AH or when
 -- your gold went up since (sales, mail). Purchases count against it, so it doesn't halve again after every buy.
 local BudgetBase
 function L.ResetBudget() BudgetBase = GetMoney() end
@@ -275,8 +275,8 @@ end
 -- Why the Flip list is empty, in one line.
 function L.FlipEmptyReason()
 	local Budget = L.FlipBudget()
-	if Budget <= 0 then return "No flip budget left: half your gold (keeping 1g) is used up for this visit." end
-	local Head = string.format("Flip budget %s (half your gold, keeping 1g; up to %s per item).\n", Core.Money(Budget), Core.Money(Budget * Core.ItemShare(Budget)))
+	if Budget <= 0 then return "No flip budget left: everything over " .. Core.Money(Core.MinKeep) .. " is used up for this visit." end
+	local Head = string.format("Flip budget %s (your gold, keeping %s; up to %s per item).\n", Core.Money(Budget), Core.Money(Core.MinKeep), Core.Money(Budget * Core.ItemShare(Budget)))
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
 	local N = {}

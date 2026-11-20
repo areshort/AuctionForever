@@ -206,7 +206,7 @@ function T.DrawBuy()
 		local F = Shown(E)
 		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s",
 			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit),
-			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is half your gold; one item may use only part of it).") or ""))
+			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.Money(Core.MinKeep) .. "; one item may use only part of it).") or ""))
 	else
 		BuyP.Detail:SetText("")
 	end
