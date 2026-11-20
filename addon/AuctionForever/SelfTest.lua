@@ -155,16 +155,12 @@ end
 local function CheckFlips()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return end
-	local Budget = AF.Core.Budget(GetMoney())
-	local Found, Hidden, Unknown = 0, 0, 0
-	for id in pairs(D.items) do
-		if AF.Core.Flip(AF.Core.Info(id), Budget) then
-			if AF.UI.Stacks(id) then Found = Found + 1 else Hidden = Hidden + 1 end
-			if not (C_Item.GetItemMaxStackSizeByID and C_Item.GetItemMaxStackSizeByID(id)) then Unknown = Unknown + 1 end
-		end
-	end
-	Add(nil, string.format("AF Buy: %d flips with budget %s; %d hidden as non-stacking; %d had no loaded stack size",
-		Found, AF.Core.Money(Budget), Hidden, Unknown))
+	local Rows = AF.UI.FlipRows()
+	local P = AF.UI.LastPlan
+	local NoFlag = 0
+	for id in pairs(D.items) do if not AF.UI.Kind(id) then NoFlag = NoFlag + 1 end end
+	Add(nil, string.format("AF Buy: %d flips, plan %d items for budget %s (profit %s); %d items without a commodity flag",
+		#Rows, P and P.count or 0, AF.Core.Money(AF.UI.FlipBudget()), AF.Core.Money(P and P.profit or 0), NoFlag))
 end
 
 function T.Run()
