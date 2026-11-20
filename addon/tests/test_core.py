@@ -83,14 +83,14 @@ ok(L(f'{C}.Budget(8000)') == 0, 'under 1g: nothing')
 # Flip options: you must be the cheapest after buying, reselling 1c under what's left.
 # Buy 10 at 5s -> resell 949: floor(949*10*0.95) - 5000 = 4015. Buy those + 30 at 9s 50c -> resell 999:
 # floor(999*40*0.95) - 33500 = 4462 (best).
-lua.execute(f'O = {C}.FlipOptions(MakeItem(), 500000); Flip = {C}.Flip(MakeItem(), 500000)')
+lua.execute(f'O = {C}.FlipOptions(MakeItem({{ sellThrough = 1 }}), 500000); Flip = {C}.Flip(MakeItem({{ sellThrough = 1 }}), 500000)')
 ok(L('O[1].buyQty == 10 and O[1].resell == 949 and O[1].profit == 4015'), f'first option: resell 1c under the next listing ({L("O[1].resell")})')
 ok(L('Flip.buyQty == 40 and Flip.buyUpTo == 950 and Flip.resell == 999 and Flip.profit == 4462'), f'best: buy both cheap levels, resell under 10s ({L("Flip.resell")}, {L("Flip.profit")})')
 # Only the 12 cheapest levels are kept: buying through all of them, with more listings above, isn't a flip
 # (seen with Minor Mana Potion: "resell at 6s 15c" after buying every known level).
 lua.execute(f"Trunc = {C}.FlipOptions(MakeItem({{ ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 300 }}), 500000)")
 ok(L('#Trunc') == 1 and L('Trunc[1].buyQty') == 10, f'more listings above the kept levels: never buys out the last known level ({L("#Trunc")} options)')
-lua.execute(f"All = {C}.FlipOptions(MakeItem({{ ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 40 }}), 500000)")
+lua.execute(f"All = {C}.FlipOptions(MakeItem({{ sellThrough = 1, ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 40 }}), 500000)")
 ok(L('#All') == 2, 'every listing known: buying them all is allowed')
 # Medium Leather (real ladder): 20 cheap at 91c, then 207 at 98c. Reselling at 97c doesn't pay; buying the 98c ones
 # too is over budget, and a partly bought level leaves cheaper stock in front of you. No flip.
@@ -101,6 +101,23 @@ ok(L('Leather == nil'), 'Medium Leather case: buying 1% of the market and postin
 lua.execute('Wall = AuctionForever.Core.Flip(MakeItem({ ladder = { {500, 10}, {510, 2000} }, qty = 900 }), 500000)')
 ok(L('Wall == nil'), 'cheap listing with lots of stock just above: skipped')
 ok(L('AuctionForever.Core.Flip(MakeItem({ sales = 3 }), 500000) == nil'), 'warming up: no flip')
+# Expected profit: only sellThrough of what you post sells (80% here). 10 at 5s resold at 949:
+# floor(949 * 10 * 0.95 * 0.8) - 5000 = 2212. Buying the 9s 50c level too would expect a loss.
+lua.execute(f'EO = {C}.FlipOptions(MakeItem(), 500000)')
+ok(L('#EO') == 1 and L('EO[1].profit') == 2212, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
+# Never buy more than the cautious resale speed sells in 4 h: 30/h planned -> at most 120. (Without the cap, buying
+# all four cheap levels and reselling at 9s 49c would look best: 200 units, about 7 h of sales.)
+lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ sellThrough = 1, qty = 230, ladder = {{ {{400, 50}}, {{450, 50}}, {{500, 50}}, {{550, 50}}, {{950, 30}} }} }}), 10000000)")
+ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)) <= 120,
+   f"flip size capped at 4 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
+# Too little history: needs 12 h of data before it's a flip target (selling is unaffected).
+ok(L(f'#{C}.FlipOptions(MakeItem({{ hoursSeen = 8 }}), 500000)') == 0 and L(f'{C}.FlipStatus(MakeItem({{ hoursSeen = 8 }}))') == 'warming up'
+   and L(f'{C}.Status(MakeItem({{ hoursSeen = 8 }}))') == 'good', 'under 12 h of data: no flip (still fine to sell)')
+# Minimum profit grows with the budget: 4% of it, between 2s and 10s.
+ok(L(f'{C}.MinFlipProfitFor(4848)') == 200 and L(f'{C}.MinFlipProfitFor(15000)') == 600 and L(f'{C}.MinFlipProfitFor(100000)') == 1000,
+   f"minimum flip profit: {L(f'{C}.MinFlipProfitFor(4848)')}, {L(f'{C}.MinFlipProfitFor(15000)')}, {L(f'{C}.MinFlipProfitFor(100000)')}")
+lua.execute(f"Small = {C}.FlipOptions(MakeItem({{ sellThrough = 1, ladder = {{ {{500, 1}}, {{1000, 100}} }}, qty = 101 }}), 600, 300)")
+ok(L('#Small') == 1 and L('Small[1].profit') == 449, f"a 4s 49c flip counts when your minimum is 3s ({L('#Small')})")
 # Value per day and money text
 ok(L(f'{C}.ValuePerDay(MakeItem())') == 1000 * 40 * 24, 'value per day = price x sold per day')
 ok(L(f'{C}.Money(12345)') == '1g 23s' and L(f'{C}.Money(250)') == '2s 50c' and L(f'{C}.Money(7)') == '7c', 'money text')

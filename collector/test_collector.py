@@ -52,6 +52,14 @@ ok(s['soldprices']['17'][-1][1:] == [120, 10], 'next snapshot an hour later: 10 
 n1 = C.item_numbers('17', s, C.market(C.listings([], g2)), 1_007_200)
 ok(n1['hoursSeen'] == 1 and abs(n1['perHour'] - 10) < 1e-9, f"only the timed hour counts: {n1['hoursSeen']} h, {n1['perHour']}/h")
 ok(n1['newHour'] == 1, f"new listings per hour: 1 posted in that hour ({n1['newHour']})")
+# Spans other than 1 h: 25 sold over 1.25 h and 40 over 2 h = 65 over 3.25 h = 20/h (not rates divided by hours again).
+sx = {'hourly': {'99': [[1, 10, 100, 25, 250, 0, 1.25, 0], [2, 10, 100, 40, 400, 5, 2.0, 0]]}, 'soldprices': {}, 'daily': {}}
+nx = C.item_numbers('99', sx, {}, 3)
+ok(abs(nx['perHour'] - 20) < 1e-9, f"sales speed with 1.25 h and 2 h gaps: {nx['perHour']}/h (want 20)")
+ok(abs(nx['sellThrough'] - 65 / 70) < 1e-9, f"sell-through from quantities: {nx['sellThrough']} (want {65 / 70:.4f})")
+sy = {'hourly': {'98': [[1, 10, 100, 3, 30, 0, 0.25, 0], [2, 10, 100, 3, 30, 0, 0.25, 0]]}, 'soldprices': {}, 'daily': {}}
+ny = C.item_numbers('98', sy, {}, 3)
+ok(abs(ny['perHour'] - 12) < 1e-9, f"two 15-min gaps, 3 sold each = 12/h, not floored to an hour ({ny['perHour']})")
 ok('"newHour"' in open(out, encoding='utf-8').read().split('items=')[0], 'data file lists the newHour field')
 ev5 = C.compare({}, C.listings([], [good(90, 18, 50, 7, 'LONG')]), 1.0)
 ok(ev5[18].get('new') == 7 and not ev5[18]['sold'], 'listing not seen before: counted as newly posted')

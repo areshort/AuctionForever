@@ -287,7 +287,7 @@ function T.BuyClick()
 	end
 	if Kind == "commodity" then
 		Buy.state = "price"
-		Buy.pending = { id = E.id, qty = F.buyQty, max = F.buyUpTo, resell = F.resell }
+		Buy.pending = { id = E.id, qty = F.buyQty, max = F.buyUpTo, resell = F.resell, chance = F.chance }
 		C_AuctionHouse.StartCommoditiesPurchase(E.id, F.buyQty)
 		SayBuy("Getting the current price...")
 		T.DrawBuy()
@@ -318,8 +318,9 @@ end
 local function OnPriceUpdated(Unit, Total)
 	if Buy.state ~= "price" or not Buy.pending then return end
 	local Pd = Buy.pending
-	local Profit = math.floor(Pd.resell * Pd.qty * (1 - Core.Cut)) - Total
+	local Profit = math.floor(Pd.resell * Pd.qty * (1 - Core.Cut) * (Pd.chance or 1)) - Total
 	local Budget = UI().FlipBudget()
+	local MinProfit = Core.MinFlipProfitFor(Budget)
 	if Unit > Pd.max then
 		ResetPurchase(true)
 		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.Money(Unit), Core.Money(Pd.max)))
@@ -327,9 +328,9 @@ local function OnPriceUpdated(Unit, Total)
 	elseif Total > Budget then
 		ResetPurchase(true)
 		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Core.Money(Total), Core.Money(Budget)))
-	elseif Profit < Core.MinFlipProfit then
+	elseif Profit < MinProfit then
 		ResetPurchase(true)
-		SayBuy(string.format("At today's price the profit would be %s (under %s). Not bought.", Core.Money(Profit), Core.Money(Core.MinFlipProfit)))
+		SayBuy(string.format("At today's price the expected profit would be %s (under %s). Not bought.", Core.Money(Profit), Core.Money(MinProfit)))
 	else
 		Buy.state = "confirm"
 		Pd.total = Total

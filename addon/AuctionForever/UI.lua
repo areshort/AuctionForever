@@ -188,13 +188,14 @@ function L.FlipTargets()
 	if PlanCache and PlanCache.key == Key then L.LastPlan = PlanCache.plan return PlanCache.rows end
 	local Out = {}
 	local Cap = Budget * Core.ItemShare(Budget)
+	local MinProfit = Core.MinFlipProfitFor(Budget)
 	local Cands, Info, Ids = {}, {}, {}
 	for id in pairs(D.items) do
 		if Flippable(id) then
 			local I = Core.Info(id)
 			Ids[#Ids + 1] = id
 			Info[id] = I
-			local O = Core.FlipOptions(I, Cap)
+			local O = Core.FlipOptions(I, Cap, MinProfit)
 			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O } end
 		end
 	end
@@ -219,8 +220,15 @@ function L.FlipTargets()
 		R.need = math.min(R.need, GetMoney())
 	end
 	for _, id in ipairs(Ids) do
-		local All = Core.FlipOptions(Info[id], math.huge)
-		if #All > 0 then local R = Row(id); for _, O in ipairs(All) do Consider(R, O) end end
+		local All = Core.FlipOptions(Info[id], math.huge, MinProfit)
+		if #All > 0 then
+			local R = Row(id)
+			for _, O in ipairs(All) do
+				Consider(R, O)
+				-- Fits one item's share of your budget: buyable now, even if only this any-gold search found it.
+				if O.cost <= Cap then R.now[O] = true; R.need = math.min(R.need, GetMoney()) end
+			end
+		end
 	end
 	local InPlan = {}
 	for _, P in ipairs(Plan) do
@@ -271,13 +279,13 @@ function L.FlipEmptyReason()
 	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
 	local N = {}
 	for id in pairs(D.items) do
-		local S = Core.Status(Core.Info(id))
+		local S = Core.FlipStatus(Core.Info(id))
 		N[S] = (N[S] or 0) + 1
 	end
 	if (N.good or 0) == 0 then
-		return Head .. string.format("No flips yet: no item has enough measured sales (%d warming up).\nScan at the auction house (AuctionForever tab), then again 15+ min later.", N["warming up"] or 0)
+		return Head .. string.format("No flips yet: no item has %d+ hours of steady sales data (%d warming up).\nThe cloud data and your scans add more every hour.", Core.FlipMinHours, N["warming up"] or 0)
 	end
-	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for 10s+ profit within that budget right now.", N.good)
+	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit within that budget right now.", N.good, Core.Money(Core.MinFlipProfitFor(Budget)))
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.

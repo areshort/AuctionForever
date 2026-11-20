@@ -18,7 +18,9 @@ Core.MinSellThrough = 0.6       -- share of ended listings that sold
 Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn this much more than a shorter one
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
-Core.MinFlipProfit = 1000       -- 10 silver
+Core.MinFlipProfit = 1000       -- 10 silver: the most a flip must earn (see MinFlipProfitFor)
+Core.FlipMaxHours = 4           -- a flip never buys more than the cautious resale speed sells in this many hours
+Core.FlipMinHours = 12          -- hours of sales data an item needs before it's a flip target
 Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
 Core.MinWindows = 2             -- separate windows with sales before an item is a steady seller
 Core.PlanRateShare = 0.75       -- flips plan resales at this share of the measured sales speed (the low end)
@@ -413,9 +415,23 @@ end
 -- Every worthwhile way to flip one item within Cap: buying the cheapest listings up to each price level, resold at
 -- the best price that should sell within 2/8/24 h. Resale speed is planned from the low end (PlanRateShare of the
 -- measured rate), since the estimate can be off and your own listings slow the market.
-function Core.FlipOptions(I, Cap)
+-- The least expected profit a flip must make: 4% of the flip budget, between 2s and 10s, so a small budget still
+-- gets small, safe flips.
+function Core.MinFlipProfitFor(Budget)
+	return math.max(200, math.min(Core.MinFlipProfit, math.floor(0.04 * (Budget or 0))))
+end
+
+-- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer).
+function Core.FlipStatus(I)
+	local S = Core.Status(I)
+	if S == "good" and (I.hoursSeen or 0) < Core.FlipMinHours then return "warming up" end
+	return S
+end
+
+function Core.FlipOptions(I, Cap, MinProfit)
 	local Out = {}
-	if Core.Status(I) ~= "good" or not Cap or Cap <= 0 then return Out end
+	MinProfit = MinProfit or Core.MinFlipProfit
+	if Core.FlipStatus(I) ~= "good" or not Cap or Cap <= 0 then return Out end
 	local Ladder = I.ladder
 	-- Only the cheapest price levels are kept; if more listings exist above them, the last kept level can't be
 	-- bought out (we wouldn't know what you'd be reselling under).
@@ -425,10 +441,13 @@ function Core.FlipOptions(I, Cap)
 	-- Other sellers' new listings land in front of yours too: resale speed is sales minus new listings when known.
 	local Net = Core.NetSpeed(I)
 	local J = setmetatable({ perHour = Net and math.max(0, Net) or (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
+	-- Never more than the cautious resale speed sells in FlipMaxHours: a big buy rides on that speed holding.
+	local MaxQty = math.floor(J.perHour * Core.FlipMaxHours)
+	local Chance = math.max(0.05, math.min(1, I.sellThrough or 1))
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
 		local P, Q = Ladder[Level][1], Ladder[Level][2]
-		local Take = math.min(Q, math.floor((Cap - Cost) / P))
+		local Take = math.min(Q, math.floor((Cap - Cost) / P), MaxQty - Qty)
 		if Take <= 0 then break end
 		Qty, Cost = Qty + Take, Cost + Take * P
 		-- What's left after buying: the rest of this level and everything above it.
@@ -442,9 +461,10 @@ function Core.FlipOptions(I, Cap)
 		local Under = Rest[1] and (Rest[1][1] - 1) or nil
 		local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest, Under)
 		if H then
-			local Profit = math.floor(Price * Qty * (1 - Core.Cut)) - Cost
-			if Profit >= Core.MinFlipProfit then
-				Out[#Out + 1] = { qty = Qty, buyQty = Qty, buyUpTo = P, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit }
+			-- Expected profit: only sellThrough of what you post sells, on average.
+			local Profit = math.floor(Price * Qty * (1 - Core.Cut) * Chance) - Cost
+			if Profit >= MinProfit then
+				Out[#Out + 1] = { qty = Qty, buyQty = Qty, buyUpTo = P, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit, chance = Chance }
 			end
 		end
 		if Take < Q then break end
@@ -455,7 +475,7 @@ end
 -- The best single flip for this item within its share of the budget.
 function Core.Flip(I, Budget)
 	local Best
-	for _, O in ipairs(Core.FlipOptions(I, Budget * Core.ItemShare(Budget))) do
+	for _, O in ipairs(Core.FlipOptions(I, Budget * Core.ItemShare(Budget), Core.MinFlipProfitFor(Budget))) do
 		if not Best or O.profit > Best.profit then Best = O end
 	end
 	return Best

@@ -211,7 +211,8 @@ def item_numbers(k, state, mk, now_ts):
     all_rows = state['hourly'].get(k, [])
     rows = [r for r in all_rows if len(r) > 6 and r[6] > 0]  # only hours that were compared with the one before
     sp = state['soldprices'].get(k, [])
-    hours = max(1.0, sum(r[6] for r in rows))
+    span_total = sum(r[6] for r in rows)
+    hours = span_total if span_total > 0 else 1.0
     sold_by_hour = [r[3] / r[6] for r in rows]
     recent = [(p, q * (2 if now_ts - t <= 86400 else 1)) for t, p, q in sp]  # last 24 h counts double
     med = wmedian(recent) if recent else None
@@ -219,7 +220,7 @@ def item_numbers(k, state, mk, now_ts):
     if sp:
         prices = sorted(p for _, p, q in sp for _ in range(max(1, min(int(round(q)), 50))))
         hi = prices[min(len(prices) - 1, int(len(prices) * 0.75))]
-    sold_total = sum(sold_by_hour)
+    sold_total = sum(r[3] for r in rows)  # quantities (perHour = sold / hours watched)
     exp_total = sum(r[5] for r in rows)
     sales = len(sp)
     med_hour = statistics.median(sold_by_hour) if sold_by_hour else 0

@@ -56,9 +56,16 @@ local function Say(Msg) print("|cffffd100AuctionForever:|r " .. Msg) end
 -- Scan.Version goes up whenever your auction data changes (a scan or lookup finished, a purchase), so lists that
 -- are expensive to work out (the AF Buy plan) are only redone when something changed.
 Scan.Version = 0
+local ReadReplicate
 local function Notify(Fn)
 	if Fn == "ScanDone" then Scan.Version = Scan.Version + 1 end
 	if AF.UI and AF.UI[Fn] then AF.UI[Fn]() end
+	-- A full listing arrived late while something else ran: read it now that it's done.
+	if Fn == "ScanDone" and Scan.LatePending then
+		C_Timer.After(0, function()
+			if Scan.LatePending and not Scan.Busy() and ReadReplicate then ReadReplicate(true) end
+		end)
+	end
 end
 
 -- { [price] = qty } -> cheapest LADDER levels { {price, qty, expiringQty}, ... }
@@ -371,7 +378,7 @@ function Scan.Start()
 	end
 	Mode = "full-wait"
 	Started = GetTime()
-	Scan.WaitGaveUp = nil
+	Scan.WaitGaveUp, Scan.LatePending = nil, nil
 	Scan.Progress, Scan.Sends = nil, 0
 	local Ticket = Started
 	SendReplicate(Ticket)
@@ -687,23 +694,31 @@ Events:RegisterEvent("COMMODITY_SEARCH_RESULTS_UPDATED")
 Events:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
 Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
 Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
+-- Start reading the full listing the server sent (Late: after we had stopped waiting for it).
+function ReadReplicate(Late)
+	local S = DB()
+	Scan.WaitGaveUp, Scan.LatePending = nil, nil
+	S.lastFull = time()
+	if Late then
+		Log({ time(), "answered late", math.floor(GetTime() - Started + 0.5), Scan.Sends })
+		Say("the server's full listing arrived after all; reading it.")
+	else
+		S.fullWait = GetTime() - Started
+		Log({ time(), "answered", math.floor(S.fullWait + 0.5), Scan.Sends })
+	end
+	Mode = "full"
+	Levels, Expiring, Count, Index = {}, {}, 0, 1
+	Total = C_AuctionHouse.GetNumReplicateItems()
+	Worker:SetScript("OnUpdate", FullStep)
+	Notify("ScanProgress")
+end
 Events:SetScript("OnEvent", function(_, Event, Arg)
-	local Late = Event == "REPLICATE_ITEM_LIST_UPDATE" and not Mode and Scan.WaitGaveUp and Started and GetTime() - Started < LATE_OK
-	if Event == "REPLICATE_ITEM_LIST_UPDATE" and (Mode == "full-wait" or Late) then
-		local S = DB()
-		Scan.WaitGaveUp = nil
-		S.lastFull = time()
-		if Late then
-			Log({ time(), "answered late", math.floor(GetTime() - Started + 0.5), Scan.Sends })
-			Say("the server's full listing arrived after all; reading it.")
-		else
-			S.fullWait = GetTime() - Started
-			Log({ time(), "answered", math.floor(S.fullWait + 0.5), Scan.Sends })
-		end
-		Mode = "full"
-		Levels, Expiring, Count, Index = {}, {}, 0, 1
-		Total = C_AuctionHouse.GetNumReplicateItems()
-		Worker:SetScript("OnUpdate", FullStep)
+	local LateOk = Event == "REPLICATE_ITEM_LIST_UPDATE" and Scan.WaitGaveUp and Started and GetTime() - Started < LATE_OK
+	if Event == "REPLICATE_ITEM_LIST_UPDATE" and (Mode == "full-wait" or (LateOk and not Mode)) then
+		ReadReplicate(Mode ~= "full-wait")
+	elseif LateOk and Mode ~= "full" then
+		-- Another scan or price check is running: read the late listing as soon as it finishes.
+		Scan.LatePending = true
 	elseif Event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
 		if Mode == "lookup" then Scan.QuickSend() end
 	elseif Event == "COMMODITY_SEARCH_RESULTS_UPDATED" then

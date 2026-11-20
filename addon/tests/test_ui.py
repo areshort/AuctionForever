@@ -691,6 +691,16 @@ log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
 ok(log is not None and log[2] == 'answered late', 'a late answer is still read: ' + str(log and log[2]))
 X('for k = 1, 50 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
 ok(not L('AF_NS.Scan.Busy()'), 'the late listing is read to the end')
+# A late answer while a price check runs: kept and read right after the check, not dropped.
+X('AF_NS.Scan.WaitGaveUp = true; LateLogN = #AuctionForeverDB.scanlog; LookupStarted = AF_NS.Scan.Lookup({ 2589 }, true)')
+ok(L('LookupStarted') == True and L('AF_NS.Scan.Busy()'), 'a price check is running')
+X('FireEvent("REPLICATE_ITEM_LIST_UPDATE")')
+ok(L('#AuctionForeverDB.scanlog') == L('LateLogN') and L('AF_NS.Scan.LatePending') == True, 'late answer during the check: remembered, not read yet')
+X('for k = 1, 40 do AdvanceTime(0.5); for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
+log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
+ok(log is not None and log[2] == 'answered late' and L('#AuctionForeverDB.scanlog') == L('LateLogN') + 1, 'read after the check finished: ' + str(log and log[2]))
+X('for k = 1, 50 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
+ok(not L('AF_NS.Scan.Busy()') and not L('AF_NS.Scan.LatePending'), 'and read to the end')
 # Deposit from the game decides between durations (commodities).
 X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
   C_AuctionHouse.CalculateCommodityDeposit = function(id, idx, q) return idx * 1000 * q end
@@ -769,6 +779,23 @@ tl2 = [(tg[i].id, tg[i].plan) for i in range(1, int(L('#AF_NS.UI.FlipTargets()')
 ok(tl2[-1] == (4306, False), f'AF Buy also lists targets your gold cannot reach yet, last: {tl2}')
 need = L('(function() for _, E in ipairs(AF_NS.UI.FlipTargets()) do if E.id == 4306 then return E.need end end end)()')
 ok(need is not None and abs(need - L('AF_NS.Core.GoldFor(7500)')) <= 1, f'a target shows the gold it needs: {need}')
+# An option that fits your budget counts as buyable even when it only came from the any-gold list.
+X("""MinSeen = {}
+  local Prev = AF_NS.Core.FlipOptions
+  AF_NS.Core.FlipOptions = function(I, Cap, Min)
+    MinSeen[#MinSeen + 1] = Min
+    if I.id == 2592 then
+      if Cap == math.huge then return { { qty = 20, buyQty = 20, buyUpTo = 60, cost = 1200, resell = 120, hours = 2, durationIndex = 1, profit = 1080 } } end
+      return {}
+    end
+    return Prev(I, Cap, Min)
+  end
+  AF_NS.UI.ResetBudget(); AF_NS.Scan.Version = AF_NS.Scan.Version + 1 -- not the cached list
+  for _, E in ipairs(AF_NS.UI.FlipTargets()) do if E.id == 2592 then Row2592 = E end end
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  AF_NS.Core.FlipOptions = Prev""")
+ok(L('Row2592 ~= nil and Row2592.now[Row2592.best] == true'), 'an any-gold option within your budget is buyable now (no "at X gold")')
+ok(len(L('MinSeen')) > 0 and all(m == L('AF_NS.Core.MinFlipProfitFor(AF_NS.UI.FlipBudget())') for m in L('MinSeen').values()), f"every option search uses your budget's minimum profit ({set(L('MinSeen').values())})")
 X("""AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SetBuySort("gold")""")
 order = [L(f'AF_NS.Trade.Rows()[{i}].need') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
 ok(order == sorted(order), f'sort by gold needed: lowest first {order}')
