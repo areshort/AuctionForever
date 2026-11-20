@@ -174,6 +174,7 @@ function B.UpdateIcon(Icon, Details, Only)
 	local Where = Status(ID, Bound)
 	if Where == nil then Later(ID, Bound) return false end
 	if Only and Where ~= Only then return false end
+	if Details.quality == POOR then return false end -- grey items: left to the junk sellers (Leatrix, RXP)
 	if Where == "Auction" then
 		Draw(Icon, Choice("auction"))
 		return true
@@ -197,6 +198,8 @@ function B.IsJunk(BagID, SlotID, ID, Link)
 			Bound = Ok and Yes == true
 		end
 	end
+	local Quality = select(3, C_Item.GetItemInfo(Link))
+	if Quality == POOR then return false end -- grey items: left to the junk sellers (Leatrix, RXP)
 	local Where = Status(ID, Bound)
 	if Where == nil then Later(ID, Bound) return false end
 	return Where == "Vendor"

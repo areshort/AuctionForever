@@ -119,7 +119,7 @@ for i in (9001, 9002, 9006):
 # AF draws both icons itself: the chosen purse for vendor items, the chosen auction icon.
 ok(L('Icon(9001)') == 'auction', 'Rec Auction: auction icon')
 ok(L('Icon(9002)') == 'coin', 'Rec Vendor: the vendor (purse) icon')
-ok(L('Icon(9006)') is None, "grey vendor item: no second icon (Baganator's junk icon, now the purse, shows it)")
+ok(L('Icon(9006)') is None, "grey item: no AuctionForever icon (left to the junk sellers)")
 ok(L('Icon(9007)') is None, 'no recommendation: no icon')
 ok(L('Icon(9004)') is None, 'quest item: no icon even with an AH price')
 ok(L('Icon(9005, { isBound = true })') is None and L('Icon(9005)') == 'auction', 'soulbound copy: no icon (unbound copy: auction)')
@@ -145,7 +145,7 @@ ok(L('W("auctionforever", 9002)') is None and L('W("auctionforever_vendor", 9002
 X('JUNK_SOURCE = "auctionforever"')
 ok(L('W("auctionforever_vendor", 9002)') is None, "AF is the junk source and Baganator's junk icon is on: it shows the vendor icon, no second one")
 X('JUNK_ICON_ON = false')
-ok(L('W("auctionforever_vendor", 9002)') is not None and L('W("auctionforever_vendor", 9006)') is not None, "Baganator's junk icon turned off: AF draws the vendor icon itself")
+ok(L('W("auctionforever_vendor", 9002)') is not None and L('W("auctionforever_vendor", 9006)') is None, "Baganator's junk icon turned off: AF draws the vendor icon itself (not on greys)")
 X('JUNK_ICON_ON = nil; JUNK_SOURCE = "poor_quality"')
 ok(L('AF_NS.Bags.DEFAULT.vendor') == 6 and L('AF_NS.Bags.DEFAULT.auction') == 2, 'defaults: vendor 6, auction 2 (your picks)')
 X('AuctionForeverDB.icons = { vendor = 2 }; AuctionForeverDB.iconsVersion = nil')
@@ -164,7 +164,7 @@ X('AuctionForeverDB.icons = nil')
 ok(L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction', 'defaults: first choice of each')
 
 # Junk callback.
-ok(L('Junk(9002)') is True and L('Junk(9006)') is True, 'junk source: vendor items are junk (greys too)')
+ok(L('Junk(9002)') is True and L('Junk(9006)') is False, 'junk source: vendor items are junk; greys are skipped')
 ok(L('Junk(9001)') is False, 'auction item: not junk (the sell button must not vendor it)')
 ok(L('Junk(9004)') is False and L('Junk(9007)') is False, 'quest item / no price: not junk')
 X('ItemLocation = { CreateFromBagAndSlot = function(_, b, s) return { b = b, s = s } end }; C_Item.IsBound = function(loc) return loc.s == 3 end')
