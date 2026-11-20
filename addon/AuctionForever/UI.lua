@@ -812,23 +812,33 @@ end
 -- Tooltips -------------------------------------------------------------------------------------------------------
 function L.TooltipLines(id)
 	local I = Core.Info(id)
-	if not I then return nil end
+	local V = Vendor(id)
+	if not I and V <= 0 then return nil end
 	local Lines = {}
-	local S = Core.Status(I)
-	Lines[#Lines + 1] = { "Recent selling price", Core.Money(I.med) }
-	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) .. ((I.scanHours and I.scanHours > 0) and " (incl. your scans)" or "") }
-	Lines[#Lines + 1] = { "Lowest listed", (I.low and Core.Money(I.low) or "-") .. string.format(" (%d listed)", I.qty or 0) }
-	if S == "good" then
-		local H, _, Price = Core.ChooseDuration(I, 1)
-		if H then Lines[#Lines + 1] = { "Post at", "|cff1eff00" .. Core.Money(Price) .. ", " .. H .. " h|r" } end
-	else
-		Lines[#Lines + 1] = { "Status", StatusText(S) }
-	end
-	if I.mySold or I.myExpired then
+	-- Always: vendor price, AH price and which one to use (per item, in coin colors).
+	Lines[#Lines + 1] = { "Vendor", V > 0 and Core.MoneyColor(V) or "-" }
+	Lines[#Lines + 1] = { "AH", I and Core.Market(I) and Core.MoneyColor(Core.Market(I)) or "no data" }
+	local R = Core.Recommend(I, V)
+	Lines[#Lines + 1] = { "Rec", R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-" }
+	if I and (I.mySold or I.myExpired) then
 		local Parts = {}
-		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.Money(I.mySoldValue)) end
+		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.MoneyColor(I.mySoldValue)) end
 		if I.myExpired then Parts[#Parts + 1] = string.format("%d expired", I.myExpired) end
 		Lines[#Lines + 1] = { "Your auctions, " .. Core.MySalesDays .. " days", table.concat(Parts, ", ") }
+	end
+	if not IsShiftKeyDown() then
+		Lines[#Lines + 1] = { "|cff808080Shift: details|r", "" }
+		return Lines
+	end
+	if not I then return Lines end
+	local S = Core.Status(I)
+	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) .. ((I.scanHours and I.scanHours > 0) and " (incl. your scans)" or "") }
+	Lines[#Lines + 1] = { "Lowest listed", (I.low and Core.MoneyColor(I.low) or "-") .. string.format(" (%d listed)", I.qty or 0) }
+	if S == "good" then
+		local H, _, Price = Core.ChooseDuration(I, 1)
+		if H then Lines[#Lines + 1] = { "Post at", Core.MoneyColor(Price) .. ", " .. H .. " h" } end
+	else
+		Lines[#Lines + 1] = { "Status", StatusText(S) }
 	end
 	return Lines
 end

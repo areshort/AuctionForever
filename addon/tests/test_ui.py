@@ -578,6 +578,27 @@ ok('You sold 40' in tl, 'tooltip shows your own sales: ' + tl)
 X("time = function() return 1800000000 + 4 * 86400 end")
 ok(L('AF_NS.Core.Info(2589).mySold') in (None, 0), 'own sales older than 3 days drop out of the tooltip count')
 
+# Tooltip: Vendor, AH and Rec first, money in gold/silver/copper colors; details only with Shift.
+mc = L('AF_NS.Core.MoneyColor(10203)')
+ok('|cffffd7001g|r' in mc and '|cffc7c7cf02s|r' in mc and '|cffeda55f03c|r' in mc, 'money in coin colors: ' + mc)
+ok(L('AF_NS.Core.MoneyColor(5)') == '|cffeda55f5c|r' and L('AF_NS.Core.MoneyColor(nil)') == '-', 'copper only; no price shows "-"')
+tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
+ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
+ok(len(tl) == 4 and 'Shift' in str(tl[3][0]), 'without Shift: just the three lines and a Shift hint')
+X('IsShiftKeyDown = function() return true end')
+tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ok(len(tl2) > 4 and any('Sells' == r[0] for r in tl2), 'with Shift: details shown too')
+X('IsShiftKeyDown = function() return false end')
+# Vendor wins when the AH, after the 5% cut, pays no more than the vendor.
+X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')
+tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ok('Vendor' in str(tl3[2][1]), 'vendor pays more: Rec Vendor: ' + str(tl3[2][1]))
+X('C_Item.GetItemInfo = OldInfo')
+# An item with no AH data at all still shows its vendor price and Rec Vendor.
+tl4 = L('AF_NS.UI.TooltipLines(424242)')
+ok(tl4 is not None and 'Vendor' in str(list(tl4[3].values())[1]), 'no AH data: vendor price shown, Rec Vendor')
+
 # /af selftest runs end to end in the mock (auction house open), saves results, and finds no problems.
 X('AuctionHouseFrame:Show(); AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.selftest = nil')
 X('STok, STerr = pcall(function() SlashCmdList.AUCTIONFOREVER("selftest"); for i = 1, 10 do RunTimers() end end)')

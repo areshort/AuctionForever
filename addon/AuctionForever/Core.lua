@@ -340,6 +340,36 @@ function Core.LootValue(I, Qty, Vendor)
 end
 
 -- "1g 02s 05c" style text.
+-- Money in Blizzard's coin colors: "1g 02s 03c" with gold, silver and copper colored parts.
+local GOLD, SILVER, COPPER = "|cffffd700", "|cffc7c7cf", "|cffeda55f"
+function Core.MoneyColor(C)
+	if not C then return "-" end
+	C = math.floor(C + 0.5)
+	local G, S, Cp = math.floor(C / 10000), math.floor(C / 100) % 100, C % 100
+	local P = {}
+	if G > 0 then P[#P + 1] = GOLD .. G .. "g|r" end
+	if G > 0 then P[#P + 1] = SILVER .. string.format("%02d", S) .. "s|r"
+	elseif S > 0 then P[#P + 1] = SILVER .. S .. "s|r" end
+	if G > 0 or S > 0 then P[#P + 1] = COPPER .. string.format("%02d", Cp) .. "c|r"
+	else P[#P + 1] = COPPER .. Cp .. "c|r" end
+	return table.concat(P, " ")
+end
+
+-- Sell to the vendor or on the auction house? Returns "Auction" or "Vendor" (nil when neither has a price),
+-- comparing what the AH pays after its cut with the vendor price, and only trusting the AH when the item sells.
+function Core.Recommend(I, Vendor)
+	Vendor = Vendor or 0
+	local Price = I and Core.Market(I)
+	if not Price then return Vendor > 0 and "Vendor" or nil end
+	local Net = Price * (1 - Core.Cut)
+	if Net <= Vendor then return "Vendor" end
+	local S = Core.Status(I)
+	if S == "good" or S == "early" then return "Auction" end
+	-- Not a proven seller: worth the AH only if it pays clearly more than the vendor (or the vendor pays nothing).
+	if Vendor == 0 or Net >= 1.5 * Vendor then return "Auction" end
+	return "Vendor"
+end
+
 function Core.Money(C)
 	if not C then return "-" end
 	C = math.floor(C + 0.5)
