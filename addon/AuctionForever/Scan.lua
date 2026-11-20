@@ -35,9 +35,10 @@ local function ToLadder(L, E)
 	return Out
 end
 
--- What we compare against: your previous scan when it's newer than the cloud data, else the cloud snapshot.
+-- What we compare against: your last measuring scan when it's newer than the cloud data, else the cloud snapshot.
+-- (A scan too soon after it only refreshes prices; it doesn't become the new starting point.)
 local function Baseline(id, Now)
-	local D, Prev = AuctionForeverData, DB().fresh
+	local D, Prev = AuctionForeverData, DB().base
 	if Prev and Prev.items and (not (type(D) == "table" and D.time) or Prev.time > D.time) then
 		local F = Prev.items[id]
 		return F and F[3] or {}, Prev.time
@@ -70,7 +71,7 @@ function Scan.Finish(L, E, Now)
 	-- (every missing item would look sold out).
 	local Mine, Theirs = 0, 0
 	for _ in pairs(Seen) do Mine = Mine + 1 end
-	local BaseItems = (Store.fresh and Store.fresh.items) or (type(D) == "table" and D.items) or {}
+	local BaseItems = (Store.base and Store.base.items) or (type(D) == "table" and D.items) or {}
 	for _ in pairs(BaseItems) do Theirs = Theirs + 1 end
 	if Theirs > 0 and Mine < 0.7 * Theirs then
 		Store.fresh = { time = Now, items = Items }
@@ -80,11 +81,13 @@ function Scan.Finish(L, E, Now)
 	local Check = {}
 	for id in pairs(Seen) do Check[id] = true end
 	if type(D) == "table" and D.items then for id in pairs(D.items) do Check[id] = true end end
-	if Store.fresh and Store.fresh.items then for id in pairs(Store.fresh.items) do Check[id] = true end end
+	if Store.base and Store.base.items then for id in pairs(Store.base.items) do Check[id] = true end end
+	local TooSoon = false
 	for id in pairs(Check) do
 		local Before, BaseTime = Baseline(id, Now)
 		if Before and BaseTime then
 			local H = (Now - BaseTime) / 3600
+			if H < MIN_GAP then TooSoon = true end
 			if H >= MIN_GAP and H <= 6 then
 				Gap = H
 				local Sold, Value, Lv, Hi = Core.CompareLadders(Before, L[id] or {})
@@ -99,7 +102,9 @@ function Scan.Finish(L, E, Now)
 		end
 	end
 	Store.fresh = { time = Now, items = Items }
-	return Gap, Measured
+	-- Becomes the next starting point when it measured sales, or when there was nothing recent to compare with.
+	if Gap or not TooSoon then Store.base = Store.fresh end
+	return Gap, Measured, false, TooSoon
 end
 
 local Worker = CreateFrame("Frame")
@@ -125,7 +130,7 @@ local function Step()
 	if AF.UI and AF.UI.ScanProgress then AF.UI.ScanProgress() end
 	if Index > Total then
 		Worker:SetScript("OnUpdate", nil)
-		local Gap, Measured, Partial = Scan.Finish(Levels, Expiring, time())
+		local Gap, Measured, Partial, TooSoon = Scan.Finish(Levels, Expiring, time())
 		Busy = false
 		local Took = GetTime() - Started
 		if Partial then
@@ -133,7 +138,9 @@ local function Step()
 		elseif Gap then
 			Say(string.format("scanned %d listings in %.0f s. Sales measured over the last %d min: %d items sold something.", Count, Took, math.floor(Gap * 60 + 0.5), Measured))
 		else
-			Say(string.format("scanned %d listings in %.0f s. Prices updated; scan again in 15+ min to measure sales.", Count, Took))
+			local Base = DB().base
+			local Wait = (TooSoon and Base and Base.time) and math.max(1, math.ceil(15 - (time() - Base.time) / 60)) or 15
+			Say(string.format("scanned %d listings in %.0f s. Prices updated; sales are measured on a scan %d+ min from now.", Count, Took, Wait))
 		end
 		Levels, Expiring = nil, nil
 		if AF.UI and AF.UI.ScanDone then AF.UI.ScanDone() end
@@ -148,6 +155,14 @@ function Scan.Start()
 	Waiting = true
 	Started = GetTime()
 	C_AuctionHouse.ReplicateItems()
+	local Ticket = Started
+	C_Timer.After(60, function()
+		if Waiting and Started == Ticket then
+			Waiting = false
+			Say("the server didn't send the listing within 60 s. Full scans may be limited to one every 15 min; try again later.")
+			if AF.UI and AF.UI.ScanDone then AF.UI.ScanDone() end
+		end
+	end)
 	Say("scanning the auction house...")
 end
 

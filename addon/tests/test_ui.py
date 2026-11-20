@@ -129,11 +129,33 @@ if real:
     I = L('AF_NS.Core.Info(2589)')
     ok(I.fromScan and I.perHour > 0, f'Linen now shows {I.perHour:.0f}/h, status {L("AF_NS.Core.Status(AF_NS.Core.Info(2589))")}')
     ok('scanned' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
+    X("""function PumpScan(At)
+      time = function() return AuctionForeverData.time + At end
+      AuctionForeverScanButton:GetScript("OnClick")(); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+      for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end
+    end""")
+    # Scan again only 5 min later, after buyers cleared Linen's cheapest level: prices refresh, no measurement, starting point kept.
+    X('for _, E in ipairs(Listings) do if E[1] == 2589 and E[2] > 0 then Bought2 = E[2]; E[2] = 0; break end end')
+    X('PumpScan(2700)')
+    ok(len(list(L('AuctionForeverDB.obs[2589]').values())) == 1 and L('AuctionForeverDB.base.time') == L('AuctionForeverData.time + 2400'),
+       'scan 5 min later: no measurement, starting point stays at the earlier scan')
+    ok(L('AuctionForeverDB.fresh.time') == L('AuctionForeverData.time + 2700'), 'scan 5 min later: prices refreshed')
+    ok('min from now' in str(L('LastPrint')), 'tells you when to scan: ' + str(L('LastPrint')))
+    # 20 min after the starting point: measured against it (not the 5-min scan), so that purchase is counted.
+    X('PumpScan(3600)')
+    o2 = L('AuctionForeverDB.obs[2589][2]')
+    ok(o2 is not None and abs(o2[2] - 1200 / 3600) < 1e-6 and o2[3] == L('Bought2'), f'scan 20 min after the start: {o2 and o2[3]} sold over {o2 and round(o2[2]*60)} min')
+    ok(L('AuctionForeverDB.base.time') == L('AuctionForeverData.time + 3600'), 'that scan becomes the new starting point')
+    # Server never answers: after 60 s the button resets with a message.
+    X('local R = C_AuctionHouse.ReplicateItems; C_AuctionHouse.ReplicateItems = function() end; time = function() return AuctionForeverData.time + 9000 end; AuctionForeverScanButton:GetScript("OnClick")(); C_AuctionHouse.ReplicateItems = R')
+    ok(L('AF_NS.Scan.Busy()') and 'Waiting' in str(L('AuctionForeverScanButton:GetText()')), 'waiting for the server: ' + str(L('AuctionForeverScanButton:GetText()')))
+    X('RunTimers()')
+    ok(not L('AF_NS.Scan.Busy()') and "didn't send" in str(L('LastPrint')) and L('AuctionForeverScanButton:GetText()') == 'AuctionForever Scan', 'no answer in 60 s: button resets, message shown')
     # Incomplete scan: only a handful of items comes back
-    X("""time = function() return AuctionForeverData.time + 4800 end; Listings = { Listings[1], Listings[2] }
+    X("""time = function() return AuctionForeverData.time + 12000 end; Listings = { Listings[1], Listings[2] }
     AuctionForeverScanButton:GetScript("OnClick")(); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
     for _ = 1, 100 do if not AF_NS.Scan.Busy() then break end for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end""")
-    ok('incomplete' in str(L('LastPrint')) and len(list(L('AuctionForeverDB.obs[2589]').values())) == 1, 'incomplete scan: prices kept, no fake sales')
+    ok('incomplete' in str(L('LastPrint')) and len(list(L('AuctionForeverDB.obs[2589]').values())) == 2, 'incomplete scan: prices kept, no fake sales')
 
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

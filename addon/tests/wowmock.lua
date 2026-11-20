@@ -62,7 +62,9 @@ function PanelTemplates_TabResize() end
 Money = 2000000
 function GetMoney() return Money end
 function GetRealZoneText() return "Arathi Highlands" end
-C_Timer = { After = function(_, fn) fn() end }
+Timers = {}
+C_Timer = { After = function(_, fn) table.insert(Timers, fn) end }
+function RunTimers() local T = Timers; Timers = {}; for _, fn in ipairs(T) do fn() end end
 LOOT_ITEM_SELF = "You receive loot: %s."
 LOOT_ITEM_SELF_MULTIPLE = "You receive loot: %sx%d."
 GOLD_AMOUNT = "%d Gold"; SILVER_AMOUNT = "%d Silver"; COPPER_AMOUNT = "%d Copper"
