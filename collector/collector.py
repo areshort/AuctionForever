@@ -47,6 +47,44 @@ def _get(path, tok, tries=3):
             time.sleep(10 * (i + 1))
 
 
+NAMES_PER_RUN = 4000  # item names looked up per run at most (the first run fills most; the rest follow next run)
+
+
+def fetch_names(ids, tok=None):
+    """Item names from the static game data, {id: name}; items Blizzard doesn't know get "" so they aren't retried."""
+    from concurrent.futures import ThreadPoolExecutor
+    tok = tok or _token()
+
+    def one(i):
+        url = f'https://{REGION}.api.blizzard.com/data/wow/item/{i}?namespace=static-forever-{REGION}&locale=en_US'
+        for t in range(3):
+            try:
+                req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok})
+                return i, json.load(urllib.request.urlopen(req, timeout=30)).get('name') or ''
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return i, ''
+                time.sleep(2 * (t + 1))  # 429 / 5xx: wait and retry
+            except (urllib.error.URLError, TimeoutError):
+                time.sleep(2 * (t + 1))
+        return i, None  # still failing: try again next run
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        return {i: n for i, n in pool.map(one, ids) if n is not None}
+
+
+def update_names(state, mk, names_fn):
+    """Add names for listed items that don't have one yet. Returns how many were added."""
+    have = state.setdefault('names', {})
+    missing = sorted({str(i) for i in mk} - set(have), key=int)[:NAMES_PER_RUN]
+    if not missing or not names_fn:
+        return 0
+    got = names_fn([int(k) for k in missing])
+    for i, n in got.items():
+        have[str(i)] = n
+    return len(got)
+
+
 def fetch():
     tok = _token()
     items = _get(f'/data/wow/ruleset/{RULESET}/auctions/{HOUSE}', tok).get('auctions') or []
@@ -220,16 +258,20 @@ FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'h
 
 def write_lua(path, state, mk, now_ts):
     keys = set(state['hourly']) | {str(i) for i in mk}
-    parts = []
+    parts, names = [], []
+    have = state.get('names', {})
     for k in sorted(keys, key=int):
         n = item_numbers(k, state, mk, now_ts)
         if not n['low'] and not n['sales']:
             continue
         row = [n[f] for f in FIELDS] + [n['ladder'][:12]]
         parts.append(f'[{k}]={lua(row)}')
+        if have.get(k):
+            names.append(f'[{k}]={lua(have[k])}')
     body = (f'-- Written by the AuctionForever collector. Do not edit.\n'
             f'AuctionForeverData = {{v=1,house={HOUSE},time={int(now_ts)},hours={round(sum(c[1] for c in state.get("compared", [])), 1)},\n'
-            f'fields={lua(FIELDS + ["ladder"])},\nitems={{\n' + ',\n'.join(parts) + '\n}}\n')
+            f'fields={lua(FIELDS + ["ladder"])},\nitems={{\n' + ',\n'.join(parts) + '\n},\n'
+            'names={\n' + ',\n'.join(names) + '\n}}\n')
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         f.write(body)
@@ -252,21 +294,23 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
-def run(state_path, out_path, items=None, goods=None, now_ts=None):
+def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None):
     now_ts = now_ts or time.time()
     if items is None:
         items, goods = fetch()
+        names_fn = names_fn or fetch_names
     state = load_state(state_path)
     now = listings(items, goods)
     prev = state.get('listings')
     if prev is not None and prev == now:
         # Blizzard hasn't published a new snapshot yet: change nothing, so this isn't counted as an hour of no sales.
-        if state.get('fmt') != FMT:
+        added = update_names(state, market(now), names_fn)
+        if state.get('fmt') != FMT or added:
             # ...but a data file written by an older collector is rewritten right away in the current format.
             state['fmt'] = FMT
             save_state(state_path, state)
             n = write_lua(out_path, state, market(now), state['time'])
-            print(f'house {HOUSE}: no new snapshot yet; data file rewritten in the current format ({n} items)')
+            print(f'house {HOUSE}: no new snapshot yet; data file rewritten ({n} items, {added} new names)')
             return True
         print(f'house {HOUSE}: no new snapshot yet ({len(now)} listings unchanged)')
         return False
@@ -281,6 +325,7 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None):
         hours_for_rate = hours
     ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
     mk = market(now)
+    added = update_names(state, mk, names_fn)
     span = hours_for_rate or 0
     update_history(state, now_ts, mk, ev, span)
     # Hours of sales watched in the kept window, shown by the add-on as "based on N h of sales".
@@ -293,7 +338,7 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None):
     state['timed'] = bool(prev) and hours is not None and hours < 3
     save_state(state_path, state)
     n = write_lua(out_path, state, mk, now_ts)
-    print(f'house {HOUSE}: {len(now)} listings, {len(ev)} items changed, {n} items written')
+    print(f'house {HOUSE}: {len(now)} listings, {len(ev)} items changed, {n} items written, {added} new names')
     return True
 
 

@@ -61,5 +61,22 @@ ok(all(r[0] >= 1_003_600 + 73 * 3600 - 72 * 3600 for r in s['hourly']['17']), 'r
 ok(len(s.get('daily', {}).get('17', [])) >= 1, 'daily summary kept for a finished day')
 n = C.item_numbers('17', s, C.market(C.listings([], g3)), 1_007_200 + 73 * 3600)
 ok(n['low'] == 110 and n['qty'] == 5, 'numbers: current lowest and quantity')
+# Item names: looked up once for new items, written into the data file, never asked again.
+asked = []
+def fake_names(ids):
+    asked.extend(ids)
+    return {i: ('Linen "Cloth"' if i == 17 else '') for i in ids}
+st2, out2 = os.path.join(d, 'n_state.json.gz'), os.path.join(d, 'n_data.lua')
+C.run(st2, out2, [], g1, now_ts=2_000_000, names_fn=fake_names)
+body = open(out2, encoding='utf-8').read()
+ok('names={' in body and '[17]="Linen \\"Cloth\\""' in body, 'names written into the data file (quotes escaped)')
+first = len(asked)
+C.run(st2, out2, [], g2, now_ts=2_003_600, names_fn=fake_names)
+ok(first > 0 and all(i not in asked[first:] for i in asked[:first]), 'known names are not looked up again')
+# Unchanged snapshot but names missing (e.g. first run after this update): names added and the file rewritten.
+st3, out3 = os.path.join(d, 'm_state.json.gz'), os.path.join(d, 'm_data.lua')
+C.run(st3, out3, [], g1, now_ts=3_000_000)
+ok(C.run(st3, out3, [], g1, now_ts=3_001_800, names_fn=fake_names) is True and 'Linen' in open(out3, encoding='utf-8').read(),
+   'unchanged snapshot: missing names still added and written')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
