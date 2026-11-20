@@ -28,9 +28,23 @@ local function IsStale(id)
 	local W = FreshTime(id)
 	return not W or time() - W > STALE
 end
+-- Fresh prices for these items. If another scan or lookup is running, wait for it and check right after
+-- (the latest request wins), instead of silently doing nothing.
+local Pending
 local function Recheck(Ids, Done)
-	if #Ids == 0 or Scan.Busy() then return false end
+	if #Ids == 0 then return false end
+	if Scan.Busy() then Pending = { Ids, Done } return true end
 	return Scan.Lookup(Ids, true, Done)
+end
+function T.OnScanDone()
+	if not Pending then return end
+	-- Let whatever just finished run its own follow-up first (e.g. a quick scan's busy-item lookups).
+	C_Timer.After(0.1, function()
+		if not Pending or Scan.Busy() then return end
+		local P = Pending
+		Pending = nil
+		if not Scan.Lookup(P[1], true, P[2]) and P[2] then P[2]() end
+	end)
 end
 local function NameText(id)
 	local Name, Quality = UI().ItemName(id)

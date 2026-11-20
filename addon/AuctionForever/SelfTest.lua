@@ -152,6 +152,21 @@ local function Safe(Name, Fn, ...)
 	return Ok
 end
 
+local function CheckFlips()
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" then return end
+	local Budget = AF.Core.Budget(GetMoney())
+	local Found, Hidden, Unknown = 0, 0, 0
+	for id in pairs(D.items) do
+		if AF.Core.Flip(AF.Core.Info(id), Budget) then
+			if AF.UI.Stacks(id) then Found = Found + 1 else Hidden = Hidden + 1 end
+			if not (C_Item.GetItemMaxStackSizeByID and C_Item.GetItemMaxStackSizeByID(id)) then Unknown = Unknown + 1 end
+		end
+	end
+	Add(nil, string.format("AF Buy: %d flips with budget %s; %d hidden as non-stacking; %d had no loaded stack size",
+		Found, AF.Core.Money(Budget), Hidden, Unknown))
+end
+
 function T.Run()
 	Lines, Fails, Started = {}, 0, GetTime()
 	local Version = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("AuctionForever", "Version") or "?"
@@ -160,6 +175,7 @@ function T.Run()
 	Safe("taint", CheckTaint)
 	Safe("data", CheckData)
 	Safe("window", CheckWindow)
+	Safe("flips", CheckFlips)
 	if AuctionHouseFrame and AuctionHouseFrame:IsShown() then
 		Safe("tab", CheckTab)
 		if not Safe("lookup", CheckLookup, Finish) then Finish() end

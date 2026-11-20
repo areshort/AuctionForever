@@ -83,9 +83,14 @@ local function IsReagent(id)
 	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
 	return ClassID == 7 -- Trade Goods
 end
+-- Does the item stack? The stack size is only known once the game has loaded the item, so until then decide from
+-- its type, which the game always knows: weapons and armor don't stack, trade goods, consumables etc. do.
 local function Stacks(id)
 	local Max = C_Item.GetItemMaxStackSizeByID and C_Item.GetItemMaxStackSizeByID(id)
-	return (Max or 1) > 1
+	if Max then return Max > 1 end
+	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
+	if not ClassID then return false end
+	return ClassID ~= 2 and ClassID ~= 4 -- 2 = weapon, 4 = armor
 end
 local function Vendor(id)
 	local _, _, _, _, _, _, _, _, _, _, Sell = C_Item.GetItemInfo(id)
@@ -138,7 +143,9 @@ end
 
 -- Why the Flip list is empty, in one line.
 function L.FlipEmptyReason()
-	if Core.Budget(GetMoney()) <= 0 then return "No flip budget: you need more than 1 gold." end
+	local Budget = Core.Budget(GetMoney())
+	if Budget <= 0 then return "No flip budget: you need more than 1 gold." end
+	local Head = string.format("Flip budget %s (half your gold, keeping 1g; up to %s per item).\n", Core.Money(Budget), Core.Money(Budget * Core.ItemBudgetShare))
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
 	local N = {}
@@ -147,9 +154,9 @@ function L.FlipEmptyReason()
 		N[S] = (N[S] or 0) + 1
 	end
 	if (N.good or 0) == 0 then
-		return string.format("No flips yet: no item has enough measured sales (%d warming up).\nScan at the auction house (AuctionForever tab), then again 15+ min later.", N["warming up"] or 0)
+		return Head .. string.format("No flips yet: no item has enough measured sales (%d warming up).\nScan at the auction house (AuctionForever tab), then again 15+ min later.", N["warming up"] or 0)
 	end
-	return string.format("%d steady sellers, but none has a listing cheap enough to\nflip for 10s+ profit right now. Quick Scan for fresh prices.", N.good)
+	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for 10s+ profit within that budget right now.", N.good)
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
@@ -750,6 +757,7 @@ function L.ScanProgress()
 	P.Bar:SetValue(F or 0)
 end
 function L.ScanDone()
+	if AF.Trade and AF.Trade.OnScanDone then AF.Trade.OnScanDone() end
 	if AH.Panel then AH.Panel.Bar:Hide(); AH.Panel.QuickInfo:Show() end
 	L.RefreshAHPanel()
 	if Frame and Frame:IsShown() then L.Load() end

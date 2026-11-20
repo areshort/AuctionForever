@@ -252,14 +252,18 @@ function Scan.Status()
 		local F = WAIT_SHARE + (1 - WAIT_SHARE) * R
 		return string.format("Full scan: %d%% (reading %s of %s listings)", F * 100, Commas(Done), Commas(Total or 0)), F
 	elseif Mode == "browse" and BQ_STATE then
+		-- One bar for the whole quick scan: reading prices fills the first 80%, the busy-item lookups the rest.
 		local E = math.max(1, BQ_STATE.expected or 1)
-		local F = BQ_STATE.gotFirst and math.min(0.99, BQ_STATE.n / E) or nil
-		if not BQ_STATE.gotFirst then return "Quick scan: waiting for the server...", nil end
-		return string.format("Quick scan: %d items read (%d%%)", BQ_STATE.n, F * 100), F
+		if not BQ_STATE.gotFirst then return "Quick scan: 0% (waiting for the server)", 0 end
+		local F = 0.8 * math.min(0.99, BQ_STATE.n / E)
+		return string.format("Quick scan: %d%% (%d items read)", F * 100, BQ_STATE.n), F
 	elseif Mode == "lookup" and Q then
 		local Done = math.max(0, Q.i - 1)
 		local F = #Q.ids > 0 and Done / #Q.ids or 1
-		if Q.phase == "busy" then return string.format("Quick scan: checking busy items %d of %d (%d%%)", Done, #Q.ids, F * 100), F end
+		if Q.phase == "busy" then
+			local B = 0.8 + 0.2 * F
+			return string.format("Quick scan: %d%% (checking busy items %d of %d)", B * 100, Done, #Q.ids), B
+		end
 		return string.format("Looking up items %d of %d (%d%%)", Done, #Q.ids, F * 100), F
 	end
 	return nil, nil
