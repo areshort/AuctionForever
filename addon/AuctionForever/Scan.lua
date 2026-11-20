@@ -267,10 +267,17 @@ function Scan.FinishFull(L, E, Now)
 end
 
 local Worker = CreateFrame("Frame")
-local function FullStep()
+-- The server may still be sending the listing when it first says it's ready: the count is checked again while
+-- reading, and the scan waits SETTLE seconds at the end for more before finishing.
+local SETTLE = 3
+local Settled, Skipped = 0, 0
+local function FullStep(_, Elapsed)
+	local N = C_AuctionHouse.GetNumReplicateItems() or 0
+	if N > Total then Total, Settled = N, 0 end
 	local Stop = math.min(Total, Index + BATCH - 1)
 	for i = Index, Stop do
 		local _, _, Cnt, _, _, _, _, _, _, Buyout, _, _, _, _, _, _, ItemID = C_AuctionHouse.GetReplicateItemInfo(i)
+		if not ItemID then Skipped = Skipped + 1 end
 		if ItemID and Buyout and Buyout > 0 and Cnt and Cnt > 0 then
 			local P = math.floor(Buyout / Cnt)
 			local M = Levels[ItemID]
@@ -288,8 +295,14 @@ local function FullStep()
 	Scan.Progress = Total > 0 and (Index - 1) / Total or 1
 	Notify("ScanProgress")
 	if Index > Total then
+		Settled = Settled + (Elapsed or 0)
+		if Settled < SETTLE then return end
 		Worker:SetScript("OnUpdate", nil)
 		local Now = time()
+		-- What was read, for checking short scans: the server's count, listings used, rows without an item.
+		local S = DB()
+		local Last = S.scanlog and S.scanlog[#S.scanlog]
+		if Last then Last.read = { Total, Count, Skipped } end
 		local Measured, WithSales, Partial, Soon = Scan.FinishFull(Levels, Expiring, Now)
 		Mode = nil
 		local Took = GetTime() - Started
@@ -711,7 +724,8 @@ function ReadReplicate(Late)
 	end
 	Mode = "full"
 	Levels, Expiring, Count, Index = {}, {}, 0, 1
-	Total = C_AuctionHouse.GetNumReplicateItems()
+	Settled, Skipped = 0, 0
+	Total = C_AuctionHouse.GetNumReplicateItems() or 0
 	Worker:SetScript("OnUpdate", FullStep)
 	Notify("ScanProgress")
 end

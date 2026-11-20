@@ -705,9 +705,10 @@ tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
 ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
 ok('+' in str(tl[2][1]) and ' each' in str(tl[2][1]), 'Rec Auction shows the profit per item over the vendor: ' + str(tl[2][1]))
-# 30c on the AH: 30 x 0.95 = 28c after the cut, minus the vendor price
-v = L('AF_NS.UI.Vendor(2589)')
-ok(L(f'AF_NS.Core.MoneyColor({28 - v})') in str(tl[2][1]), f'profit = AH price after the 5% cut - vendor price (30c, vendor {v}c -> +{28 - v}c)')
+# The AH price after the 5% cut, minus the vendor price (e.g. 30c -> 28c - 13c = +15c).
+v = L('AF_NS.UI.Vendor(2589)'); ah = L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
+exp = int(ah * 0.95) - v
+ok(L(f'AF_NS.Core.MoneyColor({exp})') in str(tl[2][1]), f'profit = AH price after the 5% cut - vendor price ({ah}c, vendor {v}c -> +{exp}c)')
 ok(len(tl) == 4 and 'Shift' in str(tl[3][0]), 'without Shift: just the three lines and a Shift hint')
 X('IsShiftKeyDown = function() return true end')
 tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
@@ -754,7 +755,7 @@ ok(log is not None and log[2] == 'no answer' and log[4] == 4, 'scan log records 
 X('C_AuctionHouse.GetNumReplicateItems = C_AuctionHouse.GetNumReplicateItems or function() return 0 end; FireEvent("REPLICATE_ITEM_LIST_UPDATE")')
 log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
 ok(log is not None and log[2] == 'answered late', 'a late answer is still read: ' + str(log and log[2]))
-X('for k = 1, 50 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
+X('for k = 1, 300 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
 ok(not L('AF_NS.Scan.Busy()'), 'the late listing is read to the end')
 # A late answer while a price check runs: kept and read right after the check, not dropped.
 X('AF_NS.Scan.WaitGaveUp = true; LateLogN = #AuctionForeverDB.scanlog; LookupStarted = AF_NS.Scan.Lookup({ 2589 }, true)')
@@ -764,8 +765,24 @@ ok(L('#AuctionForeverDB.scanlog') == L('LateLogN') and L('AF_NS.Scan.LatePending
 X('for k = 1, 40 do AdvanceTime(0.5); for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
 log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
 ok(log is not None and log[2] == 'answered late' and L('#AuctionForeverDB.scanlog') == L('LateLogN') + 1, 'read after the check finished: ' + str(log and log[2]))
-X('for k = 1, 50 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
+X('for k = 1, 300 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end')
 ok(not L('AF_NS.Scan.Busy()') and not L('AF_NS.Scan.LatePending'), 'and read to the end')
+# The server is still sending when it first says the listing is ready: the scan keeps reading what arrives.
+X('''OldNum, OldInfo, OldRep, OldTL = C_AuctionHouse.GetNumReplicateItems, C_AuctionHouse.GetReplicateItemInfo, C_AuctionHouse.ReplicateItems, C_AuctionHouse.GetReplicateItemTimeLeft
+  C_AuctionHouse.GetReplicateItemTimeLeft = function() return 3 end
+  GrowN = 100
+  C_AuctionHouse.ReplicateItems = function() end
+  C_AuctionHouse.GetNumReplicateItems = function() return GrowN end
+  C_AuctionHouse.GetReplicateItemInfo = function(i) if i <= GrowN then return "x", 1, 1, 1, true, 1, "", 0, 0, 100, 0, false, nil, "o", "o", 0, 600000 + (i % 50), true end end
+  AuctionForeverDB.lastFull = nil; AF_NS.Scan.WaitGaveUp = nil
+  AF_NS.UI.ShowAHPanel(); Click(AuctionForeverAHPanel.Full); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+  for k = 1, 5 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end
+  GrowN = 300
+  for k = 1, 300 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end''')
+rd = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog].read')
+ok(not L('AF_NS.Scan.Busy()') and rd is not None and rd[1] == 300 and rd[2] == 300,
+   f"listing still arriving while read: all 300 read, not the first 100 ({rd and list(rd.values())})")
+X('C_AuctionHouse.GetNumReplicateItems, C_AuctionHouse.GetReplicateItemInfo, C_AuctionHouse.ReplicateItems, C_AuctionHouse.GetReplicateItemTimeLeft = OldNum, OldInfo, OldRep, OldTL')
 # Deposit from the game decides between durations (commodities).
 X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
   C_AuctionHouse.CalculateCommodityDeposit = function(id, idx, q) return idx * 1000 * q end
