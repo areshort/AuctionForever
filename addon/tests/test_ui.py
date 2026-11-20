@@ -679,6 +679,17 @@ ok(len(rows) == 2, f'mail: 2 auction results recorded once each ({len(rows)} row
 ok(sold and sold[0][1] == 2589 and sold[0][2] == 40 and sold[0][3] == 1000, f'sold invoice: Linen x40 for 1000c ({sold})')
 ok(expd and expd[0][1] == 4306 and expd[0][2] == 15, f'expired mail: item 4306 x15 ({expd})')
 ok(not L('Took'), 'nothing taken from the mailbox')
+# You take the gold from the sale mail (its money drops to 0) and the inbox updates: still recorded once.
+X('Inbox[1].money = 0; FireEvent("MAIL_INBOX_UPDATE"); FireEvent("MAIL_SHOW"); FireEvent("MAIL_INBOX_UPDATE")')
+ok(int(L('#AuctionForeverDB.mysales')) == 2, f"taking the gold doesn't record the sale again ({L('#AuctionForeverDB.mysales')} rows)")
+# Sales already recorded twice by the old key are cleaned up once; two real sales read together are kept.
+X('''SavedSales = AuctionForeverDB.mysales; local T = time()
+  AuctionForeverDB.mailfix1 = nil
+  AuctionForeverDB.mysales = { { T, 4234, 22, 5214, "sold" }, { T, 4306, 20, 4000, "sold" }, { T, 4306, 20, 4000, "sold" },
+    { T + 1, 4306, 20, 4000, "sold" }, { T + 4, 4234, 22, 5214, "sold" }, { T, 4235, 4, 0, "expired" } }
+  FireEvent("MAIL_INBOX_UPDATE")''')
+ok(int(L('#AuctionForeverDB.mysales')) == 4 and L('AuctionForeverDB.mailfix1'), f"old double-counted sales removed once, same-time sales kept ({L('#AuctionForeverDB.mysales')} rows)")
+X('AuctionForeverDB.mysales = SavedSales')
 I = L('AF_NS.Core.Info(2589)')
 ok(I.mySold == 40 and I.mySoldValue == 1000, f'Info: you sold {I.mySold} for {I.mySoldValue}c in the last 3 days')
 tl = ' | '.join(' '.join(str(x) for x in v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values())

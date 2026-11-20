@@ -29,7 +29,9 @@ local function IdFromName(Name)
 end
 M.IdFromName = IdFromName
 
--- A mail's key that stays the same between visits: subject, money and when it runs out (rounded to 5 min).
+-- A mail's key that stays the same between visits: subject, amount and when it runs out (rounded to 5 min). For a
+-- sale the amount is the invoice's sale price, not the mail's money: that drops to 0 once you take the gold, which
+-- used to record the sale a second time.
 local function Key(Subject, Money, Expires)
 	return string.format("%s|%d|%d", Subject, Money or 0, math.floor(Expires / 300 + 0.5))
 end
@@ -47,8 +49,13 @@ function M.Read()
 		local _, _, _, Subject, Money, _, DaysLeft = GetInboxHeaderInfo(i)
 		if Subject and DaysLeft then
 			local Expires = Now + DaysLeft * 86400
-			local K = Key(Subject, Money, Expires)
-			local KB, KA = Key(Subject, Money, Expires - 300), Key(Subject, Money, Expires + 300)
+			local Amount = Money
+			if SoldP and Subject:match(SoldP) and GetInboxInvoiceInfo then
+				local _, _, _, Bid = GetInboxInvoiceInfo(i)
+				Amount = Bid or Money
+			end
+			local K = Key(Subject, Amount, Expires)
+			local KB, KA = Key(Subject, Amount, Expires - 300), Key(Subject, Amount, Expires + 300)
 			if not (DB.mailseen[K] or DB.mailseen[KB] or DB.mailseen[KA]) then
 				local Row
 				if SoldP and Subject:match(SoldP) and GetInboxInvoiceInfo then
@@ -67,9 +74,19 @@ function M.Read()
 			end
 		end
 	end
-	-- Forget old results and old mail keys.
+	-- Forget old results and old mail keys. Once: drop sales recorded twice by the old key (the same sale read again
+	-- seconds later, after its gold was taken; sales read together share the same time, so they're kept).
 	local Kept = {}
-	for _, R in ipairs(DB.mysales) do if R[1] >= Now - KEEP_DAYS * 86400 then Kept[#Kept + 1] = R end end
+	for _, R in ipairs(DB.mysales) do
+		local Dup = false
+		if not DB.mailfix1 and R[5] == "sold" then
+			for _, P in ipairs(Kept) do
+				if P[5] == "sold" and P[2] == R[2] and P[3] == R[3] and P[4] == R[4] and R[1] > P[1] and R[1] - P[1] <= 60 then Dup = true break end
+			end
+		end
+		if not Dup and R[1] >= Now - KEEP_DAYS * 86400 then Kept[#Kept + 1] = R end
+	end
+	DB.mailfix1 = true
 	DB.mysales = Kept
 	for K, Expires in pairs(DB.mailseen) do if Expires < Now then DB.mailseen[K] = nil end end
 	return Added
