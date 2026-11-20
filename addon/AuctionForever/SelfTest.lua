@@ -25,7 +25,9 @@ local function CheckAPI()
 		{ C_AuctionHouse, "C_AuctionHouse", { "ReplicateItems", "GetNumReplicateItems", "GetReplicateItemInfo", "GetReplicateItemTimeLeft",
 			"SendBrowseQuery", "GetBrowseResults", "RequestMoreBrowseResults", "HasFullBrowseResults", "SendSearchQuery", "MakeItemKey",
 			"GetNumCommoditySearchResults", "GetCommoditySearchResultInfo", "HasFullCommoditySearchResults",
-			"GetNumItemSearchResults", "GetItemSearchResultInfo", "HasFullItemSearchResults", "IsThrottledMessageSystemReady", "GetItemKeyInfo", "HasSearchResults" } },
+			"GetNumItemSearchResults", "GetItemSearchResultInfo", "HasFullItemSearchResults", "IsThrottledMessageSystemReady", "GetItemKeyInfo", "HasSearchResults",
+			"StartCommoditiesPurchase", "ConfirmCommoditiesPurchase", "CancelCommoditiesPurchase", "PlaceBid", "PostCommodity", "ConfirmPostCommodity",
+			"PostItem", "ConfirmPostItem", "GetItemCommodityStatus", "CalculateCommodityDeposit", "CalculateItemDeposit" } },
 		{ C_Container, "C_Container", { "GetContainerNumSlots", "GetContainerItemInfo" } },
 		{ C_Item, "C_Item", { "GetItemInfo", "GetItemInfoInstant", "RequestLoadItemDataByID" } },
 		{ _G, "global", { "PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_TabResize", "hooksecurefunc", "issecurevariable" } },
@@ -82,29 +84,51 @@ local function CheckWindow()
 	Add(AuctionForeverMinimapButton ~= nil and AuctionForeverMinimapButton:IsShown(), "minimap button present")
 end
 
--- Auction house layout: our tab visible, on the tab row, not overlapping any other tab.
+-- Auction house layout: our three tabs visible, on the tab row, not overlapping each other or any other tab.
+local OUR_TABS = { { "AuctionForeverBuyTab", "AF Buy", "AuctionForeverBuyPanel" }, { "AuctionForeverSellTab", "AF Sell", "AuctionForeverSellPanel" },
+	{ "AuctionForeverAHTab", "AuctionForever", "AuctionForeverAHPanel" } }
 local function CheckTab()
-	local Tab, Buy = AuctionForeverAHTab, AuctionHouseFrame.BuyTab
-	if not Tab then Add(false, "AuctionForever tab missing in the auction house") return end
-	Add(Tab:IsVisible(), "AuctionForever tab visible")
-	if not (Buy and Buy:GetTop() and Tab:GetTop()) then Add(nil, "couldn't measure tab positions") return end
-	Add(math.abs(Tab:GetTop() - Buy:GetTop()) < 6, string.format("tab sits on the tab row (%.0f px from Buy's top)", Tab:GetTop() - Buy:GetTop()))
-	local Overlap = {}
+	local Buy = AuctionHouseFrame.BuyTab
+	local Mine = {}
+	for _, D in ipairs(OUR_TABS) do
+		local Tab = _G[D[1]]
+		if not Tab then Add(false, D[2] .. " tab missing in the auction house") else Mine[#Mine + 1] = { Tab, D[2], _G[D[3]] } end
+	end
+	for _, M in ipairs(Mine) do Add(M[1]:IsVisible(), M[2] .. " tab visible") end
+	if not (Buy and Buy:GetTop() and Mine[1] and Mine[1][1]:GetTop()) then Add(nil, "couldn't measure tab positions") return end
+	-- Every visible button on the tab row: Blizzard's, other add-ons' and ours.
+	local Row = {}
 	local function Walk(F, Depth)
 		for _, C in ipairs({ F:GetChildren() }) do
-			if C ~= Tab and C:IsVisible() and C:GetObjectType() == "Button" and C:GetTop() and math.abs(C:GetTop() - Buy:GetTop()) < 6 then
-				local L, R = C:GetLeft(), C:GetRight()
-				if L and R and Tab:GetLeft() < R - 2 and Tab:GetRight() > L + 2 then Overlap[#Overlap + 1] = (C:GetText() or C:GetName() or "a tab") end
+			if C:IsVisible() and C:GetObjectType() == "Button" and C:GetTop() and math.abs(C:GetTop() - Buy:GetTop()) < 6 then
+				Row[#Row + 1] = C
 			elseif Depth < 2 then Walk(C, Depth + 1) end
 		end
 	end
 	Walk(AuctionHouseFrame, 0)
-	Add(#Overlap == 0, #Overlap == 0 and "tab doesn't overlap other tabs" or ("tab overlaps: " .. table.concat(Overlap, ", ")))
-	local P = AuctionForeverAHPanel
-	local Ok = pcall(function() AF.UI.ShowAHPanel() end)
-	local Shown = Ok and P and P:IsVisible()
+	for _, M in ipairs(Mine) do
+		local Tab = M[1]
+		Add(math.abs(Tab:GetTop() - Buy:GetTop()) < 6, string.format("%s tab sits on the tab row (%.0f px from Buy's top)", M[2], Tab:GetTop() - Buy:GetTop()))
+		local Overlap = {}
+		for _, C in ipairs(Row) do
+			local L, R = C:GetLeft(), C:GetRight()
+			if C ~= Tab and L and R and Tab:GetLeft() < R - 2 and Tab:GetRight() > L + 2 then Overlap[#Overlap + 1] = (C:GetText() or C:GetName() or "a tab") end
+		end
+		Add(#Overlap == 0, #Overlap == 0 and (M[2] .. " tab doesn't overlap other tabs") or (M[2] .. " tab overlaps: " .. table.concat(Overlap, ", ")))
+	end
+	-- Each panel opens on its own and closes.
+	for i, M in ipairs(Mine) do
+		local P = M[3]
+		local Ok = pcall(function() AF.UI.ShowAHPage(i) end)
+		local Alone = Ok and P and P:IsVisible()
+		for j, O in ipairs(Mine) do if j ~= i and O[3] and O[3]:IsVisible() then Alone = false end end
+		Add(Alone, M[2] .. " panel opens (alone)")
+	end
 	AF.UI.HideAHPanel()
-	Add(Shown and not P:IsVisible(), "panel opens and closes")
+	local Closed = true
+	for _, M in ipairs(Mine) do if M[3] and M[3]:IsVisible() then Closed = false end end
+	Add(Closed, "panels close")
+	Add(type(ItemLocation) == "table" and type(ItemLocation.CreateFromBagAndSlot) == "function", "item locations available (needed to post)")
 end
 
 -- One live lookup by plain item number (a commodity), timed. Uses a real search, like clicking Search once.

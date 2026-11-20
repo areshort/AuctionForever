@@ -19,6 +19,8 @@ local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page
 
 local Mode                  -- nil, "full-wait", "full", "lookup", "browse"
 Scan.Keys = {}              -- itemID -> the server's item key, learned from quick scans
+Scan.Kind = {}              -- itemID -> "commodity" or "item", learned from item lookups
+Scan.Listings = {}          -- itemID -> { { auctionID, qty, buyout } } cheapest first (not commodities; for buying)
 local Levels, Expiring, Count, Index, Total, Started
 local Q                     -- item lookup state
 local BQ_STATE              -- quick scan (browse) state
@@ -279,6 +281,7 @@ local function ReadCommodity(id)
 		end
 	end
 	local Cov = (Full and Kept < MAX_AUC) and nil or Last
+	Scan.Kind[id] = "commodity"
 	QuickRecord(id, Map, Exp, Auc, Cov, true)
 end
 
@@ -294,13 +297,17 @@ local function ReadItems(id, Key)
 			local Secs = R.timeLeftSeconds or BAND_SECS[R.timeLeft or 3]
 			Map[P] = (Map[P] or 0) + R.quantity
 			if Secs < 1800 then Exp[P] = (Exp[P] or 0) + R.quantity end
-			if R.auctionID then Rows[#Rows + 1] = { R.auctionID, R.quantity, P, Secs } end
+			if R.auctionID then Rows[#Rows + 1] = { R.auctionID, R.quantity, P, Secs, R.buyoutAmount, R.containsOwnerItem or R.containsAccountItem } end
 		end
 	end
 	table.sort(Rows, function(a, b) return a[3] < b[3] end)
 	local Last
 	for j = 1, math.min(#Rows, MAX_AUC) do local R = Rows[j]; Auc[R[1]] = { R[2], R[3], R[4] }; Last = R[3] end
 	local Cov = (Full and #Rows <= MAX_AUC) and nil or Last
+	Scan.Kind[id] = "item"
+	local Buyable = {}
+	for _, R in ipairs(Rows) do if not R[6] then Buyable[#Buyable + 1] = { auctionID = R[1], qty = R[2], buyout = R[5] } end end
+	Scan.Listings[id] = Buyable
 	QuickRecord(id, Map, Exp, Auc, Cov, false)
 end
 

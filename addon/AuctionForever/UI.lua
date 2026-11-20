@@ -77,8 +77,10 @@ local function Vendor(id)
 	local _, _, _, _, _, _, _, _, _, _, Sell = C_Item.GetItemInfo(id)
 	return Sell or 0
 end
+L.ItemName, L.Icon, L.Vendor, L.Stacks = function(id) return ItemName(id) end, function(id) return Icon(id) end, function(id) return Vendor(id) end, function(id) return Stacks(id) end
 local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
+L.StatusText = StatusText
 
 -- Lists ----------------------------------------------------------------------------------------------------------
 function L.FarmRows()
@@ -528,14 +530,19 @@ function L.Toggle(TabIndex)
 	if Frame:IsShown() then L.Load() else Frame:Show() end
 end
 
--- AuctionForever tab in the auction house ----------------------------------------------------------------------
+-- AuctionForever tabs in the auction house (AF Buy, AF Sell, AuctionForever) ------------------------------------
 -- Built without writing to Blizzard's tab list or display modes (that would taint the auction house and get
--- purchases blocked): our own tab button, owned by our own frame, and a panel laid over the content area that hides
+-- purchases blocked): our own tab buttons, owned by our own frame, and panels laid over the content area that hide
 -- whenever one of the other tabs is clicked.
-local AH = {}
+local AH = { Pages = {} }
 local function SelectedBlizzTab()
 	local i = AuctionHouseFrame.selectedTab
 	return i and AuctionHouseFrame.Tabs and AuctionHouseFrame.Tabs[i]
+end
+local function Ours(C)
+	if C == AH.Holder then return true end
+	for _, Pg in ipairs(AH.Pages) do if C == Pg.Tab or C == Pg.Panel then return true end end
+	return false
 end
 local function TabRow()
 	-- Every visible tab-like button on the bottom row (Blizzard's and other add-ons'), ours excluded.
@@ -544,7 +551,7 @@ local function TabRow()
 	if not Top then return Row end
 	local function Walk(F, Depth)
 		for _, C in ipairs({ F:GetChildren() }) do
-			if C ~= AH.Tab and C ~= AH.Holder and C ~= AH.Panel then
+			if not Ours(C) then
 				if C:IsShown() and C:GetObjectType() == "Button" and C:GetTop()
 					and math.abs(C:GetTop() - Top) < 4 and (C:GetLeft() or 0) >= (Buy:GetLeft() or 0) - 1 then
 					Row[#Row + 1] = C
@@ -557,23 +564,43 @@ local function TabRow()
 end
 local function PlaceTab()
 	local Buy = AuctionHouseFrame.BuyTab
-	if not (Buy and Buy:GetLeft()) then return end
+	if not (Buy and Buy:GetLeft() and AH.Pages[1]) then return end
 	local Right = Buy:GetRight()
 	for _, B in ipairs(TabRow()) do if (B:GetRight() or 0) > Right then Right = B:GetRight() end end
-	AH.Tab:ClearAllPoints()
-	AH.Tab:SetPoint("LEFT", Buy, "LEFT", Right - Buy:GetLeft() + 3, 0) -- standard tabs sit 3 px apart
+	for i, Pg in ipairs(AH.Pages) do
+		Pg.Tab:ClearAllPoints()
+		if i == 1 then
+			Pg.Tab:SetPoint("LEFT", Buy, "LEFT", Right - Buy:GetLeft() + 3, 0) -- standard tabs sit 3 px apart
+		else
+			Pg.Tab:SetPoint("LEFT", AH.Pages[i - 1].Tab, "RIGHT", 3, 0)
+		end
+	end
 end
-function L.ShowAHPanel()
-	AH.Panel:Show()
-	PanelTemplates_SelectTab(AH.Tab)
+function L.ShowAHPage(Index)
+	for i, Pg in ipairs(AH.Pages) do
+		if i == Index then Pg.Panel:Show(); PanelTemplates_SelectTab(Pg.Tab)
+		else
+			if Pg.Panel:IsShown() and Pg.OnHide then Pg.OnHide(Pg.Panel) end
+			Pg.Panel:Hide(); PanelTemplates_DeselectTab(Pg.Tab)
+		end
+	end
 	local Sel = SelectedBlizzTab()
 	if Sel then PanelTemplates_DeselectTab(Sel) end
-	L.RefreshAHPanel()
+	local Pg = AH.Pages[Index]
+	if Pg and Pg.OnShow then Pg.OnShow(Pg.Panel) end
 end
+function L.ShowAHPanel() L.ShowAHPage(AH.ScanIndex) end
 function L.HideAHPanel()
-	if not (AH.Panel and AH.Panel:IsShown()) then return end
-	AH.Panel:Hide()
-	PanelTemplates_DeselectTab(AH.Tab)
+	local Any = false
+	for _, Pg in ipairs(AH.Pages) do
+		if Pg.Panel:IsShown() then
+			Any = true
+			if Pg.OnHide then Pg.OnHide(Pg.Panel) end
+		end
+		Pg.Panel:Hide()
+		PanelTemplates_DeselectTab(Pg.Tab)
+	end
+	if not Any then return end
 	local Sel = SelectedBlizzTab()
 	if Sel then PanelTemplates_SelectTab(Sel) end
 end
@@ -582,21 +609,16 @@ local function HookRowButtons()
 		if not AH.Hooked[B] then AH.Hooked[B] = true; B:HookScript("OnClick", function() L.HideAHPanel() end) end
 	end
 end
-function L.CreateAHTab()
-	if AH.Tab or not AuctionHouseFrame then return end
-	AH.Hooked = {}
-	AH.Holder = CreateFrame("Frame", nil, AuctionHouseFrame) -- owns the tab, so it isn't added to Blizzard's Tabs
-	AH.Holder:SetSize(1, 1)
-	AH.Holder:SetPoint("TOPLEFT")
-	AH.Tab = CreateFrame("Button", "AuctionForeverAHTab", AH.Holder, "PanelTabButtonTemplate")
-	AH.Tab:SetText("AuctionForever")
-	PanelTemplates_TabResize(AH.Tab, 20, nil, 70)
-	PanelTemplates_DeselectTab(AH.Tab)
-	AH.Tab:SetScript("OnClick", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_TAB or 841); L.ShowAHPanel() end)
-	AH.Tab:SetPoint("TOPLEFT", AuctionHouseFrame, "BOTTOMRIGHT", -150, 2)
-
-	local P = CreateFrame("Frame", "AuctionForeverAHPanel", AuctionHouseFrame)
-	AH.Panel = P
+-- A tab on the auction house row with its own panel. Returns the panel (Trade.lua builds AF Buy and AF Sell with it).
+function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide)
+	local Index = #AH.Pages + 1
+	local Tab = CreateFrame("Button", TabName, AH.Holder, "PanelTabButtonTemplate")
+	Tab:SetText(Text)
+	PanelTemplates_TabResize(Tab, 20, nil, 60)
+	PanelTemplates_DeselectTab(Tab)
+	Tab:SetScript("OnClick", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_TAB or 841); L.ShowAHPage(Index) end)
+	Tab:SetPoint("TOPLEFT", AuctionHouseFrame, "BOTTOMRIGHT", -150, 2)
+	local P = CreateFrame("Frame", PanelName, AuctionHouseFrame)
 	P:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPLEFT", 4, -58)
 	P:SetPoint("BOTTOMRIGHT", AuctionHouseFrame, "BOTTOMRIGHT", -4, 28)
 	P:SetFrameLevel(AuctionHouseFrame:GetFrameLevel() + 60)
@@ -607,6 +629,20 @@ function L.CreateAHTab()
 	local Inset = CreateFrame("Frame", nil, P, "InsetFrameTemplate")
 	Inset:SetAllPoints()
 	P:Hide()
+	AH.Pages[Index] = { Tab = Tab, Panel = P, OnShow = OnShow, OnHide = OnHide }
+	return P, Tab
+end
+function L.CreateAHTab()
+	if AH.Holder or not AuctionHouseFrame then return end
+	AH.Hooked = {}
+	AH.Holder = CreateFrame("Frame", nil, AuctionHouseFrame) -- owns the tabs, so they aren't added to Blizzard's Tabs
+	AH.Holder:SetSize(1, 1)
+	AH.Holder:SetPoint("TOPLEFT")
+	if AF.Trade then AF.Trade.Build() end -- AF Buy, AF Sell
+
+	local P, Tab = L.NewAHPage("AuctionForever", "AuctionForeverAHTab", "AuctionForeverAHPanel", function() L.RefreshAHPanel() end)
+	PanelTemplates_TabResize(Tab, 20, nil, 70)
+	AH.Panel, AH.Tab, AH.ScanIndex = P, Tab, #AH.Pages
 
 	P.Title = P:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	P.Title:SetPoint("TOPLEFT", 20, -18)
@@ -661,9 +697,6 @@ function L.CreateAHTab()
 	P.Result:SetPoint("TOPLEFT", 20, -150)
 	P.Result:SetWidth(740)
 	P.Result:SetJustifyH("LEFT")
-	P.Next = P:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	P.Next:SetPoint("BOTTOMLEFT", 20, 16)
-	P.Next:SetText("Coming next in this tab: the sell queue (prefilled price, amount and duration; Post / Skip) and Buy next for flips.")
 
 	AH.Holder:SetScript("OnShow", function() C_Timer.After(0, function() PlaceTab(); HookRowButtons() end) end)
 	AH.Holder:SetScript("OnHide", function() L.HideAHPanel() end)

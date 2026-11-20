@@ -22,7 +22,7 @@ setmetatable(_G, { __index = function(_, k)
   if not Allowed[k] then
     local Info = debug.getinfo(2, "S")
     local Src = Info and Info.source or "?"
-    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Trade.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
   end
 end })
 """)
@@ -156,9 +156,16 @@ if real:
     FireEvent("AUCTION_HOUSE_SHOW")
     RunTimers()
     """)
-    ok(L('AuctionForeverAHTab ~= nil') and L('#AuctionHouseFrame.Tabs') == 2, "AuctionForever tab created without joining Blizzard's tab list")
-    pt = L('AuctionForeverAHTab._points[#AuctionForeverAHTab._points]')
-    ok(pt is not None and pt[1] == 'LEFT' and pt[4] == 700 - 20 + 3, f'tab placed right of the last tab, Auctionator included (offset {pt and pt[4]})')
+    ok(L('AuctionForeverBuyTab ~= nil and AuctionForeverSellTab ~= nil and AuctionForeverAHTab ~= nil') and L('#AuctionHouseFrame.Tabs') == 2,
+       "three tabs (AF Buy, AF Sell, AuctionForever) created without joining Blizzard's tab list")
+    ok([L('AuctionForeverBuyTab:GetText()'), L('AuctionForeverSellTab:GetText()'), L('AuctionForeverAHTab:GetText()')] == ['AF Buy', 'AF Sell', 'AuctionForever'], 'tab names')
+    pt = L('AuctionForeverBuyTab._points[#AuctionForeverBuyTab._points]')
+    ok(pt is not None and pt[1] == 'LEFT' and pt[4] == 700 - 20 + 3, f'AF Buy placed right of the last tab, Auctionator included (offset {pt and pt[4]})')
+    p2 = L('AuctionForeverSellTab._points[#AuctionForeverSellTab._points]')
+    p3 = L('AuctionForeverAHTab._points[#AuctionForeverAHTab._points]')
+    ok(p2 is not None and p2[1] == 'LEFT' and L('AuctionForeverSellTab._points[#AuctionForeverSellTab._points][2] == AuctionForeverBuyTab') and p2[3] == 'RIGHT' and p2[4] == 3
+       and p3 is not None and L('AuctionForeverAHTab._points[#AuctionForeverAHTab._points][2] == AuctionForeverSellTab') and p3[3] == 'RIGHT' and p3[4] == 3,
+       'tabs in order AF Buy, AF Sell, AuctionForever, 3 px apart (no overlap)')
     ok(L('not AuctionForeverAHPanel:IsShown()'), 'panel hidden until the tab is clicked')
     X('Click(AuctionForeverAHTab)')
     ok(L('AuctionForeverAHPanel:IsShown() and AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'clicking the tab shows the panel and highlights it')
@@ -332,6 +339,129 @@ if real:
     cells = L('(function() local t = {} for _, f in ipairs(AllFramesForTest) do if f._kind == "FontString" and type(f._text) == "string" and f._text:find("Item %d") then t[#t+1] = f._text end end return #t end)()')
     loading = L('(function() local n = 0 for _, f in ipairs(AllFramesForTest) do if f._kind == "FontString" and type(f._text) == "string" and f._text:find("loading") then n = n + 1 end end return n end)()')
     ok(cells > 0 and loading == 0, f'list shows remembered names while the server is slow ({cells} names, {loading} "loading")')
+
+    # ---- AF Buy / AF Sell -----------------------------------------------------------------------------------
+    X("""Calls = {}
+      local function Rec(name) return function(...) Calls[#Calls + 1] = { name, ... }; return CallReturns and CallReturns[name] end end
+      for _, n in ipairs({ "StartCommoditiesPurchase", "ConfirmCommoditiesPurchase", "CancelCommoditiesPurchase", "PlaceBid", "PostCommodity", "PostItem", "ConfirmPostCommodity", "ConfirmPostItem" }) do C_AuctionHouse[n] = Rec(n) end
+      C_AuctionHouse.CalculateCommodityDeposit = function(id, d, q) return 15 * q * d end
+      C_AuctionHouse.CalculateItemDeposit = function(loc, d, q) return 30 * q * d end
+      C_AuctionHouse.IsSellItemValid = function() return true end
+      C_AuctionHouse.GetItemCommodityStatus = function(loc) return loc.itemID == 14047 and 1 or 2 end
+      function LastCall(name) for i = #Calls, 1, -1 do if Calls[i][1] == name then return Calls[i] end end end
+      LookupSpy = {}
+      RealLookup = AF_NS.Scan.Lookup
+      AF_NS.Scan.Lookup = function(Ids, Silent, Done) LookupSpy[#LookupSpy + 1] = { ids = Ids, silent = Silent }; if Done then Done() end return true end
+      -- two flip targets with fresh data, so selecting them needs no re-check
+      Now = AuctionForeverData.time + 20000
+      time = function() return Now end
+      AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 }, { 30, 200 } }, Now }
+      AuctionForeverDB.fresh.items[14047] = { 400, 50, { { 400, 5 } }, Now }
+      AF_NS.Scan.Kind[2589] = "commodity"; AF_NS.Scan.Kind[14047] = "item"
+      AF_NS.Scan.Listings[14047] = { { auctionID = 78, qty = 1, buyout = 900 }, { auctionID = 77, qty = 1, buyout = 380 } }
+      FlipTargets = {
+        { id = 2589, info = AF_NS.Core.Info(2589), flip = { buyQty = 10, buyUpTo = 30, cost = 250, resell = 200, hours = 2, durationIndex = 1, profit = 320 } },
+        { id = 14047, info = AF_NS.Core.Info(14047), flip = { buyQty = 1, buyUpTo = 400, cost = 380, resell = 1000, hours = 8, durationIndex = 2, profit = 570 } },
+      }
+      AF_NS.UI.FlipRows = function() return FlipTargets end
+      Click(AuctionForeverBuyTab)""")
+    ok(L('AuctionForeverBuyPanel:IsShown() and not AuctionForeverSellPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), 'AF Buy shows its panel only')
+    ok(L('AuctionForeverBuyTab._selected and not AuctionForeverSellTab._selected and not AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'AF Buy highlighted, other tabs not')
+    ok(L('AF_NS.Trade.SelectedBuy() and AF_NS.Trade.SelectedBuy().id') == 2589, 'first flip target selected')
+    ok('Item 2589' in str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')), 'row shows the item: ' + str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')))
+    ok(len(L('LookupSpy')) == 0, 'fresh data: no re-check on select')
+    # commodity buy, price rose: cancelled, nothing confirmed
+    X('Click(AuctionForeverBuyPanel.Buy)')
+    c = L('LastCall("StartCommoditiesPurchase")')
+    ok(c is not None and c[2] == 2589 and c[3] == 10, 'Buy starts a commodity purchase of the flip amount (10)')
+    X('FireEvent("COMMODITY_PRICE_UPDATED", 35, 350)')
+    ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil'), 'price rose above the max: purchase cancelled, nothing confirmed')
+    ok('price' in str(L('AuctionForeverBuyPanel.Status:GetText()')).lower(), 'says the price changed: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
+    ok('Confirm' not in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'button back to Buy')
+    # price fine: confirm with a second click
+    X('Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260)')
+    ok('Confirm 10' in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'price fine: button asks to confirm: ' + str(L('AuctionForeverBuyPanel.Buy:GetText()')))
+    ok(L('LastCall("ConfirmCommoditiesPurchase") == nil'), 'nothing bought before the second click')
+    X('Click(AuctionForeverBuyPanel.Buy)')
+    c = L('LastCall("ConfirmCommoditiesPurchase")')
+    ok(c is not None and c[2] == 2589 and c[3] == 10, 'second click confirms 10')
+    X('FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
+    ok(L('AF_NS.Trade.SelectedBuy().id') == 14047, 'after buying: next target selected (Buy next)')
+    # not a commodity: buys the cheapest listing within the max, one per click
+    X('Click(AuctionForeverBuyPanel.Buy)')
+    c = L('LastCall("PlaceBid")')
+    ok(c is not None and c[2] == 77 and c[3] == 380, f'item flip: buys the cheapest listing within the max (auction {c and c[2]} for {c and c[3]})')
+    # over budget: cancelled
+    X('Money = 50000; Calls = {}; AF_NS.Trade.SelectBuy(1); Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260000)')
+    ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil'), 'total over the flip budget: cancelled')
+    X('Money = 2000000')
+    # stale data: selecting re-checks the item quietly
+    X('AuctionForeverDB.fresh.items[14047][4] = Now - 600; LookupSpy = {}; AF_NS.Trade.SelectBuy(2)')
+    ok(L('LookupSpy[1] ~= nil and LookupSpy[1].ids[1] == 14047 and LookupSpy[1].silent == true'), 'data older than 2 min: selected item re-checked silently')
+    # empty list explains why
+    X('FlipTargets = {}; AF_NS.Trade.RefreshBuy()')
+    ok(L('AuctionForeverBuyPanel.Empty:IsShown()'), 'no targets: shows the reason')
+
+    # ---- AF Sell ----
+    X("""Bag = { { itemID = 2589, stackCount = 20, isBound = false }, { itemID = 999999, stackCount = 1, isBound = true },
+              { itemID = 2589, stackCount = 5, isBound = false }, { itemID = 424242424, stackCount = 3, isBound = false },
+              { itemID = 14047, stackCount = 4, isBound = false }, { itemID = 10620, stackCount = 7, isBound = false } }
+      RealContainer = C_Container
+      C_Container = { GetContainerNumSlots = function(b) return b == 0 and #Bag or 0 end, GetContainerItemInfo = function(b, s) return b == 0 and Bag[s] or nil end }
+      ItemLocation = { CreateFromBagAndSlot = function(self, b, s) return { bag = b, slot = s, itemID = Bag[s] and Bag[s].itemID } end }
+      RealGI = C_Item.GetItemInfo
+      C_Item.GetItemInfo = function(id) local r = { RealGI(id) }; if id == 10620 then r[11] = 100000000 end return unpack(r, 1, 11) end
+      LookupSpy = {}
+      Click(AuctionForeverSellTab)""")
+    ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
+    q = L('AF_NS.Trade.SellQueue()')
+    ids = [q[i].id for i in range(1, len(q) + 1)] if q else []
+    ok(2589 in ids and 14047 in ids, f'sell queue has the AH items from the bags: {ids}')
+    ok(999999 not in ids and 424242424 not in ids, 'bound items and items with no auction data left out')
+    ok(10620 not in ids, 'items worth more at the vendor left out')
+    lin = [q[i] for i in range(1, len(q) + 1) if q[i].id == 2589]
+    ok(lin and lin[0].count == 25, f'stacks of the same item grouped: {lin and lin[0].count}')
+    ok(L('LookupSpy[1] ~= nil and LookupSpy[1].silent == true') and sorted(L('LookupSpy[1].ids').values()) == sorted(ids), 'opening AF Sell re-checks the queue items quietly')
+    ok(L('AF_NS.Trade.SelectedSell() ~= nil') and ids and L('AF_NS.Trade.SelectedSell().id') == ids[0], 'first queue item selected')
+    X('AF_NS.Trade.SelectSellId(2589)')
+    price = L('AF_NS.Trade.SellPrice()')
+    qty = L('tonumber(AuctionForeverSellPanel.Qty:GetText())')
+    ok(price is not None and price >= 6 and price == int(price), f'price prefilled, whole copper, not below vendor (5c + cut): {price}')
+    ok(qty is not None and 1 <= qty <= 25, f'quantity prefilled: {qty}')
+    ok(L('AF_NS.Trade.SellDuration()') in (1, 2, 3), 'duration chosen')
+    ok('Deposit' in str(L('AuctionForeverSellPanel.Deposit:GetText()')), 'deposit shown: ' + str(L('AuctionForeverSellPanel.Deposit:GetText()')))
+    # Post (commodity, no confirmation needed): PostCommodity(location, duration, qty, unit price)
+    X('Calls = {}; AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("12"); AF_NS.Trade.SetSellDuration(2); Click(AuctionForeverSellPanel.Post)')
+    c = L('LastCall("PostCommodity")')
+    ok(c is not None and L('LastCall("PostCommodity")[2].bag') == 0 and L('LastCall("PostCommodity")[2].slot') == 1 and c[3] == 2 and c[4] == 12 and c[5] == 47,
+       f'Post calls PostCommodity(bag 0 slot 1, 8 h, 12, 47c): {c and [c[3], c[4], c[5]]}')
+    ok(L('AF_NS.Trade.SelectedSell().id') != 2589, 'after posting: next item')
+    # the server asks for confirmation
+    X('CallReturns = { PostCommodity = true }; Calls = {}; AF_NS.Trade.SelectSellId(2589); AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("3"); Click(AuctionForeverSellPanel.Post)')
+    ok('Confirm' in str(L('AuctionForeverSellPanel.Post:GetText()')) and L('LastCall("ConfirmPostCommodity") == nil'), 'server asks for confirmation: Post becomes Confirm')
+    X('Click(AuctionForeverSellPanel.Post)')
+    c = L('LastCall("ConfirmPostCommodity")')
+    ok(c is not None and c[4] == 3 and c[5] == 47, 'second click confirms the same post')
+    X('CallReturns = nil')
+    # not a commodity: PostItem(location, duration, qty, no bid, buyout per item), like Blizzard's item sell frame
+    X('Calls = {}; AF_NS.Trade.SelectSellId(14047); AF_NS.Trade.SetSellPrice(900); AuctionForeverSellPanel.Qty:SetText("2"); AF_NS.Trade.SetSellDuration(1); Click(AuctionForeverSellPanel.Post)')
+    c = L('LastCall("PostItem")')
+    ok(c is not None and L('LastCall("PostItem")[2].slot') == 5 and c[3] == 1 and c[4] == 2 and c[5] is None and c[6] == 900, f'item posts with PostItem: {c and [c[3], c[4], c[5], c[6]]}')
+    # never below vendor
+    X('Calls = {}; AF_NS.Trade.SelectSellId(2589); AF_NS.Trade.SetSellPrice(2); Click(AuctionForeverSellPanel.Post)')
+    ok(L('LastCall("PostCommodity") == nil') and 'vendor' in str(L('AuctionForeverSellPanel.Status:GetText()')).lower(), 'price below vendor: not posted, says why')
+    # Skip walks the queue and wraps
+    n = len(q)
+    X('AF_NS.Trade.SelectSell(1)')
+    for _ in range(n):
+        X('Click(AuctionForeverSellPanel.Skip)')
+    ok(L('AF_NS.Trade.SellIndex()') == 1, f'Skip walks the queue and wraps back to the start ({n} items)')
+    X('Click(AuctionForeverSellPanel.QueueRows[2])')
+    ok(n < 2 or L('AF_NS.Trade.SellIndex()') == 2, 'clicking a queue row selects it')
+    # Blizzard's tab hides all our panels
+    X('Click(AuctionHouseFrame.SellTab)')
+    ok(L('not AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), "Blizzard's tab hides all our panels")
+    X('AF_NS.Scan.Lookup = RealLookup; C_Container = RealContainer; C_Item.GetItemInfo = RealGI')
     X('time = RealTime')
 
 # Flip tab explains itself when empty.
