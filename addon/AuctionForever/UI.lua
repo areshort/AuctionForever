@@ -123,9 +123,14 @@ L.Kind, L.Flippable = function(id) return Kind(id) end, function(id) return Flip
 -- Real deposits from the game for commodities (others: not known, counted as 0), so post durations weigh the
 -- deposit lost when a post doesn't sell. Remembered per item/duration/quantity.
 local DepositCache = {}
+-- Gear and other single items (and anything while the auction house is closed): the deposit is an estimate, a
+-- share of the vendor price per hour posted (seen in game: 24 h = 3x the vendor price).
+Core.DepositPerHour = 3 / 24
+local function EstimatedDeposit(I, H, Qty) return math.floor(Vendor(I.id) * Core.DepositPerHour * H) * (Qty or 1) end
 Core.Deposit = function(I, H, Qty)
+	if not (I and I.id) then return 0 end
 	local AH = rawget(_G, "C_AuctionHouse") -- not there until the auction house UI exists
-	if not (I and I.id and AH and AH.CalculateCommodityDeposit) or Kind(I.id) ~= "commodity" then return 0 end
+	if not (AH and AH.CalculateCommodityDeposit) or Kind(I.id) ~= "commodity" then return EstimatedDeposit(I, H, Qty) end
 	local Idx
 	for i, D in ipairs(Core.Durations) do if D == H then Idx = i end end
 	if not Idx then return 0 end

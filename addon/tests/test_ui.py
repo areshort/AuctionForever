@@ -804,7 +804,8 @@ X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
   C_AuctionHouse.CalculateCommodityDeposit = function(id, idx, q) return idx * 1000 * q end
   AuctionForeverData.info[777001] = AuctionForeverData.info[777001] or { 0, 1, 1 }""")
 ok(L('AF_NS.Core.Deposit({ id = 777001 }, 8, 3)') == 6000, 'deposit for 8 h comes from the game')
-ok(L('AF_NS.Core.Deposit({ id = 777002 }, 8, 3)') == 0, 'not a commodity: deposit not known, 0')
+dv = L('AF_NS.UI.Vendor(777002)')
+ok(L('AF_NS.Core.Deposit({ id = 777002 }, 8, 3)') == (dv * 8 // 8) * 3, f'not a commodity: estimated, 3x vendor per 24 h (vendor {dv}c, 8 h x3: {L("AF_NS.Core.Deposit({ id = 777002 }, 8, 3)")})')
 X('DepCalls = 0; local F = C_AuctionHouse.CalculateCommodityDeposit; C_AuctionHouse.CalculateCommodityDeposit = function(...) DepCalls = DepCalls + 1 return F(...) end')
 ok(L('AF_NS.Core.Deposit({ id = 777001 }, 8, 50)') == 100000 and L('AF_NS.Core.Deposit({ id = 777001 }, 8, 7)') == 14000 and L('DepCalls') == 0,
    'deposit scales with quantity: one game call per item and duration (other stack sizes reuse it)')

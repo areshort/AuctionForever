@@ -745,15 +745,23 @@ function Core.MoneyColor(C)
 	return table.concat(P, " ")
 end
 
--- Sell to the vendor or on the auction house? Returns "Auction" or "Vendor" (nil when neither has a price),
--- comparing what the AH pays after its cut with the vendor price, and only trusting the AH when the item sells.
+-- Sell to the vendor or on the auction house? Returns "Auction" or "Vendor" (nil when neither has a price).
+-- Auction only when posting one earns more on average than vendoring it now: the chance it sells x (after the cut
+-- - vendor price) must beat the chance it doesn't x the deposit lost (an unsold item comes back to vendor). The
+-- deposit is for the duration AF Sell uses: 2 h for steady sellers, 24 h for the rest. Not a proven seller also
+-- needs 1.5x the vendor price.
 function Core.Recommend(I, Vendor, Price)
 	Vendor = Vendor or 0
 	Price = Price or (I and Core.Market(I))
 	if not Price then return Vendor > 0 and "Vendor" or nil end
 	local Net = Price * (1 - Core.Cut)
 	if Net <= Vendor then return "Vendor" end
-	local S = Core.Status(I)
+	local S = I and Core.Status(I)
+	local Steady = S == "good" or S == "early"
+	local Ch = I and Chance(I) or 1
+	local H = Steady and Core.Durations[1] or Core.Durations[#Core.Durations]
+	local Dep = (I and Core.Deposit and Core.Deposit(I, H, 1)) or 0
+	if Ch * (Net - Vendor) <= (1 - Ch) * Dep then return "Vendor" end
 	if S == "good" or S == "early" then return "Auction" end
 	-- Not a proven seller: worth the AH only if it pays clearly more than the vendor (or the vendor pays nothing).
 	if Vendor == 0 or Net >= 1.5 * Vendor then return "Auction" end

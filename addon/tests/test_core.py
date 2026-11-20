@@ -304,5 +304,16 @@ ok(L(f"{C}.VendorDeal({{ {{995, 50}} }}, 1000)") is None, 'under 10s total profi
 X(f"VC = {C}.VendorDeal({{ {{500, 3}}, {{900, 2}} }}, 1000, 1500)")
 ok(L('VC and VC.buyQty == 3 and VC.cost == 1500'), 'vendor deal within the budget: buys only what it can afford')
 ok(L(f"{C}.VendorDeal({{ {{1, 200}} }}, 0)") is None, 'vendor pays nothing (ammo): never a target')
+# Rec counts the chance it sells and the deposit lost when it doesn't (deposit = 3x vendor for 24 h here).
+X(f"OldDepF = {C}.Deposit; {C}.Deposit = function(I, H, Q) return math.floor(I.vendorForTest * 3 / 24 * H) * Q end")
+# Patched Leather Shoulderpads: 10s 80c, vendor 2s 7c, sells 32%, slow: deposit 6s 21c -> vendor.
+ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 207, sellThrough = 0.32, hoursWithSales = 5 }}), 207, 1080)") == 'Vendor',
+   'Shoulderpads: 32% x 8s 18c gained < 68% x 6s 21c deposit lost: Vendor (was Auction)')
+# Blazing Wand (slow): 7s 34c, vendor 6s 72c, 88% sell: deposit 20s 16c -> vendor.
+ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 672, sellThrough = 0.88, hoursWithSales = 5 }}), 672, 734)") == 'Vendor', 'Wand: tiny gain, big deposit: Vendor')
+# A steady seller, 2 h deposit: 87% x 5c gained > 13% x 1c: Auction.
+ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 13, sellThrough = 0.87 }}), 13, 19)") == 'Auction', 'steady seller, small 2 h deposit: Auction')
+ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 207, sellThrough = 0.9, hoursWithSales = 5 }}), 207, 1080)") == 'Auction', 'slow but usually sells: Auction')
+X(f"{C}.Deposit = OldDepF")
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
