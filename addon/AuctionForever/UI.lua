@@ -199,6 +199,36 @@ function L.FlipTargets()
 			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O } end
 		end
 	end
+	-- Listings under the vendor price (any item, gear too): a sure profit, so they may use the whole budget.
+	local CandOf = {}
+	for _, Cd in ipairs(Cands) do CandOf[Cd.id] = Cd end
+	local LowAt
+	for i, Name in ipairs(D.fields or {}) do if Name == "low" then LowAt = i end end
+	local Fresh = type(AuctionForeverDB) == "table" and AuctionForeverDB.fresh and AuctionForeverDB.fresh.items
+	local VendorAll = {}
+	for id, Raw in pairs(D.items) do
+		local Low = LowAt and type(Raw) == "table" and Raw[LowAt] or nil
+		local F = Fresh and Fresh[id]
+		if F and F[1] and (not Low or F[1] < Low) then Low = F[1] end
+		if Low then
+			-- The data file's vendor price first: asking the game for thousands of unloaded items floods the server.
+			local Sh = Shipped(id)
+			local V = (Sh and Sh[1]) or Vendor(id)
+			if V > 0 and Low < V then
+				local I = Info[id] or Core.Info(id)
+				Info[id] = I
+				local All = I and Core.VendorDeal(I.ladder, V)
+				if All then
+					VendorAll[#VendorAll + 1] = { id, All }
+					local O = All.cost <= Budget and All or Core.VendorDeal(I.ladder, V, Budget)
+					if O then
+						if not CandOf[id] then CandOf[id] = { id = id, options = {} }; Cands[#Cands + 1] = CandOf[id] end
+						table.insert(CandOf[id].options, O)
+					end
+				end
+			end
+		end
+	end
 	local Plan = Core.Plan(Cands, Budget)
 	-- Every row knows: the cheapest way in (start) and the gold that takes (need), and the most profitable way
 	-- (best) and its gold (bestNeed). Options within your budget now are in .now.
@@ -209,7 +239,8 @@ function L.FlipTargets()
 		return R
 	end
 	local function Consider(R, O)
-		local Need = Core.GoldFor(O.cost)
+		-- Vendor buys may use the whole budget: the gold needed is the cost plus what's always kept.
+		local Need = O.vendor and (O.cost + Core.MinKeep) or Core.GoldFor(O.cost)
 		if not R.start or Need < R.need then R.start, R.need = O, Need end
 		-- Gold for the cheapest way in by the gold rule (need is lowered to your gold when you can buy it anyway).
 		if not R.minGold or Need < R.minGold then R.minGold = Need end
@@ -232,6 +263,7 @@ function L.FlipTargets()
 			end
 		end
 	end
+	for _, VA in ipairs(VendorAll) do Consider(Row(VA[1]), VA[2]) end
 	local InPlan = {}
 	for _, P in ipairs(Plan) do
 		InPlan[P.id] = true

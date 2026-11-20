@@ -19,6 +19,7 @@ Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn 
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
+Core.MinVendorProfit = 1000     -- 10 silver: listings under the vendor price must pay at least this to be a buy target
 Core.FlipMaxHours = 4           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 Core.UndercutHaircut = 0.9      -- flips plan their profit at this share of the resale price (expect an undercut or two)
@@ -575,6 +576,25 @@ function Core.Resale(I, Qty, Cost)
 		if Q > 0 then Rest[#Rest + 1] = { Step[1], Q } end
 	end
 	return Evaluate(I, setmetatable({ perHour = ResaleSpeed(I) }, { __index = I }), Qty, Cost, Rest)
+end
+
+-- Buy to sell to a vendor: every listing priced under the vendor price (cheapest first), within Cap. A sure profit
+-- (vendors pay a fixed price, no AH cut, no deposit), so no sales data is needed. nil under MinVendorProfit.
+function Core.VendorDeal(Ladder, Vendor, Cap)
+	if not Vendor or Vendor <= 0 or type(Ladder) ~= "table" then return nil end
+	Cap = Cap or math.huge
+	local Qty, Cost, Profit, Top = 0, 0, 0, nil
+	for _, Step in ipairs(Ladder) do
+		local P, Q = Step[1], Step[2]
+		if not P or P >= Vendor then break end
+		local Take = Q
+		if P > 0 and Cap < math.huge then Take = math.min(Q, math.floor((Cap - Cost) / P)) end
+		if Take <= 0 then break end
+		Qty, Cost, Profit, Top = Qty + Take, Cost + Take * P, Profit + Take * (Vendor - P), P
+		if Take < Q then break end
+	end
+	if Qty == 0 or Profit < Core.MinVendorProfit then return nil end
+	return { vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 
 -- Least expected profit for a flip costing Cost: MinProfit, and MinFlipReturn of the cost.

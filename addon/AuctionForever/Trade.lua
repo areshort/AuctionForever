@@ -181,10 +181,11 @@ function T.DrawBuy()
 			R.Icon:SetTexture(UI().Icon(E.id))
 			R.Cells[1]:SetText(NameText(E.id))
 			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.Money(F.buyUpTo))
-			R.Cells[3]:SetText(Core.Money(F.resell))
+			R.Cells[3]:SetText((F.vendor and "vendor " or "") .. Core.Money(F.resell))
 			R.Cells[4]:SetText("|cff1eff00" .. Core.Money(F.profit) .. "|r")
 			local Status
 			if Need then Status = "at " .. GoldText(Need)
+			elseif F.vendor then Status = "|cff1eff00vendor it|r"
 			elseif E.plan and F == E.flip then Status = "|cff1eff00in plan|r"
 			else Status = "|cffffd100fits, not in plan|r" end
 			R.Cells[5]:SetText(Status)
@@ -204,9 +205,15 @@ function T.DrawBuy()
 	BuyP.Skip:SetEnabled(#Buy.rows > 1)
 	if E then
 		local F = Shown(E)
+		if F.vendor then
+			BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
+				NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), Core.Money(F.profit),
+				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.Money(Core.MinKeep) .. " always kept).") or ""))
+		else
 		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s",
 			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit),
 			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.Money(Core.MinKeep) .. "; one item may use only part of it).") or ""))
+		end
 	else
 		BuyP.Detail:SetText("")
 	end
@@ -310,7 +317,7 @@ function T.BuyClick()
 	end
 	if Kind == "commodity" then
 		Buy.state = "price"
-		Buy.pending = { id = E.id, qty = F.buyQty, max = F.buyUpTo, resell = F.resell, chance = F.chance }
+		Buy.pending = { id = E.id, qty = F.buyQty, max = F.buyUpTo, resell = F.resell, chance = F.chance, vendor = F.vendor }
 		C_AuctionHouse.StartCommoditiesPurchase(E.id, F.buyQty)
 		SayBuy("Getting the current price...")
 		T.DrawBuy()
@@ -341,12 +348,19 @@ end
 local function OnPriceUpdated(Unit, Total)
 	if Buy.state ~= "price" or not Buy.pending then return end
 	local Pd = Buy.pending
-	-- Resale from the data as it is now (not the price planned when the list was made), at the live cost.
-	local R = Core.Resale(Core.Info(Pd.id), Pd.qty, Total)
-	local Profit = R and R.profit
-	if R then Pd.resell = R.resell end
+	-- Resale from the data as it is now (not the price planned when the list was made), at the live cost. A vendor
+	-- buy: the vendor pays a fixed price, so the profit is that minus the live cost.
+	local R, Profit, MinProfit
+	if Pd.vendor then
+		R = { resell = Pd.resell }
+		Profit, MinProfit = Pd.resell * Pd.qty - Total, Core.MinVendorProfit
+	else
+		R = Core.Resale(Core.Info(Pd.id), Pd.qty, Total)
+		Profit = R and R.profit
+		if R then Pd.resell = R.resell end
+		MinProfit = Core.FlipNeed(Total, Core.MinFlipProfitFor(UI().FlipBudget()))
+	end
 	local Budget = UI().FlipBudget()
-	local MinProfit = Core.FlipNeed(Total, Core.MinFlipProfitFor(Budget))
 	if Unit > Pd.max then
 		ResetPurchase(true)
 		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.Money(Unit), Core.Money(Pd.max)))

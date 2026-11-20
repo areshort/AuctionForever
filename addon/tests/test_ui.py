@@ -705,8 +705,9 @@ tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
 ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
 ok('+' in str(tl[2][1]) and ' each' in str(tl[2][1]), 'Rec Auction shows the profit per item over the vendor: ' + str(tl[2][1]))
-# 30c on the AH, 5c vendor: 30 x 0.95 = 28c after the cut - 5c = +23c
-ok(L('AF_NS.Core.MoneyColor(23)') in str(tl[2][1]), 'profit = AH price after the 5% cut - vendor price (30c -> +23c)')
+# 30c on the AH: 30 x 0.95 = 28c after the cut, minus the vendor price
+v = L('AF_NS.UI.Vendor(2589)')
+ok(L(f'AF_NS.Core.MoneyColor({28 - v})') in str(tl[2][1]), f'profit = AH price after the 5% cut - vendor price (30c, vendor {v}c -> +{28 - v}c)')
 ok(len(tl) == 4 and 'Shift' in str(tl[3][0]), 'without Shift: just the three lines and a Shift hint')
 X('IsShiftKeyDown = function() return true end')
 tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
@@ -787,7 +788,7 @@ X('C_Item.GetItemMaxStackSizeByID = OldMax')
 # Item details come from caches when the game hasn't loaded the item: saved first, then the cloud file.
 X("""AF_NS.UI.ItemName(2589)
   OldGI2 = C_Item.GetItemInfo; C_Item.GetItemInfo = function() return nil end""")
-ok(L('AF_NS.UI.Vendor(2589)') == 5, 'vendor price from the saved cache when the game has nothing loaded')
+ok(L('AF_NS.UI.Vendor(2589)') == L('AuctionForeverData.info[2589][1]'), 'vendor price from the saved cache when the game has nothing loaded')
 nm = L('(AF_NS.UI.ItemName(2589))'); ok(nm == 'Item 2589', 'name from the saved cache: ' + str(nm))
 X('AuctionForeverData.info = AuctionForeverData.info or {}; AuctionForeverData.info[777001] = { 123, 3, 1 }; AuctionForeverData.names = AuctionForeverData.names or {}; AuctionForeverData.names[777001] = "Shipped Thing"')
 n, q = L('AF_NS.UI.ItemName(777001)')
@@ -874,6 +875,27 @@ X('AF_NS.Trade.DrawBuy()')
 bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
 ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
+# A listing under the vendor price (any item): an AF Buy row with "vendor it", no sales data needed.
+X('''local Row = {}
+  for i, N in ipairs(AuctionForeverData.fields) do
+    if N == "low" then Row[i] = 500 elseif N == "qty" then Row[i] = 4 elseif N == "ladder" then Row[i] = { { 500, 3 }, { 2000, 1 } } end
+  end
+  AuctionForeverData.items[990001] = Row
+  AuctionForeverData.info[990001] = { 1000, 1, 1 }
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  AF_NS.Trade.RefreshBuy()
+  for i, E in ipairs(AF_NS.Trade.Rows()) do if E.id == 990001 then VRow, VIdx = E, i end end''')
+ok(L('VRow and VRow.flip.vendor and VRow.flip.profit == 1500 and VRow.flip.buyQty == 3'), f"listings under the vendor price are a buy target: 3 at 5s, vendor 10s -> 15s ({L('VRow and VRow.flip.profit')})")
+X('AF_NS.Trade.SelectBuy(VIdx); AF_NS.Trade.DrawBuy()')
+cells = L('(function() local t = {} for _, f in ipairs(AllFramesForTest) do if f._kind == "FontString" and type(f._text) == "string" and (f._text:find("vendor it") or f._text:find("sell them to a vendor")) then t[#t+1] = f._text end end return #t end)()')
+ok(cells >= 2, f'row says "vendor it" and the detail says to sell to a vendor ({cells})')
+if L('LastCall') is not None:
+    X('AF_NS.Scan.Kind[990001] = "commodity"; Calls = {}; AF_NS.Trade.SelectBuy(VIdx); AF_NS.Trade.BuyClick(); FireEvent("COMMODITY_PRICE_UPDATED", 500, 1500)')
+    ok('Confirm' in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'vendor buy at the planned price: asks to confirm (no sales data needed)')
+    X('Click(AuctionForeverBuyPanel.Buy)')
+    X('AF_NS.Trade.RefreshBuy(); for i, E in ipairs(AF_NS.Trade.Rows()) do if E.id == 990001 then VIdx = i end end')
+    X('Calls = {}; AuctionForeverBuyPanel.Buy:SetText("Buy"); AF_NS.Trade.SelectBuy(VIdx)')
+X('AuctionForeverData.items[990001] = nil; AuctionForeverData.info[990001] = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()')
 # Buying uses the budget for this visit: after spending 12s, the budget drops by 12s.
 X('Gold = Gold - 1200')
 b2 = L('AF_NS.UI.FlipBudget()')

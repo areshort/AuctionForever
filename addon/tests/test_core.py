@@ -287,5 +287,13 @@ X(f"""CL1 = {C}.CutLoss(MakeItem({{ lowHi24 = 900 }}), 1000, {{}}, 1)
   CDB2.mysales[2] = nil
   CL4 = {C}.CutLoss(MakeItem(), 1000, CDB2, 1)""")
 ok(L('CL1') and not L('CL2') and L('CL3') and not L('CL4'), f"cut the loss: under all day {L('CL1')}, not {L('CL2')}; 2 expiries {L('CL3')}, 1 {L('CL4')}")
+# Buy to vendor: every listing under the vendor price, cheapest first; needs 10s+ profit; no AH cut.
+X(f"VD = {C}.VendorDeal({{ {{500, 3}}, {{900, 2}}, {{1000, 5}} }}, 1000)")
+ok(L('VD and VD.vendor and VD.buyQty == 5 and VD.buyUpTo == 900 and VD.cost == 3300 and VD.profit == 1700 and VD.resell == 1000'),
+   f"vendor deal: 3 at 5s + 2 at 9s under a 10s vendor price -> 17s profit ({L('VD and VD.profit')})")
+ok(L(f"{C}.VendorDeal({{ {{995, 50}} }}, 1000)") is None, 'under 10s total profit (50 x 5c = 2s 50c): not a target')
+X(f"VC = {C}.VendorDeal({{ {{500, 3}}, {{900, 2}} }}, 1000, 1500)")
+ok(L('VC and VC.buyQty == 3 and VC.cost == 1500'), 'vendor deal within the budget: buys only what it can afford')
+ok(L(f"{C}.VendorDeal({{ {{1, 200}} }}, 0)") is None, 'vendor pays nothing (ammo): never a target')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

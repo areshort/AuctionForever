@@ -86,7 +86,12 @@ GOLD_AMOUNT = "%d Gold"; SILVER_AMOUNT = "%d Silver"; COPPER_AMOUNT = "%d Copper
 ITEM_QUALITY_COLORS = { [1] = { hex = "|cffffffff" } }
 -- Items: everything is a stackable Trade Good named "Item <id>", vendor 5c.
 C_Item = {
-	GetItemInfo = function(id) return "Item " .. id, nil, 1, nil, nil, nil, nil, nil, nil, nil, 5 end,
+	-- Vendor price: the real one from the data file when it's there (ammo sells for 0), else 5c.
+	GetItemInfo = function(id)
+		local D = rawget(_G, "AuctionForeverData")
+		local Inf = type(D) == "table" and type(D.info) == "table" and D.info[id]
+		return "Item " .. id, nil, 1, nil, nil, nil, nil, nil, nil, nil, Inf and Inf[1] or 5
+	end,
 	GetItemInfoInstant = function(id) return id, "Trade Goods", "", "", 134400, 7, 0 end,
 	GetItemMaxStackSizeByID = function() return 20 end,
 	RequestLoadItemDataByID = function() end,
