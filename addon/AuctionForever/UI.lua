@@ -705,7 +705,11 @@ function L.CreateAHTab()
 		self.Tick = self.Tick + Elapsed
 		if self.Tick < 0.1 then return end
 		self.Tick = 0
-		if AF.Scan.Busy() then L.ScanProgress() end
+		if AF.Scan.Busy() then L.ScanProgress()
+		elseif AF.Scan.FullCooldown() > 0 then
+			self.Cool = (self.Cool or 0) + 1
+			if self.Cool >= 50 then self.Cool = 0; L.RefreshAHPanel() end -- countdown on the button, every 5 s
+		end
 	end)
 	P.Result = P:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	P.Result:SetPoint("TOPLEFT", 20, -150)
@@ -727,7 +731,9 @@ function L.RefreshAHPanel()
 	if Fresh and Fresh.time then Parts[#Parts + 1] = string.format("Your last full scan: %d min ago.", math.floor((time() - Fresh.time) / 60)) end
 	P.Data:SetText(table.concat(Parts, "   "))
 	local Busy = AF.Scan.Busy()
-	P.Quick:SetEnabled(not Busy); P.Full:SetEnabled(not Busy)
+	local Cool = AF.Scan.FullCooldown()
+	P.Quick:SetEnabled(not Busy); P.Full:SetEnabled(not Busy and Cool <= 0)
+	P.Full:SetText(Cool > 0 and string.format("Full Scan (%d min)", math.ceil(Cool / 60)) or "Full Scan")
 	if not Busy then P.QuickInfo:SetText("Quick Scan: fresh prices for everything.  Full Scan: also measures sales (scan 15+ min apart).") end
 	P.Result:SetText(AF.Scan.LastResult or "No scan yet this session.")
 end
@@ -740,15 +746,8 @@ function L.ScanProgress()
 	P.QuickInfo:Hide()
 	P.Bar:Show()
 	P.Bar.Text:SetText(Text)
-	if F then
-		P.Bar:SetStatusBarColor(0.1, 0.6, 0.1)
-		P.Bar:SetValue(F)
-	else
-		-- Waiting for the server: a short block sweeping back and forth, so it's clearly still working.
-		local T = GetTime() % 2
-		P.Bar:SetStatusBarColor(0.6, 0.5, 0.1)
-		P.Bar:SetValue(T < 1 and T or 2 - T)
-	end
+	P.Bar:SetStatusBarColor(0.1, 0.6, 0.1)
+	P.Bar:SetValue(F or 0)
 end
 function L.ScanDone()
 	if AH.Panel then AH.Panel.Bar:Hide(); AH.Panel.QuickInfo:Show() end

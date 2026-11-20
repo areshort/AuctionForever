@@ -115,6 +115,9 @@ function Methods:GetLeft() return rawget(self, "_left") end
 function Methods:GetRight() return rawget(self, "_right") end
 function Methods:GetFrameLevel() return 1 end
 function Methods:SetEnabled(v) self._disabled = not v end
+function Methods:IsEnabled() return not self._disabled end
+function Methods:SetValue(v) self._value = v end
+function Methods:GetValue() return self._value end
 function Methods:HookScript(k, fn) self._hooks[k] = self._hooks[k] or {}; table.insert(self._hooks[k], fn) end
 function Methods:ClearAllPoints() self._points = {} end
 function Click(f, ...)

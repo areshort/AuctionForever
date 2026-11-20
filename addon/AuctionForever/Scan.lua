@@ -20,6 +20,9 @@ local MIN_EVENTS = 10       -- separate purchases that make a shorter window cou
 Scan.MIN_EVENTS = MIN_EVENTS
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
+local WAIT_SHARE = 0.3      -- full scan bar: the first 30% is waiting for the server, the rest reading listings
+local RESEND = { 20, 40 }   -- full scan: ask again after this many seconds of silence
+local FULL_TIMEOUT = 60
 local ITEM_TIMEOUT = 5      -- item lookup: seconds to wait for one item (loading its details + answer)
 local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page
 
@@ -239,11 +242,15 @@ end
 -- What's happening right now, for the progress bar: text, and fraction done (nil while waiting for the server).
 function Scan.Status()
 	if Mode == "full-wait" then
-		return string.format("Full scan: waiting for the server... %d s", GetTime() - (Started or GetTime())), nil
+		-- The server gives no progress while it prepares the listing: estimate from how long it took last time.
+		local Expect = math.max(5, DB().fullWait or 15)
+		local F = WAIT_SHARE * math.min(0.95, (GetTime() - (Started or GetTime())) / Expect)
+		return string.format("Full scan: %d%% (waiting for the server)", F * 100), F
 	elseif Mode == "full" then
 		local Done = math.min(Total or 0, (Index or 1) - 1)
-		local F = (Total or 0) > 0 and Done / Total or 1
-		return string.format("Full scan: reading listings %d%% (%s of %s)", F * 100, Commas(Done), Commas(Total or 0)), F
+		local R = (Total or 0) > 0 and Done / Total or 1
+		local F = WAIT_SHARE + (1 - WAIT_SHARE) * R
+		return string.format("Full scan: %d%% (reading %s of %s listings)", F * 100, Commas(Done), Commas(Total or 0)), F
 	elseif Mode == "browse" and BQ_STATE then
 		local E = math.max(1, BQ_STATE.expected or 1)
 		local F = BQ_STATE.gotFirst and math.min(0.99, BQ_STATE.n / E) or nil
@@ -260,23 +267,57 @@ end
 
 local function AHOpen() return AuctionHouseFrame and AuctionHouseFrame:IsShown() end
 
+
+-- Full scan log (last 10 tries), saved so problems can be checked after a /reload.
+local function Log(Entry)
+	local S = DB()
+	S.scanlog = S.scanlog or {}
+	table.insert(S.scanlog, Entry)
+	while #S.scanlog > 10 do table.remove(S.scanlog, 1) end
+end
+
+-- Seconds until the server allows another full scan (from our own last full scan; 0 = now).
+function Scan.FullCooldown()
+	local Last = DB().lastFull
+	if not Last then return 0 end
+	return math.max(0, 900 - (time() - Last))
+end
+
+local function SendReplicate(Ticket)
+	if Mode ~= "full-wait" or Started ~= Ticket then return end
+	if not C_AuctionHouse.IsThrottledMessageSystemReady() then C_Timer.After(0.2, function() SendReplicate(Ticket) end) return end
+	Scan.Sends = (Scan.Sends or 0) + 1
+	C_AuctionHouse.ReplicateItems()
+end
+
 function Scan.Start()
 	if Mode then Say("a scan is already running.") return end
 	if not AHOpen() then Say("open the auction house first.") return end
+	local Wait = Scan.FullCooldown()
+	if Wait > 0 then
+		Scan.LastResult = string.format("Full scan available in %d min (the server allows one every 15 min).", math.ceil(Wait / 60))
+		Say(Scan.LastResult)
+		Notify("ScanDone")
+		return
+	end
 	Mode = "full-wait"
 	Started = GetTime()
-	Scan.Progress = nil
-	C_AuctionHouse.ReplicateItems()
+	Scan.Progress, Scan.Sends = nil, 0
 	local Ticket = Started
-	C_Timer.After(60, function()
+	SendReplicate(Ticket)
+	for _, T in ipairs(RESEND) do
+		C_Timer.After(T, function() if Mode == "full-wait" and Started == Ticket then SendReplicate(Ticket) end end)
+	end
+	C_Timer.After(FULL_TIMEOUT, function()
 		if Mode == "full-wait" and Started == Ticket then
 			Mode = nil
-			Scan.LastResult = "The server didn't send the full listing within 60 s. Full scans may be limited to one every 15 min."
+			Log({ time(), "no answer", FULL_TIMEOUT, Scan.Sends })
+			Scan.LastResult = string.format("The server didn't send the full listing within %d s (asked %d times). Try again in a few minutes.", FULL_TIMEOUT, Scan.Sends)
 			Say(Scan.LastResult)
 			Notify("ScanDone")
 		end
 	end)
-	Say("full scan: waiting for the server...")
+	Say("full scan started.")
 	Notify("ScanProgress")
 end
 
@@ -577,6 +618,9 @@ Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
 Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
 Events:SetScript("OnEvent", function(_, Event, Arg)
 	if Event == "REPLICATE_ITEM_LIST_UPDATE" and Mode == "full-wait" then
+		local S = DB()
+		S.fullWait, S.lastFull = GetTime() - Started, time()
+		Log({ time(), "answered", math.floor(S.fullWait + 0.5), Scan.Sends })
 		Mode = "full"
 		Levels, Expiring, Count, Index = {}, {}, 0, 1
 		Total = C_AuctionHouse.GetNumReplicateItems()

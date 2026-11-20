@@ -188,7 +188,7 @@ if real:
       for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u and f ~= AuctionForeverAHPanel then u(f, 0.016) end end
       AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)""")
     bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
-    ok('reading listings' in bt and ' of ' in bt and '%' in bt and not bt.startswith('Full scan: reading listings 100%'), 'progress while reading: ' + bt)
+    ok('reading' in bt and ' of ' in bt and '%' in bt and L('AuctionForeverAHPanel.Bar:GetValue()') >= 0.3, 'progress while reading (bar past the waiting part): ' + bt)
     X("""function Pump() for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end
           for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end end
         Pump()""")
@@ -208,8 +208,13 @@ if real:
     X('for _, E in ipairs(Listings) do if E[1] == 2589 and E[2] > 0 then Bought2 = E[2]; E[2] = 0; break end end')
     X('time = function() return AuctionForeverData.time + 2700 end; Click(AuctionForeverAHPanel.Full); FireEvent("REPLICATE_ITEM_LIST_UPDATE"); Pump()')
     ok(len(list(L('AuctionForeverDB.obs[2589]').values())) == 1 and L('AuctionForeverDB.base[2589].t') == L('AuctionForeverData.time + 2400'),
-       'scan 5 min later: no measurement, starting point kept')
-    ok(L('AuctionForeverDB.fresh.items[2589][4]') == L('AuctionForeverData.time + 2700'), 'scan 5 min later: prices refreshed')
+       'full scan 5 min later: nothing measured, starting point kept')
+    ok('available in 10 min' in str(L('AF_NS.Scan.LastResult')) and not L('AF_NS.Scan.Busy()'), 'full scan 5 min later: refused with the wait time: ' + str(L('AF_NS.Scan.LastResult')))
+    X('AF_NS.UI.RefreshAHPanel()')
+    ok(L('AuctionForeverAHPanel.Full:GetText()') == 'Full Scan (10 min)' and not L('AuctionForeverAHPanel.Full:IsEnabled()'), 'Full Scan button shows the countdown and is disabled')
+    X('AuctionForeverDB.lastFull = AuctionForeverDB.lastFull - 600; AF_NS.UI.RefreshAHPanel()')
+    ok(L('AuctionForeverAHPanel.Full:GetText()') == 'Full Scan' and L('AuctionForeverAHPanel.Full:IsEnabled()'), 'button back to normal after 15 min')
+    X('AuctionForeverDB.lastFull = AuctionForeverDB.lastFull + 600')
 
     # Item lookup 20 min after the starting point: Linen (in the bags) is looked up and measured against it.
     X("""function LinenAuctions(Secs)
@@ -583,6 +588,23 @@ ok(okr and st is not None, f'selftest runs and saves results ({err})')
 ok(st is not None and not [l for l in lines if l.startswith('FAIL') and 'cloud data' not in l and 'lookup' not in l and 'minimap' not in l],
    'selftest in the mock: ' + '; '.join(l for l in lines if l.startswith('FAIL')))
 ok(all(f in TOC for f in on_disk), 'every add-on .lua file is listed in the .toc: ' + ', '.join(f for f in on_disk if f not in TOC))
+# Full scan bar: fills with a percentage while waiting (estimate from the last wait), resends, logs, times out.
+X("""AuctionHouseFrame:Show(); AuctionForeverDB.lastFull = nil; AuctionForeverDB.fullWait = 10; AuctionForeverDB.scanlog = nil
+  Replicates = 0; local Old = C_AuctionHouse.ReplicateItems
+  C_AuctionHouse.ReplicateItems = function() Replicates = Replicates + 1 end
+  AF_NS.UI.ShowAHPanel(); Click(AuctionForeverAHPanel.Full)""")
+ok(L('Replicates') == 1, 'full scan asks the server once')
+X('AdvanceTime(5); AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
+bt, bv = str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), L('AuctionForeverAHPanel.Bar:GetValue()')
+ok('%' in bt and 0.1 < bv < 0.3, f'waiting: bar fills with a percentage ({bt}, {bv:.2f})')
+X('AdvanceTime(16)')
+ok(L('Replicates') == 2, 'no answer after 20 s: asked again')
+X('AdvanceTime(20)')
+ok(L('Replicates') == 3, 'no answer after 40 s: asked a third time')
+X('AdvanceTime(25)')
+ok(not L('AF_NS.Scan.Busy()') and 'asked 3 times' in str(L('AF_NS.Scan.LastResult')), 'gives up after 60 s: ' + str(L('AF_NS.Scan.LastResult')))
+log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
+ok(log is not None and log[2] == 'no answer' and log[4] == 3, 'scan log records the failed try')
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)
