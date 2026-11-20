@@ -31,9 +31,12 @@ local ICONS = {
 	},
 }
 B.ICONS = ICONS
+-- The user's picks (2026-11-20): a bag for vendor, the gold coins for auction.
+local DEFAULT = { vendor = 6, auction = 2 }
+B.DEFAULT = DEFAULT
 local function Choice(Kind)
 	local Saved = AuctionForeverDB and AuctionForeverDB.icons and AuctionForeverDB.icons[Kind]
-	return ICONS[Kind][Saved] or ICONS[Kind][1]
+	return ICONS[Kind][Saved] or ICONS[Kind][DEFAULT[Kind]]
 end
 local function Draw(Icon, C)
 	if type(C) == "table" and C.atlas then
@@ -54,7 +57,8 @@ local function ChatIcon(C)
 	end
 	return "|T" .. C .. ":18|t"
 end
-local WIDGET_ID = "auctionforever"
+local WIDGET_ID = "auctionforever" -- the auction icon, top right
+local VENDOR_WIDGET_ID = "auctionforever_vendor" -- the vendor icon, top left
 local JUNK_ID = "auctionforever"
 local POOR = 0
 local QUEST_CLASS = 12
@@ -148,18 +152,29 @@ end
 B.JunkSource = JunkSource
 
 -- Baganator corner widget: Details is the item button's info (itemID, itemLink, quality, isBound).
-function B.UpdateIcon(Icon, Details)
+-- Is Baganator's own junk icon showing on this item (then it carries the vendor icon, see SkinJunk)?
+local function BaganatorJunkShown(Details)
+	local Bag = rawget(_G, "Baganator")
+	local API = Bag and Bag.API
+	if API and API.IsCornerWidgetActive then
+		local Ok, Active = pcall(API.IsCornerWidgetActive, "junk")
+		if Ok and not Active then return false end
+	end
+	return JunkSource() or Details.quality == POOR
+end
+-- Only = "Auction" (the top right widget) or "Vendor" (the top left one); nil = either (tests).
+function B.UpdateIcon(Icon, Details, Only)
 	local ID = Details and ItemID(Details.itemLink, Details.itemID)
 	if not ID then return false end
 	local Bound = Details.isBound == true
 	local Where = Status(ID, Bound)
 	if Where == nil then Later(ID, Bound) return false end
+	if Only and Where ~= Only then return false end
 	if Where == "Auction" then
 		Draw(Icon, Choice("auction"))
 		return true
 	elseif Where == "Vendor" then
-		if JunkSource() then return false end -- Baganator's junk icon (now the purse) shows it
-		if Details.quality == POOR then return false end -- Baganator's default junk rule marks greys (purse too)
+		if BaganatorJunkShown(Details) then return false end -- Baganator's junk icon (now the vendor icon) shows it
 		Draw(Icon, Choice("vendor"))
 		return true
 	end
@@ -243,13 +258,17 @@ function B.SetUp()
 	local Bag = rawget(_G, "Baganator")
 	if SetUp or not (Bag and Bag.API and Bag.API.RegisterCornerWidget) then return false end
 	SetUp = true
-	Bag.API.RegisterCornerWidget("AuctionForever", WIDGET_ID, B.UpdateIcon, function(ItemButton)
+	local function NewIcon(ItemButton)
 		Buttons[ItemButton] = true
 		SkinJunk(ItemButton)
 		local Icon = ItemButton:CreateTexture(nil, "OVERLAY")
 		Icon:SetSize(15, 15)
 		return Icon
-	end, { corner = "top_right", priority = 1 })
+	end
+	Bag.API.RegisterCornerWidget("AuctionForever", WIDGET_ID, function(Icon, Details) return B.UpdateIcon(Icon, Details, "Auction") end,
+		NewIcon, { corner = "top_right", priority = 1 })
+	Bag.API.RegisterCornerWidget("AuctionForever: vendor", VENDOR_WIDGET_ID, function(Icon, Details) return B.UpdateIcon(Icon, Details, "Vendor") end,
+		NewIcon, { corner = "top_left", priority = 1 })
 	if Bag.API.RegisterJunkPlugin then Bag.API.RegisterJunkPlugin("AuctionForever", JUNK_ID, B.IsJunk) end
 	-- New auction data (a scan finished): redraw. Scan calls AF.UI.ScanDone by name, so wrapping it is enough.
 	local ScanDone = AF.UI.ScanDone

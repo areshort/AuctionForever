@@ -46,6 +46,7 @@ Baganator = { API = {
   RegisterCornerWidget = function(label, id, onUpdate, onInit, pos) assert(not WIDGETS[id]) WIDGETS[id] = { label = label, onUpdate = onUpdate, onInit = onInit, pos = pos } end,
   RegisterJunkPlugin = function(label, id, cb) JUNK[id] = { label = label, cb = cb } end,
   IsJunkPluginActive = function(id) return JUNK_SOURCE == id end,
+  IsCornerWidgetActive = function(id) return id ~= "junk" or JUNK_ICON_ON ~= false end,
   RequestItemButtonsRefresh = function() REFRESHES = REFRESHES + 1 end,
 } }
 -- What Baganator's item button does: onUpdate(icon, details). Returns "auction", "coin", nil (hidden) or "?".
@@ -56,11 +57,11 @@ function Icon(id, extra)
   function icon:SetAtlas(a) self.path = "atlas:" .. a end
   local d = { itemID = id, itemLink = "|cffffffff|Hitem:" .. id .. "::::|h[x]|h|r", quality = ITEMS[id] and ITEMS[id][2] or 1 }
   for k, v in pairs(extra or {}) do d[k] = v end
-  if not WIDGETS.auctionforever.onUpdate(icon, d) then return nil end
+  if not AF_NS.Bags.UpdateIcon(icon, d) then return nil end
   local function Is(C) if type(C) == "table" and C.atlas then return icon.path == "atlas:" .. C.atlas end
     if type(C) == "table" then return icon.path == C[1] and icon.coords[2] == C[3] end
     return icon.path == C end
-  local Pick = function(K) local n = AuctionForeverDB.icons and AuctionForeverDB.icons[K] or 1 return AF_NS.Bags.ICONS[K][n] end
+  local Pick = function(K) local n = AuctionForeverDB.icons and AuctionForeverDB.icons[K] or AF_NS.Bags.DEFAULT[K] return AF_NS.Bags.ICONS[K][n] end
   if Is(Pick("auction")) then return "auction" end
   if Is(Pick("vendor")) then return "coin" end
   return "?"
@@ -131,10 +132,22 @@ X('JUNK_SOURCE = "poor_quality"')
 X('''JB = CreateFrame("Button"); JB.JunkIcon = { SetTexture = function(s, p) s.path = p end, SetTexCoord = function() end,
     SetAtlas = function(s, a) s.path = "atlas:" .. a end, SetSize = function() end }
   WIDGETS.auctionforever.onInit(JB)''')
-ok(L('JB.JunkIcon.path') == L('AF_NS.Bags.ICONS.vendor[1]'), "Baganator's junk coin shows the vendor icon instead")
+ok(L('JB.JunkIcon.path') == 'atlas:' + L('AF_NS.Bags.ICONS.vendor[6].atlas'), "Baganator's junk coin shows the vendor icon instead (default 6)")
 X('AF_NS.Bags.IconCommand("icon vendor 2")')
 ok(L('JB.JunkIcon.path') == L('AF_NS.Bags.ICONS.vendor[2]'), 'picking another vendor icon updates the junk icon too')
 X('AuctionForeverDB.icons = nil')
+# Two widgets: vendor top left, auction top right; each draws only its own kind.
+v = 'WIDGETS.auctionforever_vendor'
+ok(L(f'{v} ~= nil') and L(f'{v}.pos.corner') == 'top_left' and L(f'{v}.pos.priority') == 1, 'vendor icon: its own widget, top left')
+X('function W(id, item, extra) local icon = { SetTexture = function(s, p) s.path = p end, SetTexCoord = function() end, SetAtlas = function(s, a) s.path = "atlas:" .. a end } local d = { itemID = item, itemLink = "|cffffffff|Hitem:" .. item .. "::::|h[x]|h|r", quality = ITEMS[item] and ITEMS[item][2] or 1 } for k, x in pairs(extra or {}) do d[k] = x end return WIDGETS[id].onUpdate(icon, d) and icon.path or nil end')
+ok(L('W("auctionforever", 9001)') is not None and L('W("auctionforever_vendor", 9001)') is None, 'auction item: icon only in the top right')
+ok(L('W("auctionforever", 9002)') is None and L('W("auctionforever_vendor", 9002)') is not None, 'vendor item: icon only in the top left')
+X('JUNK_SOURCE = "auctionforever"')
+ok(L('W("auctionforever_vendor", 9002)') is None, "AF is the junk source and Baganator's junk icon is on: it shows the vendor icon, no second one")
+X('JUNK_ICON_ON = false')
+ok(L('W("auctionforever_vendor", 9002)') is not None and L('W("auctionforever_vendor", 9006)') is not None, "Baganator's junk icon turned off: AF draws the vendor icon itself")
+X('JUNK_ICON_ON = nil; JUNK_SOURCE = "poor_quality"')
+ok(L('AF_NS.Bags.DEFAULT.vendor') == 6 and L('AF_NS.Bags.DEFAULT.auction') == 2, 'defaults: vendor 6, auction 2 (your picks)')
 # Picking icons: /af icon vendor 3 saves the choice and redraws the bags.
 X('AF_NS.Bags.IconCommand("icon vendor 3"); AF_NS.Bags.IconCommand("icon auction 2")')
 ok(L('AuctionForeverDB.icons.vendor') == 3 and L('AuctionForeverDB.icons.auction') == 2 and L('Icon(9002)') == 'coin' and L('Icon(9001)') == 'auction',
