@@ -189,7 +189,7 @@ local function ShownNeed(E)
 	if F == E.best and E.bestNeed then return E.bestNeed end
 	return E.need
 end
-local function GoldText(N) return Core.Money(math.ceil(N / 100) * 100) end
+local function GoldText(N) return Core.MoneyColor(math.ceil(N / 100) * 100) end
 SORTS = {
 	-- plan: FlipRows order (the plan, then what fits now, then by gold needed)
 	gold = function(a, b)
@@ -217,16 +217,16 @@ function T.DrawBuy()
 			local Need = ShownNeed(E)
 			R.Icon:SetTexture(UI().Icon(E.id))
 			R.Cells[1]:SetText(NameText(E.id))
-			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.Money(F.buyUpTo))
-			R.Cells[3]:SetText((F.vendor and "vendor " or "") .. Core.Money(F.resell))
-			R.Cells[4]:SetText("|cff1eff00" .. Core.Money(F.profit) .. "|r")
+			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
+			R.Cells[3]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
+			R.Cells[4]:SetText(Core.MoneyColor(F.profit))
 			local Status
 			if Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
 			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
 			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
 			R.Cells[5]:SetText(Status)
-			if Need then for c = 1, 4 do R.Cells[c]:SetText("|cff808080" .. (R.Cells[c]:GetText() or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") end end
+			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ItemName(E.id) .. "|r") end -- not affordable yet: name greyed
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
 	end
@@ -244,24 +244,24 @@ function T.DrawBuy()
 		local F = Shown(E)
 		if F.vendor then
 			BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
-				NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), Core.Money(F.profit),
-				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.Money(Core.MinKeep) .. " always kept).") or ""))
+				NameText(E.id), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyColor(F.profit),
+				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.MoneyColor(Core.MinKeep) .. " always kept).") or ""))
 		else
 		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
-			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit),
+			NameText(E.id), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyColor(F.profit),
 			F.slow and ("\n" .. "|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r") or "",
-			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.Money(Core.MinKeep) .. "; one item may use only part of it).") or ""))
+			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.MoneyColor(Core.MinKeep) .. "; one item may use only part of it).") or ""))
 		end
 	else
 		BuyP.Detail:SetText("")
 	end
 	local R = Core.FlipResults(SaveDB(), time(), 7)
 	BuyP.Results:SetText(R.sold > 0 and string.format("Your flips, last 7 days: %d sold, profit %s (plan expected %s)",
-		R.sold, Core.Money(R.profit), Core.Money(R.expected)) or "")
+		R.sold, Core.MoneyColor(R.profit), Core.MoneyColor(R.expected)) or "")
 	local P = UI().LastPlan
 	local Line = "Flip Budget: " .. Core.MoneyColor(UI().FlipBudget())
 	if P and P.count > 0 then
-		Line = Line .. string.format("     Plan: %d items, cost %s, profit %s", P.count, Core.Money(P.cost), Core.Money(P.profit))
+		Line = Line .. string.format("     Plan: %d items, cost %s, profit %s", P.count, Core.MoneyColor(P.cost), Core.MoneyColor(P.profit))
 	end
 	BuyP.Budget:SetText(Line)
 	local Min = T.TargetGold()
@@ -370,7 +370,7 @@ function T.BuyClick()
 		if Unit <= F.buyUpTo and A.buyout <= Budget and (not Best or Unit < Best.buyout / math.max(1, Best.qty)) then Best, BestI = A, i end
 	end
 	if not Best then
-		SayBuy("No listing at or under " .. Core.Money(F.buyUpTo) .. " right now. Re-checking...")
+		SayBuy("No listing at or under " .. Core.MoneyColor(F.buyUpTo) .. " right now. Re-checking...")
 		Recheck({ E.id }, function() T.RefreshBuy() end)
 		return
 	end
@@ -379,7 +379,7 @@ function T.BuyClick()
 	Scan.Consume(E.id, Best.qty)
 	RecordBuy(E.id, Best.qty, Best.buyout, F.resell)
 	Buy.bought = (Buy.bought or 0) + Best.qty
-	SayBuy(string.format("Bought %d for %s (%d of %d).", Best.qty, Core.Money(Best.buyout), Buy.bought, F.buyQty))
+	SayBuy(string.format("Bought %d for %s (%d of %d).", Best.qty, Core.MoneyColor(Best.buyout), Buy.bought, F.buyQty))
 	if Buy.bought >= F.buyQty then BuyNext() else T.DrawBuy() end
 end
 
@@ -401,22 +401,22 @@ local function OnPriceUpdated(Unit, Total)
 	local Budget = UI().FlipBudget()
 	if Unit > Pd.max then
 		ResetPurchase(true)
-		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.Money(Unit), Core.Money(Pd.max)))
+		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.MoneyColor(Unit), Core.MoneyColor(Pd.max)))
 		Recheck({ Pd.id }, function() T.RefreshBuy() end)
 	elseif Total > Budget then
 		ResetPurchase(true)
-		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Core.Money(Total), Core.Money(Budget)))
+		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Core.MoneyColor(Total), Core.MoneyColor(Budget)))
 	elseif not R then
 		ResetPurchase(true)
 		SayBuy("The resale doesn't work any more on current data (the price fell or the item stopped selling well). Not bought.")
 	elseif Profit < MinProfit then
 		ResetPurchase(true)
-		SayBuy(string.format("At today's price the expected profit would be %s (under %s). Not bought.", Core.Money(Profit), Core.Money(MinProfit)))
+		SayBuy(string.format("At today's price the expected profit would be %s (under %s). Not bought.", Core.MoneyColor(Profit), Core.MoneyColor(MinProfit)))
 	else
 		Buy.state = "confirm"
 		Pd.total = Total
-		BuyP.Buy:SetText(string.format("Confirm %d for %s", Pd.qty, Core.Money(Total)))
-		SayBuy(string.format("Current price %s each. Click Confirm to buy.", Core.Money(Unit)))
+		BuyP.Buy:SetText(string.format("Confirm %d for %s", Pd.qty, Core.MoneyColor(Total)))
+		SayBuy(string.format("Current price %s each. Click Confirm to buy.", Core.MoneyColor(Unit)))
 	end
 	T.DrawBuy()
 end
@@ -559,10 +559,10 @@ function T.UpdateDeposit()
 	local Exp = ""
 	if Price and Qty > 0 and G.info then
 		local E, Ch = Core.ExpectedPost(G.info, Price, Qty, D, G.cost)
-		Exp = string.format("     Expected %s: %s%s%s|r (%d%% sell)", G.cost and "profit" or "earnings",
-			E >= 0 and "|cff1eff00" or "|cffff4040", E < 0 and "-" or "", Core.Money(math.abs(E)), math.floor(Ch * 100 + 0.5))
+		Exp = string.format("     Expected %s: %s%s (%d%% sell)", G.cost and "profit" or "earnings",
+			E < 0 and "|cffff4040-|r" or "", Core.MoneyColor(math.abs(E)), math.floor(Ch * 100 + 0.5))
 	end
-	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s%s", D and Core.Money(D) or "-", Net and Core.Money(Net) or "-", Exp))
+	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s%s", D and Core.MoneyColor(D) or "-", Net and Core.MoneyColor(Net) or "-", Exp))
 end
 
 -- Redraw whichever of our AH panels is open (item names arriving from the server).
@@ -598,12 +598,12 @@ function T.DrawSell()
 	local I = G.info
 	SellP.Name:SetText(NameText(G.id))
 	local Line = string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
-		G.count, Core.Money(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
+		G.count, Core.MoneyColor(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
 	if G.cost then
 		local Price = T.SellPrice() or G.price
 		local Each = math.floor(Price * (1 - Core.Cut)) - G.cost
-		Line = Line .. string.format("\nYou paid %s each (%d bought). At this price: %s%s|r each.", Core.Money(G.cost), G.held,
-			Each >= 0 and "|cff1eff00profit " or "|cffff4040loss ", Core.Money(math.abs(Each)))
+		Line = Line .. string.format("\nYou paid %s each (%d bought). At this price: %s%s each.", Core.MoneyColor(G.cost), G.held,
+			Each >= 0 and "|cff1eff00profit|r " or "|cffff4040loss|r ", Core.MoneyColor(math.abs(Each)))
 	end
 	local Hint = {
 		loss = "|cffff4040Being the cheapest would sell below your floor (vendor or what you paid): holding may be better.|r",
@@ -694,16 +694,16 @@ function T.PostClick()
 		SellP.Post:SetText("Post")
 		if Pd.commodity then C_AuctionHouse.ConfirmPostCommodity(Pd[1], Pd[2], Pd[3], Pd[4])
 		else C_AuctionHouse.ConfirmPostItem(Pd[1], Pd[2], Pd[3], nil, Pd[4]) end
-		SaySell(string.format("Posted %d at %s each.", Pd[3], Core.Money(Pd[4])))
+		SaySell(string.format("Posted %d at %s each.", Pd[3], Core.MoneyColor(Pd[4])))
 		AfterPost(Pd[3], Pd[4])
 		return
 	end
 	local Price, Qty, Dur = T.SellPrice(), tonumber(SellP.Qty:GetText()), Sell.dur or 1
 	if not Price then SaySell("Enter a price.") return end
-	if Price < Floor(G) then SaySell("That's below what the vendor pays (" .. Core.Money(Floor(G)) .. " after the cut). Not posted.") return end
+	if Price < Floor(G) then SaySell("That's below what the vendor pays (" .. Core.MoneyColor(Floor(G)) .. " after the cut). Not posted.") return end
 	if PaidFloor(G) and Price < PaidFloor(G) and Sell.lossOk ~= G.id then
 		Sell.lossOk = G.id
-		SaySell("That's below what you paid (" .. Core.Money(PaidFloor(G)) .. " after the cut). Click Post again to sell at a loss.")
+		SaySell("That's below what you paid (" .. Core.MoneyColor(PaidFloor(G)) .. " after the cut). Click Post again to sell at a loss.")
 		return
 	end
 	Sell.lossOk = nil
@@ -728,7 +728,7 @@ function T.PostClick()
 		SaySell("The game asks for confirmation (the price is far from the market). Click Confirm post to post anyway.")
 		return
 	end
-	SaySell(string.format("Posted %d at %s each.", Qty, Core.Money(Price)))
+	SaySell(string.format("Posted %d at %s each.", Qty, Core.MoneyColor(Price)))
 	AfterPost(Qty, Price)
 end
 
@@ -801,7 +801,7 @@ Events:SetScript("OnEvent", function(_, Event, A1, A2)
 		if Buy.state == "buying" then
 			local Pd = Buy.pending
 			ResetPurchase(false)
-			SayBuy(string.format("Bought %d for %s.", Pd.qty, Core.Money(Pd.total)))
+			SayBuy(string.format("Bought %d for %s.", Pd.qty, Core.MoneyColor(Pd.total)))
 			Scan.Consume(Pd.id, Pd.qty)
 			RecordBuy(Pd.id, Pd.qty, Pd.total, Pd.resell)
 			BuyNext()

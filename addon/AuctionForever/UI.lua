@@ -312,8 +312,8 @@ end
 -- Why the Flip list is empty, in one line.
 function L.FlipEmptyReason()
 	local Budget = L.FlipBudget()
-	if Budget <= 0 then return "No flip budget left: everything over " .. Core.Money(Core.MinKeep) .. " is used up for this visit." end
-	local Head = string.format("Flip budget %s (your gold, keeping %s; up to %s per item).\n", Core.Money(Budget), Core.Money(Core.MinKeep), Core.Money(Budget * Core.ItemShare(Budget)))
+	if Budget <= 0 then return "No flip budget left: everything over " .. Core.MoneyColor(Core.MinKeep) .. " is used up for this visit." end
+	local Head = string.format("Flip budget %s (your gold, keeping %s; up to %s per item).\n", Core.MoneyColor(Budget), Core.MoneyColor(Core.MinKeep), Core.MoneyColor(Budget * Core.ItemShare(Budget)))
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
 	local N = {}
@@ -324,7 +324,7 @@ function L.FlipEmptyReason()
 	if (N.good or 0) == 0 then
 		return Head .. string.format("No flips yet: no item has %d+ hours of steady sales data (%d warming up).\nThe cloud data and your scans add more every hour.", Core.FlipMinHours, N["warming up"] or 0)
 	end
-	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit (and a %d%%+ return) within that budget right now.", N.good, Core.Money(Core.MinFlipProfitFor(Budget)), math.floor(Core.MinFlipReturn * 100 + 0.5))
+	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit (and a %d%%+ return) within that budget right now.", N.good, Core.MoneyColor(Core.MinFlipProfitFor(Budget)), math.floor(Core.MinFlipReturn * 100 + 0.5))
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
@@ -536,12 +536,12 @@ function L.Refresh()
 			local NameText = (Color and Color.hex or "|cffffffff") .. Name .. "|r"
 			if Tab == 1 then
 				local Mine = MyGoldPerHour(E.id)
-				SetCells(R, { NameText, E.status == "good" and Core.Money(E.value) or "-", Core.Money(Core.Market(I)),
-					string.format("%.0f", I.perHour or 0), Mine and Core.Money(Mine) or "-", StatusText(E.status) })
+				SetCells(R, { NameText, E.status == "good" and Core.MoneyColor(E.value) or "-", Core.MoneyColor(Core.Market(I)),
+					string.format("%.0f", I.perHour or 0), Mine and Core.MoneyColor(Mine) or "-", StatusText(E.status) })
 			else
 				local F = E.flip
-				SetCells(R, { NameText, "|cff1eff00" .. Core.Money(F.profit) .. "|r", F.buyQty .. " at up to " .. Core.Money(F.buyUpTo),
-					Core.Money(F.resell), string.format("%.0f", I.perHour or 0), F.hours .. " h", StatusText("good") })
+				SetCells(R, { NameText, Core.MoneyColor(F.profit), F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo),
+					Core.MoneyColor(F.resell), string.format("%.0f", I.perHour or 0), F.hours .. " h", StatusText("good") })
 			end
 		end
 	end
@@ -560,12 +560,12 @@ function L.RefreshSessions()
 	P.State:SetText(Running and "|cff1eff00Timer running|r" or "|cffff6040Timer stopped|r")
 	P.Toggle:SetText(Running and "Stop timer" or "Start timer")
 	local V = S and Session.Value(S) or 0
-	P.Gold:SetText("This session: " .. Core.Money(V) .. (Secs >= 60 and ("   (" .. Core.Money(V / (Secs / 3600)) .. " per hour)") or ""))
+	P.Gold:SetText("This session: " .. Core.MoneyColor(V) .. (Secs >= 60 and ("   (" .. Core.MoneyColor(V / (Secs / 3600)) .. " per hour)") or ""))
 	local Parts = {}
 	if S then
 		for id, N in pairs(S.items) do Parts[#Parts + 1] = (ItemName(id)) .. " x" .. N end
 		table.sort(Parts)
-		if (S.money or 0) > 0 then Parts[#Parts + 1] = "money " .. Core.Money(S.money) end
+		if (S.money or 0) > 0 then Parts[#Parts + 1] = "money " .. Core.MoneyColor(S.money) end
 	end
 	P.Loot:SetText(#Parts > 0 and ("Looted: " .. table.concat(Parts, ", ")) or "Looted: nothing yet")
 	local Lines = {}
@@ -574,7 +574,7 @@ function L.RefreshSessions()
 		local OSecs = Old.secs or 0
 		local OV = Session.Value(Old)
 		Lines[#Lines + 1] = string.format("%s   %s   %d min   %s   %s/hr", date("%b %d %H:%M", Old.start or 0), Old.zone or "?",
-			math.floor(OSecs / 60), Core.Money(OV), OSecs >= 60 and Core.Money(OV / (OSecs / 3600)) or "-")
+			math.floor(OSecs / 60), Core.MoneyColor(OV), OSecs >= 60 and Core.MoneyColor(OV / (OSecs / 3600)) or "-")
 	end
 	P.History:SetText(#Lines > 0 and table.concat(Lines, "\n") or "No finished sessions yet.")
 end

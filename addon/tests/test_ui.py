@@ -909,6 +909,12 @@ X('AF_NS.Trade.DrawBuy()')
 bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
 ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
+# Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
+X('AF_NS.Trade.DrawBuy()')
+cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[2]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))
+      for i in range(1, min(14, int(L('#AF_NS.Trade.Rows()'))) + 1)]
+coin = str(L('AF_NS.Core.MoneyColor(1)')).split('1c')[0]
+ok(len(cr) > 0 and all(coin in str(b) and coin in str(p) for b, p, _ in cr), f'AF Buy amounts in coin colors ({cr[0][0]!r} / {cr[0][1]!r})')
 # Scroll bars: shown when a list is longer than its 14 rows; dragging scrolls; "1-14 of N" under it.
 X('''SB = AF_NS.Trade.Rows(); SBn = #SB
   for k = 1, 30 do SB[#SB + 1] = SB[((k - 1) % SBn) + 1] end
