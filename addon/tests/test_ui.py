@@ -909,6 +909,9 @@ X('AF_NS.Trade.DrawBuy()')
 bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
 ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
+dp = L('AuctionForeverBuyPanel.Detail._points[#AuctionForeverBuyPanel.Detail._points]')
+ok(dp is not None and dp[1] == 'BOTTOMLEFT' and L('AuctionForeverBuyPanel.Detail._points[#AuctionForeverBuyPanel.Detail._points][2] == AuctionForeverBuyPanel.Buy') and dp[3] == 'TOPLEFT',
+   'AF Buy detail text sits on top of the buttons (long text grows upward)')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
 cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[2]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))

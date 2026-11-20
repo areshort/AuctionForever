@@ -442,8 +442,11 @@ local function BuildBuy()
 	end)
 	P.Bar = ScrollBar(P, 678, -60, function(V) Buy.offset = V; T.DrawBuy() end)
 	P.Empty = Text(P, "GameFontDisable", 20, -66, 600) -- one line in the table, where the first row would be
-	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
+	-- Pinned by its bottom just above the buttons: longer text grows upward instead of running into them.
+	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
+	P.Detail:ClearAllPoints()
+	P.Detail:SetPoint("BOTTOMLEFT", P.Buy, "TOPLEFT", 0, 6)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
 	P.Sort = Button(P, "Sort: plan", 320, -420, 150, function()
 		T.SetBuySort(({ plan = "gold", gold = "profit", profit = "plan" })[Buy.sort])
