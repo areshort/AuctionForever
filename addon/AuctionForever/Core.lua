@@ -35,7 +35,26 @@ function Core.Info(id)
 	for i, Name in ipairs(D.fields) do I[Name] = Row[i] end
 	I.ladder = I.ladder or {}
 	I.soldQty = (I.perHour or 0) * (I.hoursSeen or 0)
-	return Core.MergeScan(I, D.time)
+	I = Core.MergeScan(I, D.time)
+	Core.AddMySales(I, id)
+	return I
+end
+
+-- Your own auction results from the mailbox (Mail.lua): exact, kept apart from the market's sales rate.
+Core.MySalesDays = 3
+function Core.AddMySales(I, id, Now)
+	local DB = AuctionForeverDB
+	local M = type(DB) == "table" and DB.mysales
+	if type(M) ~= "table" then return end
+	local Since = (Now or time()) - Core.MySalesDays * 86400
+	local Sold, Value, Expired = 0, 0, 0
+	for _, R in ipairs(M) do
+		if R[2] == id and R[1] >= Since then
+			if R[5] == "sold" then Sold, Value = Sold + R[3], Value + R[4] elseif R[5] == "expired" then Expired = Expired + R[3] end
+		end
+	end
+	if Sold > 0 then I.mySold, I.mySoldValue = Sold, Value end
+	if Expired > 0 then I.myExpired = Expired end
 end
 
 -- Adds what the player's own auction house scans saw (AuctionForeverDB, written by Scan.lua):

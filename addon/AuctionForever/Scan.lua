@@ -11,7 +11,13 @@ AF.Scan = Scan
 local BATCH = 2000          -- full scan: listings read per frame, so the game doesn't stall
 local LADDER = 12           -- cheapest price levels kept per item
 local MAX_AUC = 200         -- quick scan: cheapest listings kept per item for exact comparison
-local MIN_GAP = 0.25        -- hours between two looks at an item before its sales are measured (15 min)
+-- When does the time between two looks at an item count as a sales window? Not a fixed time: what makes a window
+-- trustworthy is how many separate purchases it holds. Busy items qualify in minutes, slow items get 15 min to have
+-- their fair chance. (The only fixed limit is the server's: full scans about once every 15 min.)
+local MIN_WINDOW = 2 / 60   -- hours: never measure a window shorter than 2 min
+local FAIR_WINDOW = 0.25    -- hours: a window this long counts whatever it holds (15 min)
+local MIN_EVENTS = 10       -- separate purchases that make a shorter window count
+Scan.MIN_EVENTS = MIN_EVENTS
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
 local ITEM_TIMEOUT = 5      -- item lookup: seconds to wait for one item (loading its details + answer)
@@ -90,13 +96,30 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 	local Status, Sold = "new", 0
 	if BT then
 		local H = (Now - BT) / 3600
-		if H < MIN_GAP then
+		local Value, Ev, Hi
+		-- Exact second starting point: listing IDs from a lookup that came too soon after a ladder-only start
+		-- (full scans have no IDs). Compared listing by listing, a short window can already count.
+		local XT = B and B == S.base[id] and B.auc2 and Auc and B.t2
+		local XH = XT and (Now - XT) / 3600
+		if XH and XH >= MIN_WINDOW and XH <= 6 then
+			local C = (B.cov2 and Cov) and math.min(B.cov2, Cov) or (B.cov2 or Cov)
+			local XS, XV, XE, XHi = Core.CompareAuctions(B.auc2, Auc, XH * 3600, C, Commodity)
+			if XH >= FAIR_WINDOW or (XE or 0) >= MIN_EVENTS then
+				Sold, Value, Ev, Hi, H, BQ = XS, XV, XE, XHi, XH, B.qty2
+				Status = "exact"
+			end
+		end
+		if Status == "exact" then
+			Status = "new"
+		elseif H < MIN_WINDOW then
 			Status = "soon"
 		elseif H <= 6 then
-			local Value, Ev, Hi
 			local C = (BC and Cov) and math.min(BC, Cov) or (BC or Cov)
 			if BA and Auc then Sold, Value, Ev, Hi = Core.CompareAuctions(BA, Auc, H * 3600, C, Commodity)
 			else Sold, Value, Ev, Hi = Core.CompareLadders(BL or {}, Map, C) end
+			if H < FAIR_WINDOW and (Ev or 0) < MIN_EVENTS then Status, Sold = "soon", 0 end
+		end
+		if Status ~= "soon" and H <= 6 and H >= MIN_WINDOW then
 			local O = S.obs[id] or {}
 			O[#O + 1] = { Now, H, Sold, Value, Ev, Hi, BQ }
 			local Kept = {}
@@ -107,7 +130,10 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 		end
 	end
 	-- A look too soon after the starting point only refreshes prices; otherwise it becomes the new starting point.
-	if Status ~= "soon" then S.base[id] = { t = Now, ladder = Ladder, auc = Auc, cov = Cov, qty = Qty } end
+	if Status ~= "soon" then S.base[id] = { t = Now, ladder = Ladder, auc = Auc, cov = Cov, qty = Qty }
+	elseif Auc and B and B == S.base[id] and not B.auc and not B.auc2 then
+		B.auc2, B.t2, B.cov2, B.qty2 = Auc, Now, Cov, Qty -- keep the oldest, so the exact window can grow
+	end
 	return Status, Sold
 end
 
@@ -226,6 +252,7 @@ function Scan.Status()
 	elseif Mode == "lookup" and Q then
 		local Done = math.max(0, Q.i - 1)
 		local F = #Q.ids > 0 and Done / #Q.ids or 1
+		if Q.phase == "busy" then return string.format("Quick scan: checking busy items %d of %d (%d%%)", Done, #Q.ids, F * 100), F end
 		return string.format("Looking up items %d of %d (%d%%)", Done, #Q.ids, F * 100), F
 	end
 	return nil, nil
@@ -318,10 +345,11 @@ local function QuickFinish(Reason)
 	elseif Q.measured > 0 then
 		Scan.LastResult = string.format("Item lookup: %d items in %.0f s. Sales measured for %d (%d sold something).", Q.done, Took, Q.measured, Q.withSales)
 	else
-		Scan.LastResult = string.format("Item lookup: %d items in %.0f s. Prices updated; sales are measured %d+ min from now.", Q.done, Took, MinutesToWait(Q.ids, time()))
+		Scan.LastResult = string.format("Item lookup: %d items in %.0f s. Prices updated; sales are measured once enough purchases happen (busy items: minutes, others: within %d min).", Q.done, Took, MinutesToWait(Q.ids, time()))
 	end
 	if Q.skipped > 0 then Scan.LastResult = Scan.LastResult .. string.format(" %d didn't answer.", Q.skipped) end
 	if not Q.silent then Say(Scan.LastResult) end
+	Scan.LastSummary = { done = Q.done, measured = Q.measured, withSales = Q.withSales, skipped = Q.skipped }
 	local Done = Q.onDone
 	Q, Mode = nil, nil
 	Scan.Progress = nil
@@ -451,19 +479,50 @@ function Scan.ApplyBrowse(Items, Now, Complete)
 	end
 end
 
+-- The busiest items (most sold per hour), for exact lookups after a quick scan's browse.
+local BUSY = 20
+function Scan.BusyIds(N)
+	local D = AuctionForeverData
+	local Rows = {}
+	if type(D) ~= "table" or type(D.items) ~= "table" then return Rows end
+	for id in pairs(D.items) do
+		local I = Core.Info(id)
+		if I and (I.perHour or 0) > 0 and (I.qty or 0) > 0 then Rows[#Rows + 1] = { id, I.perHour } end
+	end
+	table.sort(Rows, function(a, b) return a[2] > b[2] end)
+	local Out = {}
+	for i = 1, math.min(N or BUSY, #Rows) do Out[i] = Rows[i][1] end
+	return Out
+end
+
 local function BrowseFinish(Reason)
 	local St = BQ_STATE
 	local Complete = not Reason and C_AuctionHouse.HasFullBrowseResults()
 	Scan.ApplyBrowse(St.items, time(), Complete)
 	local Took = GetTime() - St.started
+	local Done = St.onDone
+	BQ_STATE, Mode, Scan.Progress = nil, nil, nil
 	if Reason and St.n == 0 then
 		Scan.LastResult = "Quick scan: " .. Reason .. "."
 	else
 		Scan.LastResult = string.format("Quick scan: prices and stock for %d items in %.0f s.%s", St.n, Took, Reason and (" Stopped early: " .. Reason .. ".") or "")
 	end
+	-- Phase 2: exact lookups of the busiest items, so a quick scan minutes after a full scan measures their sales.
+	local Busy = (not Reason) and Scan.BusyIds(BUSY) or {}
+	local First = Scan.LastResult
+	if #Busy > 0 and Scan.Lookup(Busy, true, function()
+		local R = Scan.LastSummary or {}
+		Scan.LastResult = string.format("%s Busy items: sales measured for %d of %d%s.", First, R.measured or 0, #Busy,
+			(R.measured or 0) == 0 and " (too soon after the last look; try again in a few min)" or "")
+		if (R.skipped or 0) > 0 then Scan.LastResult = Scan.LastResult .. string.format(" %d didn't answer.", R.skipped) end
+		if not St.silent then Say(Scan.LastResult) end
+		Notify("ScanDone")
+		if Done then Done() end
+	end) then
+		Q.phase = "busy"
+		return
+	end
 	if not St.silent then Say(Scan.LastResult) end
-	local Done = St.onDone
-	BQ_STATE, Mode, Scan.Progress = nil, nil, nil
 	Notify("ScanDone")
 	if Done then Done() end
 end

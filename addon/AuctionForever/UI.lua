@@ -41,7 +41,20 @@ local function ItemName(id)
 	end
 	local C = Cache[id]
 	if C then return C[1], C[2] end
+	local D = AuctionForeverData
+	local Shipped = type(D) == "table" and type(D.names) == "table" and D.names[id]
+	if Shipped then return Shipped, 1 end
 	return "|cff808080loading...|r", 1
+end
+-- Remember a name the client just loaded (preloads included, not only rows drawn on screen).
+local function LearnName(id)
+	if not id then return end
+	local Name, _, Quality = C_Item.GetItemInfo(id)
+	if Name then
+		local Cache = NameCache()
+		local C = Cache[id]
+		if not C or C[1] ~= Name or C[2] ~= Quality then Cache[id] = { Name, Quality } end
+	end
 end
 -- Ask the server for names the lists will need, a few at a time, so they're ready when the window opens.
 function L.Preload(Ids)
@@ -51,7 +64,8 @@ function L.Preload(Ids)
 		while i < #Ids and Done < 20 do
 			i = i + 1
 			local id = Ids[i]
-			if not C_Item.GetItemInfo(id) and not Pending[id] then
+			if C_Item.GetItemInfo(id) then LearnName(id)
+			elseif not Pending[id] then
 				Pending[id] = true
 				if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
 				Done = Done + 1
@@ -811,6 +825,12 @@ function L.TooltipLines(id)
 	else
 		Lines[#Lines + 1] = { "Status", StatusText(S) }
 	end
+	if I.mySold or I.myExpired then
+		local Parts = {}
+		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.Money(I.mySoldValue)) end
+		if I.myExpired then Parts[#Parts + 1] = string.format("%d expired", I.myExpired) end
+		Lines[#Lines + 1] = { "Your auctions, " .. Core.MySalesDays .. " days", table.concat(Parts, ", ") }
+	end
 	return Lines
 end
 local function OnTooltip(Tip, TData)
@@ -844,6 +864,7 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 			local Ids = {}
 			for _, R in ipairs(L.FarmRows()) do Ids[#Ids + 1] = R.id end
 			for _, R in ipairs(L.FlipRows()) do Ids[#Ids + 1] = R.id end
+			for _, id in ipairs(L.QuickList()) do Ids[#Ids + 1] = id end -- includes your bag items (the AF Sell queue)
 			L.Preload(Ids)
 		end)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
@@ -861,9 +882,14 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		local C = L.ParseMoney(Msg or "")
 		if C > 0 then Session.AddMoney(C) end
 	elseif Event == "GET_ITEM_INFO_RECEIVED" then
-		if Frame and Frame:IsShown() and not RefreshQueued then
+		LearnName(tonumber(Msg))
+		if not RefreshQueued then
 			RefreshQueued = true
-			C_Timer.After(0.3, function() RefreshQueued = false; L.Refresh() end)
+			C_Timer.After(0.3, function()
+				RefreshQueued = false
+				if Frame and Frame:IsShown() then L.Refresh() end
+				if AF.Trade and AF.Trade.RedrawNames then AF.Trade.RedrawNames() end
+			end)
 		end
 	end
 end)

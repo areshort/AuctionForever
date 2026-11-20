@@ -22,7 +22,7 @@ setmetatable(_G, { __index = function(_, k)
   if not Allowed[k] then
     local Info = debug.getinfo(2, "S")
     local Src = Info and Info.source or "?"
-    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Trade.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Mail.lua") or Src:find("Trade.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
   end
 end })
 """)
@@ -275,11 +275,11 @@ if real:
     ok('waiting' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), 'progress while waiting: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
     X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
     ok('items read' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), 'progress while reading pages: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
-    X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2])')
-    ok(not L('AF_NS.Scan.Busy()'), 'quick scan done after the last page')
-    f = L('AuctionForeverDB.fresh.items[14047]')
+    X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2]); BrowseLinen = { AuctionForeverDB.fresh.items[2589][1], AuctionForeverDB.fresh.items[2589][3][1][1] }; Browse14047 = AuctionForeverDB.fresh.items[14047]; PumpQuick()')
+    ok(not L('AF_NS.Scan.Busy()'), 'quick scan done after the last page (and its busy-item lookups)')
+    f = L('Browse14047')
     ok(f[1] == 515 and f[2] == 14100 and f[4] == L('AuctionForeverData.time + 5200'), f'pages combined: lowest {f[1]}c, {f[2]} listed')
-    ok(L('AuctionForeverDB.fresh.items[2589][1]') == 24 and L('AuctionForeverDB.fresh.items[2589][3][1][1]') == 24, 'new lowest price becomes the first price level')
+    ok(L('BrowseLinen[1]') == 24 and L('BrowseLinen[2]') == 24, 'new lowest price becomes the first price level')
     ok(L('#AuctionForeverDB.obs[2589]') == L('ObsBefore'), 'quick scan refreshes prices only; sales history untouched')
     ok(L('AF_NS.Scan.Keys[14047] ~= nil'), "server item keys learned for later lookups")
     ok('Quick scan: prices and stock for 2 items' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
@@ -291,6 +291,24 @@ if real:
       time = function() return AuctionForeverData.time + 5400 end
       Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); RunTimers(); RunTimers()""")
     ok(not L('AF_NS.Scan.Busy()') and 'stopped answering' in str(L('LastPrint')), 'server goes quiet: stops and keeps what it got: ' + str(L('LastPrint')))
+
+    # Quick scan phase 2: exact lookups of the busiest items (top by sales per hour), right after the browse.
+    busy = list(L('AF_NS.Scan.BusyIds(20)').values()) if L('AF_NS.Scan.BusyIds') else []
+    ok(0 < len(busy) <= 20, f'busy list: {len(busy)} items')
+    X("""C_AuctionHouse.HasFullBrowseResults = function() return Page >= 2 end
+      C_AuctionHouse.RequestMoreBrowseResults = function() Page = Page + 1 end
+      Looked = {}
+      C_AuctionHouse.SendSearchQuery = function(k) Looked[#Looked + 1] = k.itemID; LastQuery = k.itemID end
+      time = function() return AuctionForeverData.time + 5600 end
+      Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2])""")
+    ok(L('AF_NS.Scan.Busy()'), 'quick scan keeps going after the browse: checking busy items')
+    X('AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
+    bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
+    ok('busy' in bt, 'progress text covers phase 2: ' + bt)
+    X('PumpQuick()')
+    ok(not L('AF_NS.Scan.Busy()') and L('#Looked') == len(busy), f"looked up {L('#Looked')} busy items")
+    lp = str(L('LastPrint'))
+    ok('Quick scan: prices and stock for' in lp and 'busy items' in lp.lower(), 'one chat line for both phases: ' + lp)
 
     # The client ignores searches for items it hasn't cached: wait for GetItemKeyInfo before searching.
     X("""Sent = 0; CacheAsks = 0
@@ -468,6 +486,92 @@ if real:
 X('Money = 2000000; AuctionForeverDB = nil; AF_NS.UI.Toggle(2)')
 reason = str(L('AF_NS.UI.FlipEmptyReason()'))
 ok(('warming up' in reason) or ('steady sellers' in reason), 'empty Flip tab says why: ' + reason.replace('\n', ' '))
+
+# Item names: client cache first, then names learned before, then names shipped in the cloud data, then "loading...".
+X("""RealGetItemInfo = C_Item.GetItemInfo
+  C_Item.GetItemInfo = function(id) if id == 880001 or id == 880002 then return nil end return RealGetItemInfo(id) end
+  AuctionForeverData.names = AuctionForeverData.names or {}
+  AuctionForeverData.names[880001] = "Cloud Name"
+  AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.names = AuctionForeverDB.names or {}
+  AuctionForeverDB.names[880001] = nil; AuctionForeverDB.names[880002] = nil""")
+ok(L('(AF_NS.UI.ItemName(880001))') == 'Cloud Name', 'name from the cloud data shows instantly, with nothing cached in the client')
+ok('loading' in str(L('(AF_NS.UI.ItemName(880002))')), 'unknown name: "loading..."')
+# A name that arrives in the background (preload) is saved, even if no list row ever showed it.
+X("""C_Item.GetItemInfo = function(id) if id == 880002 then return "Learned Name", nil, 3 end return RealGetItemInfo(id) end
+  FireEvent("GET_ITEM_INFO_RECEIVED", 880002, true)""")
+n = L('AuctionForeverDB.names[880002]')
+ok(n is not None and n[1] == 'Learned Name', 'names that arrive in the background are saved for next time')
+X("""C_Item.GetItemInfo = function(id) if id == 880002 then return nil end return RealGetItemInfo(id) end""")
+ok(L('(AF_NS.UI.ItemName(880002))') == 'Learned Name', 'saved name used when the client has forgotten it (next login)')
+X('C_Item.GetItemInfo = RealGetItemInfo')
+# AF Sell / AF Buy redraw when a name arrives (no more "loading..." until you click around).
+X("""Redrawn = 0; local Orig = AF_NS.Trade.RedrawNames; AF_NS.Trade.RedrawNames = function() Redrawn = Redrawn + 1; Orig() end
+  FireEvent("GET_ITEM_INFO_RECEIVED", 880003, true); FireEvent("GET_ITEM_INFO_RECEIVED", 880004, true); AdvanceTime(0.5)
+  AF_NS.Trade.RedrawNames = Orig""")
+ok(L('Redrawn') == 1, f"AF Buy/Sell redraw once when names arrive ({L('Redrawn')} redraws for 2 names)")
+
+# Adaptive sales windows: a short window counts when it holds enough separate purchases (events, not units).
+X("""function MkAuc(N, Q) local A = {} for i = 1, N do A[9000 + i] = { Q or 10, 100 + i, 40000 } end return A end
+  function MkMap(A) local M = {} for _, R in pairs(A) do M[R[2]] = (M[R[2]] or 0) + R[1] end return M end
+  function Bought(A, K) local B = {} local n = 0 for id, R in pairs(A) do n = n + 1; B[id] = { n <= K and R[1] - 1 or R[1], R[2], R[3] } end return B end
+  T0 = 1800000000
+  function Window(id, Mins, Events)
+    AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.obs = AuctionForeverDB.obs or {}; AuctionForeverDB.base = AuctionForeverDB.base or {}; AuctionForeverDB.fresh = AuctionForeverDB.fresh or { items = {} }
+    AuctionForeverDB.obs[id] = nil
+    local A = MkAuc(20)
+    AuctionForeverDB.base[id] = { t = T0, ladder = {}, auc = A, cov = 1000 }
+    local After = Bought(A, Events)
+    return AF_NS.Scan.Observe(id, MkMap(After), nil, After, 1000, T0 + Mins * 60, true)
+  end""")
+ok(L('(Window(777001, 4, 12))') == 'measured', 'busy item: 4 min window with 12 separate purchases is measured')
+ok(L('(Window(777002, 4, 3))') == 'soon' and L('AuctionForeverDB.base[777002].t') == L('T0'), 'quiet item: 4 min with 3 purchases only refreshes prices, starting point kept')
+ok(L('(Window(777003, 1, 20))') == 'soon', 'any window under 2 min only refreshes prices, even with many purchases')
+ok(L('(Window(777004, 16, 0))') == 'measured', 'slow item: 15+ min counts even with no purchases (it had its fair chance)')
+ok(L('(Window(777005, 6, 1))') == 'soon', 'one buyer taking a lot is one purchase: 6 min window not enough')
+# Full scan (no auction IDs) then lookups minutes later: the first lookup keeps its IDs as an exact starting point,
+# the next compares listing by listing and measures the busy item.
+X("""AuctionForeverDB.obs[777010] = nil
+  A = MkAuc(20)
+  AuctionForeverDB.base[777010] = { t = T0, ladder = { { 101, 10, 0 } }, cov = 1000 }  -- from a full scan: ladder only
+  St1 = AF_NS.Scan.Observe(777010, MkMap(A), nil, A, 1000, T0 + 180, true)
+  B2 = Bought(A, 12)
+  St2 = AF_NS.Scan.Observe(777010, MkMap(B2), nil, B2, 1000, T0 + 360, true)""")
+o = L('AuctionForeverDB.obs[777010] and AuctionForeverDB.obs[777010][1]')
+ok(L('St1') == 'soon' and L('St2') == 'measured' and o is not None and o[3] == 12 and abs(o[2] - 180 / 3600) < 1e-9,
+   f"full scan then two lookups 3 min apart: exact window measured ({o and o[3]} sold over {o and round(o[2]*60)} min)")
+
+# Mail: "Auction successful" invoices and "Auction expired" mail are recorded once each as your own exact results.
+# Nothing is taken from the mailbox.
+X("""AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s"; AUCTION_EXPIRED_MAIL_SUBJECT = "Auction expired: %s"
+  AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.names = AuctionForeverDB.names or {}
+  AuctionForeverDB.names[2589] = { "Linen Cloth", 1 }; AuctionForeverDB.mysales = nil
+  Took = false
+  TakeInboxMoney = function() Took = true end; TakeInboxItem = function() Took = true end; AutoLootMailItem = function() Took = true end
+  Inbox = {
+    { sender = "Stormwind Auction House", subject = "Auction successful: Linen Cloth", money = 950, days = 29.5,
+      invoice = { "seller", "Linen Cloth", "Buyer", 1000, 1000, 0, 50, 0, 0, 0, 40 } },
+    { sender = "Stormwind Auction House", subject = "Auction expired: Item 4306", money = 0, days = 29.9, item = { "Item 4306", 4306, 0, 15 } },
+    { sender = "Friend", subject = "hello", money = 500, days = 2 },
+  }
+  GetInboxNumItems = function() return #Inbox, #Inbox end
+  GetInboxHeaderInfo = function(i) local M = Inbox[i]; return nil, nil, M.sender, M.subject, M.money, 0, M.days, M.item and 1 or 0, false end
+  GetInboxInvoiceInfo = function(i) local M = Inbox[i]; if M.invoice then return unpack(M.invoice) end end
+  GetInboxItem = function(i, j) local M = Inbox[i]; if M.item then return unpack(M.item) end end
+  time = function() return 1800000000 end
+  FireEvent("MAIL_SHOW"); FireEvent("MAIL_INBOX_UPDATE"); FireEvent("MAIL_INBOX_UPDATE")""")
+ms = L('AuctionForeverDB.mysales')
+rows = [list(r.values()) for r in ms.values()] if ms else []
+sold = [r for r in rows if r[4] == 'sold']; expd = [r for r in rows if r[4] == 'expired']
+ok(len(rows) == 2, f'mail: 2 auction results recorded once each ({len(rows)} rows)')
+ok(sold and sold[0][1] == 2589 and sold[0][2] == 40 and sold[0][3] == 1000, f'sold invoice: Linen x40 for 1000c ({sold})')
+ok(expd and expd[0][1] == 4306 and expd[0][2] == 15, f'expired mail: item 4306 x15 ({expd})')
+ok(not L('Took'), 'nothing taken from the mailbox')
+I = L('AF_NS.Core.Info(2589)')
+ok(I.mySold == 40 and I.mySoldValue == 1000, f'Info: you sold {I.mySold} for {I.mySoldValue}c in the last 3 days')
+tl = ' | '.join(' '.join(str(x) for x in v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values())
+ok('You sold 40' in tl, 'tooltip shows your own sales: ' + tl)
+X("time = function() return 1800000000 + 4 * 86400 end")
+ok(L('AF_NS.Core.Info(2589).mySold') in (None, 0), 'own sales older than 3 days drop out of the tooltip count')
 
 # /af selftest runs end to end in the mock (auction house open), saves results, and finds no problems.
 X('AuctionHouseFrame:Show(); AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.selftest = nil')

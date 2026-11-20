@@ -363,6 +363,12 @@ function T.UpdateDeposit()
 	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s", D and Core.Money(D) or "-", Net and Core.Money(Net) or "-"))
 end
 
+-- Redraw whichever of our AH panels is open (item names arriving from the server).
+function T.RedrawNames()
+	if BuyP and BuyP:IsShown() then T.DrawBuy() end
+	if SellP and SellP:IsShown() then T.DrawSell() end
+end
+
 function T.DrawSell()
 	if not SellP then return end
 	local Off = Sell.offset or 0

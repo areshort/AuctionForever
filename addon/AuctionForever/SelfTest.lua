@@ -30,7 +30,7 @@ local function CheckAPI()
 			"PostItem", "ConfirmPostItem", "GetItemCommodityStatus", "CalculateCommodityDeposit", "CalculateItemDeposit" } },
 		{ C_Container, "C_Container", { "GetContainerNumSlots", "GetContainerItemInfo" } },
 		{ C_Item, "C_Item", { "GetItemInfo", "GetItemInfoInstant", "RequestLoadItemDataByID" } },
-		{ _G, "global", { "PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_TabResize", "hooksecurefunc", "issecurevariable" } },
+		{ _G, "global", { "PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_TabResize", "hooksecurefunc", "issecurevariable", "GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxInvoiceInfo", "GetInboxItem" } },
 	}
 	local Missing = {}
 	for _, N in ipairs(Need) do

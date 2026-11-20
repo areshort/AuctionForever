@@ -116,5 +116,26 @@ X('''Items = {} for id, F in pairs(AuctionForeverDB.fresh.items) do if F[1] then
 f = L(f'AuctionForeverDB.fresh.items[{THORIUM}]')
 ok(L('ObsCount == ObsAfter') and f[4] == L('AuctionForeverDB.fresh.time + 1500') and f[3][1][1] == f[1], f'quick scan on real data: prices applied (Thorium lowest {f[1]}c), sales history untouched')
 
+# 10. New window rule on real data. Linen's real listings, looked up exactly 5 min apart:
+#     (a) 12 separate purchases -> measured, sensible rate, no burst; (b) one buyer clearing one listing -> prices only.
+X(f"""local L = AuctionForeverDB.fresh.items[{LINEN}][3]
+  function LinenAuc() local A, n = {{}}, 0 for _, s in ipairs(L) do n = n + 1; A[70000 + n] = {{ s[2], s[1], 40000 }} end return A end
+  function Shrink(A, K, Each) local B, n = {{}}, 0 for id, R in pairs(A) do n = n + 1; B[id] = {{ (n <= K) and math.max(0, R[1] - Each) or R[1], R[2], R[3] }} end return B end
+  function MapOf(A) local M = {{}} for _, R in pairs(A) do if R[1] > 0 then M[R[2]] = (M[R[2]] or 0) + R[1] end end return M end
+  T1 = AuctionForeverDB.fresh.time + 4000""")
+n_levels = L(f'#AuctionForeverDB.fresh.items[{LINEN}][3]')
+X(f"""A0 = LinenAuc(); AuctionForeverDB.base[{LINEN}] = {{ t = T1, ladder = {{}}, auc = A0, cov = 1e9 }}
+  A1 = Shrink(A0, 12, 5)
+  St10a = NS.Scan.Observe({LINEN}, MapOf(A1), nil, A1, 1e9, T1 + 300, true)""")
+I = L(f'{C}.Info({LINEN})')
+ok(n_levels >= 12 and L('St10a') == 'measured' and (I.spikes or 0) == 0 and L(f'{C}.Status({C}.Info({LINEN}))') in ('good', 'early'),
+   f"Linen, 5 min, 12 purchases: measured, {I.perHour:.0f}/h, status {L(f'{C}.Status({C}.Info({LINEN}))')}, {I.spikes or 0} bursts")
+X(f"""A2 = Shrink(A1, 1, 1e9)
+  St10b = NS.Scan.Observe({LINEN}, MapOf(A2), nil, A2, 1e9, T1 + 600, true)""")
+ok(L('St10b') == 'soon' and L(f'AuctionForeverDB.base[{LINEN}].t') == L('T1 + 300'), 'Linen, 5 min later, one buyer: prices only, starting point kept')
+X(f'AuctionForeverDB.obs[{RUNECLOTH}] = {{ Saved[1] }}')  # only its real buyout window (test 8 added a replayed one)
+rs = L(f'{C}.Status({C}.Info({RUNECLOTH}))')
+ok(rs == 'early', f'Runecloth on its real buyout window alone: still "early" under the new rule ({rs})')
+
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
