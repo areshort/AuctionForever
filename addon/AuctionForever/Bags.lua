@@ -1,0 +1,202 @@
+-- Bag icons (Baganator, top right corner): the auction icon on items AuctionForever would sell on the auction house,
+-- a coin on items for a vendor (the tooltip's "Rec" line). No icon on soulbound items, quest items, items with no
+-- recommendation and items on your keep list (/af keep [item link]).
+-- Also a Baganator junk source ("AuctionForever"): the vendor items, for its junk search and sell button.
+-- One coin per item: when AuctionForever is Baganator's junk source, Baganator draws the coin (its junk icon) and
+-- this widget only draws the auction icon. Otherwise this widget draws the coin, except on poor (grey) items, which
+-- Baganator's own default junk rule already marks.
+local _, AF = ...
+local B = {}
+AF.Bags = B
+
+local AUCTION_ICON = "Interface\\Minimap\\Tracking\\Auctioneer"
+-- Pawn's arrow art (the same file Gear Upgrade Forever ships); the coin is its bottom-left quarter.
+local COIN_ICON = "Interface\\AddOns\\AuctionForever\\Textures\\UpgradeArrowBig"
+local WIDGET_ID = "auctionforever"
+local JUNK_ID = "auctionforever"
+local POOR = 0
+local QUEST_CLASS = 12
+-- Time budget per refresh (as Gear Upgrade Forever's arrows): items over it are worked out on later frames.
+local LIMIT, RESET_INTERVAL = 2 / 60 / 4, 1 / 4
+
+local function Say(Msg) print("|cffffd100AuctionForever:|r " .. Msg) end
+
+-- Keep list (all characters): items never marked for selling.
+local function KeepList()
+	AuctionForeverDB = AuctionForeverDB or {}
+	AuctionForeverDB.keep = AuctionForeverDB.keep or {}
+	return AuctionForeverDB.keep
+end
+
+local Known, Pending = {}, {}
+local Version
+local function Refresh()
+	local Bag = rawget(_G, "Baganator")
+	if Bag and Bag.API and Bag.API.RequestItemButtonsRefresh then Bag.API.RequestItemButtonsRefresh() end
+end
+function B.Reset() Known = {} Refresh() end
+
+local function ItemID(Link, ID)
+	if type(ID) == "number" then return ID end
+	return tonumber(string.match(Link or "", "item:(%d+)"))
+end
+
+-- "Auction", "Vendor" or "" (no icon). Bound: soulbound.
+local function Decide(ID, Bound)
+	if Bound or KeepList()[ID] then return "" end
+	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(ID)
+	if ClassID == QUEST_CLASS then return "" end
+	return AF.UI.BagAdvice(ID) or ""
+end
+
+local TimerResetsAt, Left = 0, 0
+local Warned = false
+-- The item's advice, cached; nil when this frame's time is used up (asked again on a later frame).
+local function Status(ID, Bound)
+	local V = AF.Scan and AF.Scan.Version or 0
+	if V ~= Version then Version = V; Known = {} end -- new auction data: work everything out again
+	local Key = ID .. (Bound and "#b" or "")
+	if Known[Key] ~= nil then return Known[Key] end
+	local Start = GetTimePreciseSec()
+	if Start >= TimerResetsAt then
+		TimerResetsAt = Start + RESET_INTERVAL
+		Left = LIMIT
+	elseif Left <= 0 then
+		return nil
+	end
+	local Ok, Where = pcall(Decide, ID, Bound)
+	Left = Left - (GetTimePreciseSec() - Start)
+	if not Ok then
+		if not Warned then Warned = true; Say("bag icon error: " .. tostring(Where)) end
+		Where = ""
+	end
+	Known[Key] = Where
+	return Where
+end
+B.Status = Status
+
+-- Items left over a frame's budget are worked out on the next frames, then the bags are redrawn.
+local Retry = CreateFrame("Frame")
+local Tries = 0
+local function OnUpdate(self)
+	Tries = Tries + 1
+	for Key, Args in pairs(Pending) do
+		if Status(Args[1], Args[2]) ~= nil then Pending[Key] = nil end
+	end
+	if next(Pending) == nil or Tries > 600 then
+		Pending = {}
+		self:SetScript("OnUpdate", nil)
+		Refresh()
+	end
+end
+local function Later(ID, Bound)
+	Pending[ID .. (Bound and "#b" or "")] = { ID, Bound }
+	Tries = 0
+	Retry:SetScript("OnUpdate", OnUpdate)
+end
+
+-- Is AuctionForever Baganator's junk source (Baganator then draws the coin)?
+local function JunkSource()
+	local Bag = rawget(_G, "Baganator")
+	local API = Bag and Bag.API
+	if not (API and API.IsJunkPluginActive) then return false end
+	local Ok, Active = pcall(API.IsJunkPluginActive, JUNK_ID)
+	return Ok and Active == true
+end
+B.JunkSource = JunkSource
+
+-- Baganator corner widget: Details is the item button's info (itemID, itemLink, quality, isBound).
+function B.UpdateIcon(Icon, Details)
+	local ID = Details and ItemID(Details.itemLink, Details.itemID)
+	if not ID then return false end
+	local Bound = Details.isBound == true
+	local Where = Status(ID, Bound)
+	if Where == nil then Later(ID, Bound) return false end
+	if Where == "Auction" then
+		Icon:SetTexture(AUCTION_ICON)
+		Icon:SetTexCoord(0, 1, 0, 1)
+		return true
+	elseif Where == "Vendor" then
+		if JunkSource() then return false end -- Baganator's junk icon shows it
+		if Details.quality == POOR then return false end -- Baganator's default junk rule marks greys
+		Icon:SetTexture(COIN_ICON)
+		Icon:SetTexCoord(0, 0.5, 0.5, 1)
+		return true
+	end
+	return false
+end
+
+-- Baganator junk source: vendor items are junk (its junk search and sell button use this).
+function B.IsJunk(BagID, SlotID, ID, Link)
+	ID = ItemID(Link, ID)
+	if not (Link and ID) then return false end
+	local Bound = false
+	if C_Item.IsBound and BagID and SlotID then
+		local IL = rawget(_G, "ItemLocation")
+		if IL then
+			local Ok, Yes = pcall(function() return C_Item.IsBound(IL:CreateFromBagAndSlot(BagID, SlotID)) end)
+			Bound = Ok and Yes == true
+		end
+	end
+	local Where = Status(ID, Bound)
+	if Where == nil then Later(ID, Bound) return false end
+	return Where == "Vendor"
+end
+
+-- /af keep [item link]: add or remove an item from the keep list; /af keep alone lists it.
+function B.KeepCommand(Msg)
+	local List = KeepList()
+	local ID = tonumber(string.match(Msg or "", "item:(%d+)") or string.match(Msg or "", "^%s*keep%s+(%d+)%s*$") or "")
+	if not ID then
+		local Names = {}
+		for K in pairs(List) do Names[#Names + 1] = AF.UI.ItemName(K) or ("item " .. K) end
+		table.sort(Names)
+		Say("kept (no bag icon, never junk): " .. (#Names > 0 and table.concat(Names, ", ") or "nothing yet") .. ". Add or remove one with /af keep and Shift-click the item.")
+		return
+	end
+	local Name = AF.UI.ItemName(ID) or ("item " .. ID)
+	if List[ID] then
+		List[ID] = nil
+		Say(Name .. " can be marked for selling again.")
+	else
+		List[ID] = true
+		Say(Name .. " will never be marked for selling.")
+	end
+	B.Reset()
+end
+
+local SetUp = false
+function B.SetUp()
+	local Bag = rawget(_G, "Baganator")
+	if SetUp or not (Bag and Bag.API and Bag.API.RegisterCornerWidget) then return false end
+	SetUp = true
+	Bag.API.RegisterCornerWidget("AuctionForever", WIDGET_ID, B.UpdateIcon, function(ItemButton)
+		local Icon = ItemButton:CreateTexture(nil, "OVERLAY")
+		Icon:SetSize(15, 15)
+		return Icon
+	end, { corner = "top_right", priority = 1 })
+	if Bag.API.RegisterJunkPlugin then Bag.API.RegisterJunkPlugin("AuctionForever", JUNK_ID, B.IsJunk) end
+	-- New auction data (a scan finished): redraw. Scan calls AF.UI.ScanDone by name, so wrapping it is enough.
+	local ScanDone = AF.UI.ScanDone
+	AF.UI.ScanDone = function(...)
+		if ScanDone then ScanDone(...) end
+		B.Reset()
+	end
+	return true
+end
+
+local LoggedIn = false
+local Events = CreateFrame("Frame")
+Events:RegisterEvent("PLAYER_LOGIN")
+Events:RegisterEvent("ADDON_LOADED")
+Events:RegisterEvent("AUCTION_HOUSE_CLOSED")
+Events:SetScript("OnEvent", function(_, Event, Name)
+	if Event == "PLAYER_LOGIN" then
+		LoggedIn = true
+		B.SetUp()
+	elseif Event == "ADDON_LOADED" then
+		if Name == "Baganator" and LoggedIn then B.SetUp() end -- loaded after login
+	elseif Event == "AUCTION_HOUSE_CLOSED" then
+		if SetUp then B.Reset() end -- your own listings may have changed
+	end
+end)

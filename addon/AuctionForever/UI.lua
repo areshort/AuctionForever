@@ -1082,6 +1082,13 @@ function L.TooltipLines(id)
 	end
 	return Lines
 end
+-- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
+function L.BagAdvice(id)
+	local I = Core.Info(id)
+	local V = Vendor(id)
+	if not I and V <= 0 then return nil, V end
+	return Core.Recommend(I, V, TargetPrice(I)), V
+end
 local function OnTooltip(Tip, TData)
 	if Tip ~= GameTooltip and Tip ~= ItemRefTooltip then return end
 	local id = TData and TData.id
@@ -1169,7 +1176,7 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
-	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run() else L.Toggle(1) end
+	if Msg:match("^keep") and AF.Bags then AF.Bags.KeepCommand(Msg) elseif Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run() else L.Toggle(1) end
 end
 
 AF.UI = L

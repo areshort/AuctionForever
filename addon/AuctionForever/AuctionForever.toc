@@ -10,5 +10,6 @@ AuctionForeverData.lua
 Scan.lua
 SelfTest.lua
 UI.lua
+Bags.lua
 Trade.lua
 Mail.lua
