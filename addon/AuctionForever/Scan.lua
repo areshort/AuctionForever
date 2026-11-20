@@ -45,7 +45,9 @@ local function Baseline(id, Now)
 	if type(D) == "table" and D.items and D.items[id] then
 		local Row, Ladder = D.items[id], nil
 		for i, Name in ipairs(D.fields) do if Name == "ladder" then Ladder = Row[i] end end
-		return Ladder or {}, D.time
+		-- D.time is when the cloud first saw this snapshot; Blizzard made it a little earlier (polling is every
+		-- 20 min), so count it as 15 min older. Comparing with your own previous scan is exact.
+		return Ladder or {}, D.time - 900
 	end
 	return nil, nil
 end

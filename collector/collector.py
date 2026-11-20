@@ -271,9 +271,17 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None):
         print(f'house {HOUSE}: no new snapshot yet ({len(now)} listings unchanged)')
         return False
     hours = (now_ts - state['time']) / 3600 if state.get('time') else None
-    ev = compare(prev, now, hours) if prev and hours and hours < 6 else {}
+    # We only know when a snapshot was first seen. That's close to when Blizzard made it for every snapshot caught
+    # by the 20-minute polling, but not for the very first one (it may have been up for an hour), so a comparison
+    # starting from the first snapshot isn't counted: its sales rate could be several times too high.
+    timed = state.get('timed', False)
+    if not (prev and hours and hours < 6 and timed):
+        hours_for_rate = None
+    else:
+        hours_for_rate = hours
+    ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
     mk = market(now)
-    span = hours if (prev and hours and hours < 6) else 0
+    span = hours_for_rate or 0
     update_history(state, now_ts, mk, ev, span)
     # Hours of sales watched in the kept window, shown by the add-on as "based on N h of sales".
     state['compared'] = [c for c in state.get('compared', []) if c[0] >= now_ts - HOURS_KEPT * 3600] + ([[now_ts, span]] if span else [])
@@ -281,6 +289,8 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None):
     state['time'] = now_ts
     state['runs'] = state.get('runs', 0) + 1
     state['fmt'] = FMT
+    # From now on snapshot times are accurate when the polling keeps going (a long gap starts over).
+    state['timed'] = bool(prev) and hours is not None and hours < 3
     save_state(state_path, state)
     n = write_lua(out_path, state, mk, now_ts)
     print(f'house {HOUSE}: {len(now)} listings, {len(ev)} items changed, {n} items written')

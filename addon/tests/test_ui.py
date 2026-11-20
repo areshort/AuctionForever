@@ -122,7 +122,7 @@ if real:
     ok(not L('AF_NS.Scan.Busy()'), 'scan finished')
     expect = L('LinenBefore[1][2] + LinenBefore[2][2] + (LinenBefore[3][2] - math.floor(LinenBefore[3][2] / 2))')
     obs = L('AuctionForeverDB.obs[2589] and AuctionForeverDB.obs[2589][1]')
-    ok(obs is not None and obs[3] == expect and abs(obs[2] - 2400 / 3600) < 1e-6, f'Linen Cloth: {obs and obs[3]} sold measured over 40 min (expected {expect})')
+    ok(obs is not None and obs[3] == expect and abs(obs[2] - 3300 / 3600) < 1e-6, f'Linen Cloth: {obs and obs[3]} sold measured over 55 min (40 + 15 allowance) (expected {expect})')
     others = L('(function() local n = 0 for id, O in pairs(AuctionForeverDB.obs) do if id ~= 2589 and O[1][3] > 0 then n = n + 1 end end return n end)()')
     ok(others == 0, f'unchanged items show no sales ({others} false sales)')
     ok(L('AuctionForeverDB.fresh.items[2589][1]') == L('LinenBefore[3][1]'), 'fresh lowest price for Linen comes from the scan')
