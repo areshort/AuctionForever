@@ -16,6 +16,7 @@ REGION = 'us'
 RULESET = 1          # the API returns the same houses for every ruleset
 HOUSE = 110          # PvP Alliance, matched against the user's in-game listings 2026-11-19
 FMT = 2          # data format; 2 = only compared hours count as hours of sales
+HISTV = 2        # history version; 2 = cancels aren't sales. Older history (counted the old way) is dropped once.
 HOURS_KEPT = 72
 DAYS_KEPT = 14
 BUCKET_ORDER = {'SHORT': 0, 'MEDIUM': 1, 'LONG': 2, 'VERY_LONG': 3}
@@ -112,33 +113,83 @@ def listings(items, goods):
     return out
 
 
-def compare(prev, now, hours):
-    """What happened to each previous listing. Returns item -> {'sold': [(price, qty)...], 'expired': qty}.
+def new_cutoff(levels):
+    """Highest price a new listing can have and still land in front of sellers at the cheap end: the price where the
+    cheapest 25% of the item's stock is reached, but at least 10% over the lowest price. Listings posted far above
+    the market don't compete with anyone selling near the bottom, so they don't count as new competition."""
+    levels = sorted(levels)
+    if not levels:
+        return None
+    total = sum(q for _, q in levels)
+    run, p25 = 0, levels[-1][0]
+    for p, q in levels:
+        run += q
+        if run * 4 >= total:
+            p25 = p
+            break
+    return max(p25, int(levels[0][0] * 1.1))
 
-    - gone, and its time-left bucket could not have run out in `hours`: sold (or cancelled)
+
+def compare(prev, now, hours):
+    """What happened to each previous listing. Returns item -> {'sold': [(price, qty)...], 'expired': qty,
+    'cancel': [(price, qty)...], 'new': qty}.
+
+    - gone, and its time-left bucket could not have run out in `hours`: sold, if nothing cheaper of the same item
+      from before is still there untouched (buyers take the cheapest first); otherwise cancelled
     - gone from the last bucket that could run out: expired
     - same listing, smaller quantity (commodities): the difference sold
-    - a listing that wasn't there before: newly posted ('new' quantity)
+    - gone and a new listing with the same price and quantity appeared: a repost (cancel and post again), nothing
+    - a listing that wasn't there before: newly posted ('new' quantity), counted only at the cheap end of the market
+      (see new_cutoff) and not when it reposts a cancelled quantity at the same price
     """
     ev = {}
-    for lid, (item, price, qty, bucket, kind) in now.items():
-        if lid not in prev:
-            e = ev.setdefault(item, {'sold': [], 'expired': 0})
-            e['new'] = e.get('new', 0) + qty
+    # Cheapest earlier listing of each item that's still there with the same quantity.
+    intact_min = {}
     for lid, (item, price, qty, bucket, kind) in prev.items():
         cur = now.get(lid)
-        e = ev.setdefault(item, {'sold': [], 'expired': 0})
+        if cur is not None and cur[2] == qty and (item not in intact_min or price < intact_min[item]):
+            intact_min[item] = price
+    new, levels = {}, {}
+    for lid, (item, price, qty, bucket, kind) in now.items():
+        levels.setdefault(item, []).append((price, qty))
+        if lid not in prev:
+            new.setdefault(item, []).append([price, qty])
+    for lid, (item, price, qty, bucket, kind) in prev.items():
+        cur = now.get(lid)
+        e = ev.setdefault(item, {'sold': [], 'expired': 0, 'cancel': []})
         if cur is None:
+            same = next((n for n in new.get(item, []) if n[0] == price and n[1] == qty), None)
+            if same is not None:
+                new[item].remove(same)  # reposted as it was: nothing happened
+                continue
             # Share of this listing that ran out of time rather than sold, from its time-left bucket: the time left is
             # taken as spread evenly over the bucket. Short (<30 min) can't be told apart: counted as expired.
             lo, hi = {0: (0, 0.5), 1: (0.5, 2), 2: (2, 12), 3: (12, 24)}[bucket]
             expired_share = 1.0 if bucket == 0 else min(1.0, max(0.0, (hours - lo) / (hi - lo)))
             e['expired'] += qty * expired_share
             if expired_share < 1:
-                e['sold'].append((price, qty * (1 - expired_share)))
+                gone = qty * (1 - expired_share)
+                if item in intact_min and price > intact_min[item]:
+                    e['cancel'].append((price, gone))
+                else:
+                    e['sold'].append((price, gone))
         elif cur[2] < qty:
             e['sold'].append((price, qty - cur[2]))
-    return {k: v for k, v in ev.items() if v['sold'] or v['expired'] or v.get('new')}
+    for item, lst in new.items():
+        e = ev.setdefault(item, {'sold': [], 'expired': 0, 'cancel': []})
+        cancelled = {}
+        for p, q in e['cancel']:
+            cancelled[p] = cancelled.get(p, 0) + q
+        cut = new_cutoff(levels.get(item, []))
+        n = 0
+        for p, q in lst:
+            m = min(q, cancelled.get(p, 0))  # a cancelled quantity posted again at the same price: not new
+            cancelled[p] = cancelled.get(p, 0) - m
+            if p <= cut:
+                n += q - m
+        if n > 0:
+            e['new'] = n
+    return {k: v for k, v in ev.items() if v['sold'] or v['expired'] or v.get('new') or v['cancel']}
 
 
 def market(now):
@@ -218,8 +269,11 @@ def item_numbers(k, state, mk, now_ts):
     med = wmedian(recent) if recent else None
     hi = None
     if sp:
-        prices = sorted(p for _, p, q in sp for _ in range(max(1, min(int(round(q)), 50))))
-        hi = prices[min(len(prices) - 1, int(len(prices) * 0.75))]
+        # Upper range of what buyers paid, leaving out prices over twice the median (a mistake or a cancel at a silly
+        # price would otherwise set the ceiling).
+        m_all = wmedian([(p, q) for _, p, q in sp])
+        prices = sorted(p for _, p, q in sp if p <= 2 * m_all for _ in range(max(1, min(int(round(q)), 50))))
+        hi = prices[min(len(prices) - 1, int(len(prices) * 0.75))] if prices else m_all
     sold_total = sum(r[3] for r in rows)  # quantities (perHour = sold / hours watched)
     exp_total = sum(r[5] for r in rows)
     sales = len(sp)
@@ -235,6 +289,11 @@ def item_numbers(k, state, mk, now_ts):
     # New listings per hour (other sellers posting): the average, so a busy posting hour isn't hidden.
     new_rows = [r for r in rows if len(r) > 7]
     new_hour = sum(r[7] for r in new_rows) / sum(r[6] for r in new_rows) if new_rows else None
+    # Lowest price over time: the last three snapshots (falling-price check), and the highest lowest price over the
+    # last 24 h when a day was watched (has the market stayed under a price all day?).
+    lows = [r[1] for r in all_rows if r[1] is not None][-3:]
+    day_rows = [r for r in all_rows if now_ts - r[0] <= 86400 and r[1] is not None]
+    low_hi24 = max(r[1] for r in day_rows) if len(day_rows) >= 20 else None
     return {
         'low': m['low'] if m else None,
         'qty': qty_now,
@@ -245,6 +304,7 @@ def item_numbers(k, state, mk, now_ts):
         'sales': sales, 'sellThrough': (sold_total / (sold_total + exp_total)) if (sold_total + exp_total) else None,
         'qtyDayAgo': qty_24h_ago[0] if qty_24h_ago else None,
         'newHour': new_hour,
+        'lows': lows, 'lowHi24': low_hi24,
         'daily': state['daily'].get(k, []),
     }
 
@@ -270,7 +330,7 @@ def lua(v):
 
 
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
-          'sellThrough', 'qtyDayAgo', 'newHour']
+          'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24']
 
 
 def write_lua(path, state, mk, now_ts):
@@ -324,12 +384,18 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
         items, goods = fetch()
         names_fn = names_fn or fetch_names
     state = load_state(state_path)
+    reset = state.get('histv') != HISTV
+    if reset:
+        # History counted under older rules is dropped once; listings and timing are kept so the next comparison counts.
+        for k in ('hourly', 'soldprices', 'daily', 'compared', 'lastDay'):
+            state.pop(k, None)
+        state['histv'] = HISTV
     now = listings(items, goods)
     prev = state.get('listings')
     if prev is not None and prev == now:
         # Blizzard hasn't published a new snapshot yet: change nothing, so this isn't counted as an hour of no sales.
         added = update_names(state, market(now), names_fn)
-        if state.get('fmt') != FMT or added:
+        if state.get('fmt') != FMT or added or reset:
             # ...but a data file written by an older collector is rewritten right away in the current format.
             state['fmt'] = FMT
             save_state(state_path, state)

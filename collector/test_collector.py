@@ -45,13 +45,14 @@ ok(C.run(st, out, [], g1, now_ts=1_001_800) is False, 'same snapshot again: skip
 g2 = [good(20, 17, 100, 20, 'LONG'), good(21, 17, 120, 10, 'VERY_LONG')]
 C.run(st, out, [], g2, now_ts=1_003_600)
 ok('17' not in C.load_state(st).get('soldprices', {}), 'comparison starting from the very first snapshot is not counted')
-g2 = [good(20, 17, 100, 20, 'LONG'), good(23, 17, 130, 1, 'VERY_LONG')]
+# 5 of the cheapest bought (20 -> 15), so the 120c listing that's gone was bought too (not a cancel).
+g2 = [good(20, 17, 100, 15, 'LONG'), good(23, 17, 130, 1, 'VERY_LONG')]
 C.run(st, out, [], g2, now_ts=1_007_200)
 s = C.load_state(st)
 ok(s['soldprices']['17'][-1][1:] == [120, 10], 'next snapshot an hour later: 10 sold at 120c recorded')
 n1 = C.item_numbers('17', s, C.market(C.listings([], g2)), 1_007_200)
-ok(n1['hoursSeen'] == 1 and abs(n1['perHour'] - 10) < 1e-9, f"only the timed hour counts: {n1['hoursSeen']} h, {n1['perHour']}/h")
-ok(n1['newHour'] == 1, f"new listings per hour: 1 posted in that hour ({n1['newHour']})")
+ok(n1['hoursSeen'] == 1 and abs(n1['perHour'] - 15) < 1e-9, f"only the timed hour counts: {n1['hoursSeen']} h, {n1['perHour']}/h")
+ok(n1['newHour'] == 0, f"a new listing far above the cheap end (130c, lowest 100c) doesn't land in front of anyone: not counted ({n1['newHour']})")
 # Spans other than 1 h: 25 sold over 1.25 h and 40 over 2 h = 65 over 3.25 h = 20/h (not rates divided by hours again).
 sx = {'hourly': {'99': [[1, 10, 100, 25, 250, 0, 1.25, 0], [2, 10, 100, 40, 400, 5, 2.0, 0]]}, 'soldprices': {}, 'daily': {}}
 nx = C.item_numbers('99', sx, {}, 3)
@@ -91,5 +92,49 @@ st3, out3 = os.path.join(d, 'm_state.json.gz'), os.path.join(d, 'm_data.lua')
 C.run(st3, out3, [], g1, now_ts=3_000_000)
 ok(C.run(st3, out3, [], g1, now_ts=3_001_800, names_fn=fake_names) is True and 'Linen' in open(out3, encoding='utf-8').read(),
    'unchanged snapshot: missing names still added and written')
+# ---- Cancels are not sales (buyers take the cheapest first).
+pa = C.listings([], [good(101, 30, 100, 10, 'LONG'), good(102, 30, 200, 10, 'LONG')])
+na = C.listings([], [good(101, 30, 100, 10, 'LONG')])
+ev = C.compare(pa, na, 1.0)
+ok(not ev.get(30, {}).get('sold') and sum(q for _, q in ev[30].get('cancel', [])) == 10,
+   f"listing gone while a cheaper one is still there untouched: a cancel, not a sale ({ev.get(30)})")
+ev = C.compare(pa, {}, 1.0)
+ok(sum(q for _, q in ev[30]['sold']) == 20, 'both gone, cheapest first: both sold')
+nb = C.listings([], [good(101, 30, 100, 4, 'LONG')])
+ev = C.compare(pa, nb, 1.0)
+ok(sum(q for _, q in ev[30]['sold']) == 16, f"cheapest partly bought (10 -> 4) and the next one gone: 6 + 10 sold ({ev[30]['sold']})")
+# Repost: gone and an identical new listing (same price and quantity): nothing sold, nothing new.
+pr = C.listings([], [good(110, 31, 100, 10, 'LONG')]); nr = C.listings([], [good(111, 31, 100, 10, 'VERY_LONG')])
+ev = C.compare(pr, nr, 1.0)
+ok(not ev.get(31, {}).get('sold') and not ev.get(31, {}).get('new'), f"cancel and repost of the same listing: neither a sale nor a new listing ({ev.get(31)})")
+# Cancel at 200 while 100 is intact, new 7 at 200: the cancel and the repost cancel out; a new listing far above isn't counted.
+nc = C.listings([], [good(101, 30, 100, 10, 'LONG'), good(103, 30, 200, 7, 'VERY_LONG'), good(104, 30, 1000, 50, 'VERY_LONG')])
+ev = C.compare(pa, nc, 1.0)
+ok(not ev[30].get('new'), f"repost at the cancelled price and a far-above listing: no new listings counted ({ev[30].get('new')})")
+# A new listing at the cheap end (within 10% of the lowest) lands in front of sellers: counted.
+nd = C.listings([], [good(101, 30, 100, 10, 'LONG'), good(102, 30, 200, 10, 'LONG'), good(105, 30, 105, 3, 'VERY_LONG')])
+ev = C.compare(pa, nd, 1.0)
+ok(ev[30].get('new') == 3, f"new listing at 105c with 100c lowest: counted ({ev[30].get('new')})")
+# ---- Price ceiling ignores sales far above the median (cancel-looking spikes, mistakes).
+sh = {'hourly': {'97': [[1, 100, 50, 30, 3000, 0, 1.0, 0]]}, 'soldprices': {'97': [[1, 100, 25], [1, 105, 5], [1, 1000, 20]]}, 'daily': {}}
+nh = C.item_numbers('97', sh, {}, 2)
+ok(nh['hi'] is not None and nh['hi'] <= 105, f"a few sales at 10x the median don't set the price ceiling (hi = {nh['hi']})")
+# ---- Lowest-price history for the add-on: last 3 lows, and the highest lowest price over 24 h (when watched that long).
+rows = [[1_000_000 + i * 3600, 200 - i, 10, 0, 0, 0, 1.0, 0] for i in range(24)]
+sl = {'hourly': {'96': rows}, 'soldprices': {}, 'daily': {}}
+nl = C.item_numbers('96', sl, {}, 1_000_000 + 23 * 3600)
+ok(nl['lows'] == [179, 178, 177] and nl['lowHi24'] == 200, f"lows {nl['lows']}, highest lowest over 24 h {nl['lowHi24']}")
+nl2 = C.item_numbers('96', {'hourly': {'96': rows[:5]}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 4 * 3600)
+ok(nl2['lowHi24'] is None, 'under a day of hours: no 24 h figure')
+# ---- History counted the old way (cancels as sales) is dropped once, then kept.
+d2 = tempfile.mkdtemp()
+st4, out4 = os.path.join(d2, 's.gz'), os.path.join(d2, 'o.lua')
+C.save_state(st4, {'hourly': {'17': [[1, 10, 5, 99, 990, 0, 1.0, 0]]}, 'soldprices': {'17': [[1, 10, 99]]}, 'daily': {'17': [[0, 10, 99, 0]]},
+                   'compared': [[1, 1.0]], 'listings': C.listings([], g1), 'time': 1_000_000, 'timed': True, 'fmt': C.FMT})
+C.run(st4, out4, [], g2, now_ts=1_003_600)
+s4 = C.load_state(st4)
+ok(s4.get('histv') == C.HISTV and all(r[0] != 1 for r in s4['hourly'].get('17', [])) and '17' not in s4.get('daily', {}),
+   'old-style history dropped once (hourly, sales, daily)')
+ok(s4['hourly'].get('17') and s4['hourly']['17'][-1][6] > 0, 'the comparison right after the reset still counts')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
