@@ -943,6 +943,31 @@ ok(order == sorted(order), f'sort by gold needed: lowest first {order}')
 X('AF_NS.Trade.SetBuySort("profit")')
 pr = [L(f'AF_NS.Trade.Rows()[{i}].best.profit') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
 ok(pr == sorted(pr, reverse=True), f'sort by profit: highest first {pr}')
+# AF Buy column headers sort: highest first, again lowest first, a third time back to the plan's order.
+X('AF_NS.Trade.SetBuySort("plan")')
+def buyheads(): return [L(f'AuctionForeverBuyPanel.Headers[{i}].Label:GetText()') for i in range(1, 6)]
+def buyrows(): return [L(f'AF_NS.Trade.Rows()[{i}]') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+ok(L('rawget(AuctionForeverBuyPanel, "Sort") == nil') and buyheads() == ['Item', 'Buy', 'Resell at', 'Profit', 'Status'],
+   f'AF Buy: no sort button, plain headers in plan order: {buyheads()}')
+X('AF_NS.Trade.DrawBuy(); Click(AuctionForeverBuyPanel.Headers[4])')
+pr = [(r.best or r.flip).profit for r in buyrows()]
+ok(pr == sorted(pr, reverse=True) and buyheads()[3] == 'Profit v' and L('(AF_NS.Trade.BuySort())') == 'profit', f'click Profit: highest first, marked {pr}')
+X('Click(AuctionForeverBuyPanel.Headers[4])')
+pr = [(r.best or r.flip).profit for r in buyrows()]
+ok(pr == sorted(pr) and buyheads()[3] == 'Profit ^', 'click Profit again: lowest first')
+X('Click(AuctionForeverBuyPanel.Headers[4])')
+ok(L('(AF_NS.Trade.BuySort())') == 'plan' and L('AF_NS.Trade.Rows()[1].plan') == True and buyheads()[3] == 'Profit', 'third click: back to the plan order')
+X('Click(AuctionForeverBuyPanel.Headers[2])')
+co = [r.flip.cost for r in buyrows()]
+ok(co == sorted(co, reverse=True) and buyheads()[1] == 'Buy v', f'click Buy: by cost {co}')
+X('Click(AuctionForeverBuyPanel.Headers[1])')
+nm = [str(L(f'AF_NS.UI.SortName({r.id})')) for r in buyrows()]
+ok(nm == sorted(nm, reverse=True) and buyheads()[0] == 'Item v', 'click Item: by name')
+X('Click(AuctionForeverBuyPanel.Headers[5])')
+nd = [r.need or 0 for r in buyrows()]
+ok(nd == sorted(nd, reverse=True) and buyheads()[4] == 'Status v', 'click Status: by gold needed')
+X('AF_NS.Trade.DrawBuy(); AuctionForeverBuyPanel:GetScript("OnMouseWheel")(AuctionForeverBuyPanel, -1); Click(AuctionForeverBuyPanel.Headers[3])')
+ok(L('AuctionForeverBuyPanel.Bar:GetValue()') == 0, 'a re-sort scrolls back to the top')
 X('AF_NS.Trade.SetBuySort("plan")')
 tg = L('AF_NS.Trade.TargetGold()')
 mins = [L(f'AF_NS.Trade.Rows()[{i}].minGold') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
@@ -1129,8 +1154,11 @@ ok(L('AF_NS.UI.ProfessionsKnown') is False and not L('AF_NS.UI.CraftFiltered'), 
 
 # The window: Gather view, columns, scroll bar, controls, honest per-day label.
 X('AF_NS.UI.FarmView = "gather"; AF_NS.UI.Toggle(1); if not AuctionForeverFrame:IsShown() then AF_NS.UI.Toggle(1) end')
-heads = [L(f'AuctionForeverFrame.Headers[{i}]:GetText()') for i in range(1, 7)]
-ok(heads == ['Item', 'Net each', 'Sells/day*', 'Gold/day*', 'Your gold/hr', 'Status'], f'Gather columns: {heads}')
+def heads(): return [L(f'AuctionForeverFrame.Headers[{i}].Label:GetText()') for i in range(1, 7)]
+def shown(field):
+    rows = L('AF_NS.UI.ShownRows()')
+    return [rows[i][field] for i in range(1, len(rows) + 1)]
+ok(heads() == ['Item', 'Gold each', 'Sells/day*', 'Gold/day* v', 'Your gold/hr', 'Status'], f'Gather columns, sorted by gold a day (marked): {heads()}')
 ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'market room' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
    'per-day numbers labelled as market room: ' + str(L('AuctionForeverFrame.FarmBar.Note:GetText()')))
 ok(L('AuctionForeverFrame.Bar:IsShown()') and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24', 'scroll bar with "1-14 of 24"')
@@ -1138,18 +1166,39 @@ ok(not L('AuctionForeverFrame.FarmBar.Gather:IsEnabled()') and L('AuctionForever
    'Gather selected: its button greyed, no professions button')
 X('AuctionForeverFrame.List:GetScript("OnMouseWheel")(AuctionForeverFrame.List, -1)')
 ok(L('AuctionForeverFrame.Bar.Count:GetText()') == '4-17 of 24', 'mouse wheel scrolls and moves the bar: ' + str(L('AuctionForeverFrame.Bar.Count:GetText()')))
-X('Click(AuctionForeverFrame.FarmBar.Sort)')
-gr2 = L('AF_NS.UI.GatherRows()')
-nets = [gr2[i].net for i in range(1, len(gr2) + 1)]
-ok(L('AF_NS.UI.GatherSort') == 'unit' and nets == sorted(nets, reverse=True) and L('AuctionForeverFrame.FarmBar.Sort:GetText()') == 'Sort: net each',
-   'Sort button: by net each')
-X('Click(AuctionForeverFrame.FarmBar.Sort)')
-ok(L('AF_NS.UI.GatherSort') == 'gold', 'Sort button cycles back to gold/day')
+v = shown('value')
+ok(v == sorted(v, reverse=True), 'default order: gold a day (gold each x sells a day), highest first')
+ok(L('rawget(AuctionForeverFrame.FarmBar, "Sort") == nil'), 'no sort button: the column headers sort')
+# Click a header: that column, highest first, back to the top; again: lowest first.
+X('Click(AuctionForeverFrame.Headers[2])')
+n = shown('net')
+ok(n == sorted(n, reverse=True) and heads()[1] == 'Gold each v' and heads()[3] == 'Gold/day*' and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24',
+   f'header click: gold each, highest first, marked, scrolled to the top ({heads()[1]})')
+X('Click(AuctionForeverFrame.Headers[2])')
+n = shown('net')
+ok(n == sorted(n) and heads()[1] == 'Gold each ^', 'same header again: lowest first')
+X('Click(AuctionForeverFrame.Headers[3])')
+pdv = shown('perDay')
+ok(pdv == sorted(pdv, reverse=True) and heads()[2] == 'Sells/day* v', 'sell rate column sorts (your share a day)')
+X('Click(AuctionForeverFrame.Headers[1])')
+names = [str(L(f'AF_NS.UI.SortName({i})')) for i in shown('id')]
+ok(names == sorted(names, reverse=True), 'item name column sorts (by saved/shipped names, no server calls)')
+ok(2589 in [L(f'AF_NS.UI.QuickList()')[i] for i in range(1, len(L('AF_NS.UI.QuickList()')) + 1)], 'the quick scan list is not affected by the shown order')
+X('Click(AuctionForeverFrame.FarmBar.Craft); Click(AuctionForeverFrame.FarmBar.Gather)')
+ok(heads()[0] == 'Item v', 'the sort is remembered per list for the session')
+X('Click(AuctionForeverFrame.Headers[4])')
+ok(heads()[3] == 'Gold/day* v', 'back to gold a day')
 
 # Craft view.
 X('Click(AuctionForeverFrame.FarmBar.Craft)')
-heads = [L(f'AuctionForeverFrame.Headers[{i}]:GetText()') for i in range(1, 7)]
-ok(heads == ['Item', 'Profession', 'Profit/craft', 'Crafts/day*', 'Gold/day*', 'Added/day*'], f'Craft columns: {heads}')
+ok(heads() == ['Item', 'Profession', 'Profit/craft', 'Crafts/day*', 'Gold/day* v', 'Added/day*'], f'Craft columns, sorted by gold a day: {heads()}')
+X('Click(AuctionForeverFrame.Headers[6])')
+ad = shown('addedPerDay')
+ok(heads()[5] == 'Added/day* v' and ad == sorted(ad, reverse=True), 'craft header click: value added a day, highest first')
+X('Click(AuctionForeverFrame.Headers[3])')
+pc = [x for x in shown('profit') if x is not None]
+ok(heads()[2] == 'Profit/craft v' and pc == sorted(pc, reverse=True), 'craft header click: profit a craft')
+X('Click(AuctionForeverFrame.Headers[5])')
 ok(L('AuctionForeverFrame.FarmBar.Prof:IsShown()') and 'not known' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
    'professions unknown: says all are shown')
 X('''Tip = { lines = {} }

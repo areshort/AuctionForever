@@ -155,7 +155,6 @@ L.StatusText = StatusText
 local Farm = AF.Farm
 L.FarmView = "gather"   -- or "craft"
 L.CraftAll = false      -- false: only your professions (when the game tells us which you have)
-L.GatherSort, L.CraftSort = "gold", "gold"
 local GatherCache, CraftCache
 local function DataKey()
 	local D = AuctionForeverData
@@ -196,17 +195,32 @@ local function IsGear(id)
 	return Kind(id) == "item"
 end
 L.IsGear = IsGear
-local GATHER_SORT = { gold = "value", unit = "net" }
-local CRAFT_SORT = { gold = "profitPerDay", added = "addedPerDay", craft = "profit" }
-L.SORT_TEXT = { gold = "Sort: gold/day", unit = "Sort: net each", added = "Sort: added/day", craft = "Sort: profit/craft" }
-local function SortBy(Rows, Field)
+-- Sort rows by Get(row), highest first (Asc: lowest first). Rows without a value go last either way.
+local function SortBy(Rows, Get, Asc)
+	local K = {}
+	for _, R in ipairs(Rows) do K[R] = Get(R) end
 	table.sort(Rows, function(a, b)
-		local x, y = a[Field] or -math.huge, b[Field] or -math.huge
-		if x ~= y then return x > y end
+		local x, y = K[a], K[b]
+		if x ~= y then
+			if x == nil then return false end
+			if y == nil then return true end
+			if Asc then return x < y end
+			return x > y
+		end
 		if a.id ~= b.id then return a.id < b.id end
 		return (a.spell or 0) < (b.spell or 0)
 	end)
 end
+L.SortBy = SortBy
+-- A name to sort by without asking the game (saved names, then the data file's names, then the ID).
+local function SortName(id)
+	local C = NameCache()[id]
+	if C and C[1] then return C[1] end
+	local D = AuctionForeverData
+	local N = type(D) == "table" and type(D.names) == "table" and D.names[id]
+	return N or ("Item " .. id)
+end
+L.SortName = SortName
 -- Gather view: every item with auction data except gear, best gold a day first; excluded ones (warming up, no
 -- sales...) are left out.
 function L.GatherRows()
@@ -218,10 +232,6 @@ function L.GatherRows()
 		for id in pairs(D.items) do if not IsGear(id) then Ids[#Ids + 1] = id end end
 		table.sort(Ids)
 		GatherCache = { key = Key, rows = (Farm.RawFarms(Ids, FarmEnv())) }
-	end
-	if GatherCache.sort ~= L.GatherSort then
-		SortBy(GatherCache.rows, GATHER_SORT[L.GatherSort] or "value")
-		GatherCache.sort = L.GatherSort
 	end
 	return GatherCache.rows
 end
@@ -269,26 +279,15 @@ function L.CraftRows()
 			R.myRank = Mine and Mine[R.skill]
 			if not R.excluded and ((not R.buyExcluded and (R.profit or 0) > 0) or (R.added or 0) > 0) then Rows[#Rows + 1] = R end
 		end
+		SortBy(Rows, function(R) return not R.buyExcluded and R.profitPerDay or nil end)
 		CraftCache = { key = Key, rows = Rows }
 	end
 	L.CraftFiltered = Filtered
-	if CraftCache.sort ~= L.CraftSort then
-		SortBy(CraftCache.rows, CRAFT_SORT[L.CraftSort] or "profitPerDay")
-		CraftCache.sort = L.CraftSort
-	end
 	return CraftCache.rows
 end
 function L.FarmData() return L.FarmView == "craft" and L.CraftRows() or L.GatherRows() end
 function L.SetFarmView(View) L.FarmView = View; L.Load() end
 function L.ToggleCraftAll() L.CraftAll = not L.CraftAll; L.Load() end
-function L.NextFarmSort()
-	local Order = L.FarmView == "craft" and { "gold", "added", "craft" } or { "gold", "unit" }
-	local Cur = L.FarmView == "craft" and L.CraftSort or L.GatherSort
-	local Next = Order[1]
-	for i, K in ipairs(Order) do if K == Cur then Next = Order[i % #Order + 1] end end
-	if L.FarmView == "craft" then L.CraftSort = Next else L.GatherSort = Next end
-	L.Load()
-end
 
 local function Money(C) return C and Core.MoneyColor(C) or "-" end
 -- Tooltip lines for a Farm row (added under the item's own tooltip).
@@ -682,8 +681,12 @@ local Rows = {}
 local Data, Offset, Tab = {}, 0, 1
 local Columns = {
 	-- Farm: "*" = market room (your share of what the market buys a day), explained under the list.
-	gather = { { "Item", 190 }, { "Net each", 85 }, { "Sells/day*", 65 }, { "Gold/day*", 85 }, { "Your gold/hr", 80 }, { "Status", 70 } },
-	craft = { { "Item", 165 }, { "Profession", 80 }, { "Profit/craft", 85 }, { "Crafts/day*", 60 }, { "Gold/day*", 85 }, { "Added/day*", 85 } },
+	-- Gather: gold each (net) x sells a day (your share) = gold a day, the default sort.
+	gather = { { "Item", 190, "name" }, { "Gold each", 85, "net" }, { "Sells/day*", 65, "perDay" }, { "Gold/day*", 85, "value" },
+		{ "Your gold/hr", 80, "mine" }, { "Status", 70, "status" } },
+	-- Craft: profit a craft (buying the mats) x crafts a day = gold a day, the default sort.
+	craft = { { "Item", 165, "name" }, { "Profession", 80, "skill" }, { "Profit/craft", 85, "profit" }, { "Crafts/day*", 60, "crafts" },
+		{ "Gold/day*", 85, "profitPerDay" }, { "Added/day*", 85, "addedPerDay" } },
 	[2] = { { "Item", 190 }, { "Profit", 80 }, { "Buy", 110 }, { "Resell", 80 }, { "Sells/hr", 60 }, { "Time", 40 }, { "Status", 50 } },
 }
 
@@ -698,6 +701,44 @@ local function MyGoldPerHour(id)
 	return Core.LootValue(Core.Info(id), Items, Vendor(id)) / (Secs / 3600)
 end
 
+-- Column sort per list for this session (default: gold a day, highest first). Click a header: highest first; again:
+-- lowest first.
+local FarmSort = { gather = { key = "value" }, craft = { key = "profitPerDay" } }
+local SORT_GET = {
+	name = function(R) return SortName(R.id) end,
+	net = function(R) return R.net end,
+	perDay = function(R) return R.perDay end,
+	value = function(R) return R.value end,
+	mine = function(R) return MyGoldPerHour(R.id) end,
+	status = function(R) return R.status end,
+	skill = function(R) return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "" end,
+	profit = function(R) return not R.buyExcluded and R.profit or nil end,
+	crafts = function(R) return (not R.buyExcluded and R.profit) and R.buyCrafts or R.crafts end,
+	profitPerDay = function(R) return not R.buyExcluded and R.profitPerDay or nil end,
+	addedPerDay = function(R) return (R.addedPerDay or 0) > 0 and R.addedPerDay or nil end,
+}
+function L.FarmSortState(View) local S = FarmSort[View or L.FarmView] return S.key, S.asc == true end
+-- The Farm list in the chosen column order: a sorted copy (the cached list keeps gold-a-day order for the quick scan).
+local SortedCache
+local function SortedFarm(Rows)
+	local S = FarmSort[L.FarmView]
+	if SortedCache and SortedCache.src == Rows and SortedCache.key == S.key and SortedCache.asc == S.asc then return SortedCache.rows end
+	local Out = {}
+	for i, R in ipairs(Rows) do Out[i] = R end
+	SortBy(Out, SORT_GET[S.key] or SORT_GET.value, S.asc)
+	SortedCache = { src = Rows, key = S.key, asc = S.asc, rows = Out }
+	return Out
+end
+-- A header click: sort by that column, highest first; the same column again flips the order. Back to the top.
+function L.SortFarmColumn(i)
+	if Tab ~= 1 then return end
+	local C = Columns[L.FarmView][i]
+	if not (C and C[3]) then return end
+	local S = FarmSort[L.FarmView]
+	if S.key == C[3] then S.asc = not S.asc else S.key, S.asc = C[3], false end
+	L.Load()
+end
+
 local function SetCells(Row, Values)
 	for i, Cell in ipairs(Row.Cells) do
 		Cell:SetText(Values[i] or "")
@@ -709,13 +750,18 @@ local function LayoutHeader()
 	for i, H in ipairs(Frame.Headers) do
 		local C = Cols and Cols[i]
 		H:SetShown(C ~= nil)
-		if C then H:SetText(C[1]) end
+		if C then
+			local Mark = ""
+			if Tab == 1 and C[3] and FarmSort[L.FarmView].key == C[3] then Mark = FarmSort[L.FarmView].asc and " ^" or " v" end
+			H.Label:SetText(C[1] .. Mark)
+			H:EnableMouse(Tab == 1 and C[3] ~= nil)
+		end
 	end
 	local X = 34
 	for i, H in ipairs(Frame.Headers) do
 		local C = Cols and Cols[i]
 		if C then
-			H:ClearAllPoints(); H:SetPoint("TOPLEFT", Frame.Inset, "TOPLEFT", X, -8); H:SetWidth(C[2])
+			H:ClearAllPoints(); H:SetPoint("TOPLEFT", Frame.Inset, "TOPLEFT", X, -6); H:SetSize(C[2], 16)
 			for _, R in ipairs(Rows) do
 				R.Cells[i]:ClearAllPoints(); R.Cells[i]:SetPoint("LEFT", R, "LEFT", X - 6, 0); R.Cells[i]:SetWidth(C[2])
 			end
@@ -815,8 +861,9 @@ function L.RefreshSessions()
 	P.History:SetText(#Lines > 0 and table.concat(Lines, "\n") or "No finished sessions yet.")
 end
 
+function L.ShownRows() return Data end -- the rows the list shows, in order (tests)
 function L.Load()
-	if Tab == 1 then Data = L.FarmData() elseif Tab == 2 then Data = L.FlipRows() else Data = {} end
+	if Tab == 1 then Data = SortedFarm(L.FarmData()) elseif Tab == 2 then Data = L.FlipRows() else Data = {} end
 	Offset = 0
 	L.Refresh()
 end
@@ -838,8 +885,7 @@ function L.RefreshFarmBar()
 	FB.Craft:SetEnabled(not Craft)
 	FB.Prof:SetShown(Craft)
 	FB.Prof:SetText(L.CraftAll and "All professions" or "My professions")
-	FB.Sort:SetText(L.SORT_TEXT[Craft and L.CraftSort or L.GatherSort] or "Sort")
-	local Note = "* market room: your share of what sells a day, if you supply it (not your gather rate)."
+	local Note = "* market room: your share of what sells a day, if you supply it (not your gather rate). Click a column to sort."
 	if Craft and not L.CraftAll and not L.ProfessionsKnown then Note = "Professions not known yet: showing all. " .. Note end
 	FB.Note:SetText(Note)
 end
@@ -883,10 +929,16 @@ function L.CreateWindow()
 	-- List pane
 	Frame.List = CreateFrame("Frame", nil, Frame.Inset)
 	Frame.List:SetAllPoints()
+	-- Column headers: buttons (click to sort the Farm lists), the text in .Label.
 	Frame.Headers = {}
 	for i = 1, 7 do
-		local H = Frame.List:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		H:SetJustifyH("LEFT")
+		local H = CreateFrame("Button", nil, Frame.List)
+		H:SetSize(80, 16)
+		H.Label = H:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		H.Label:SetPoint("LEFT", H, "LEFT", 0, 0)
+		H.Label:SetJustifyH("LEFT")
+		H:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+		H:SetScript("OnClick", function() L.SortFarmColumn(i) end)
 		Frame.Headers[i] = H
 	end
 	for r = 1, ROWS do
@@ -945,10 +997,9 @@ function L.CreateWindow()
 	FB.Gather = FarmBtn("Gather", 0, 70, function() L.SetFarmView("gather") end, "Items to farm and sell (gear left out): what you net a day from your share of the sales.")
 	FB.Craft = FarmBtn("Craft", 74, 70, function() L.SetFarmView("craft") end, "Every recipe: profit when you buy the mats, and what crafting adds over selling mats you gathered.")
 	FB.Prof = FarmBtn("My professions", 152, 120, function() L.ToggleCraftAll() end, "Only recipes of the professions you have, or every recipe in the game (to see what to learn).")
-	FB.Sort = FarmBtn("Sort: gold/day", 276, 120, function() L.NextFarmSort() end, "Change the order of the list.")
 	FB.Note = FB:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	FB.Note:SetPoint("LEFT", FB, "LEFT", 402, 0)
-	FB.Note:SetWidth(285)
+	FB.Note:SetPoint("LEFT", FB, "LEFT", 278, 0)
+	FB.Note:SetWidth(410)
 	FB.Note:SetJustifyH("LEFT")
 
 	-- Sessions pane

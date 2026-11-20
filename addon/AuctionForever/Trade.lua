@@ -14,8 +14,9 @@ local COMMODITY = Status and Status.Commodity or 2
 local ITEM = Status and Status.Item or 1
 
 local BuyP, SellP           -- panels
-local Buy = { rows = {}, sel = 1, sort = "plan" }
-local SORTS, SORT_LABEL
+local Buy = { rows = {}, sel = 1, sort = "plan", asc = false }
+local SORTS
+local BUY_KEYS = { "name", "cost", "resell", "profit", "gold" } -- one per AF Buy column
 local Sell = { queue = {}, idx = 1 }
 
 -- Helpers -----------------------------------------------------------------------------------------------------
@@ -145,16 +146,33 @@ local function SyncBar(S, Off, Total)
 	return Off
 end
 T.ScrollBar, T.SyncBar = ScrollBar, SyncBar -- the AuctionForever window uses them too
-local function Header(Parent, X, Y, Cols, Names)
+-- Column headers; with OnClick(c) they are buttons (click to sort), the text in .Label. Returns them.
+local function Header(Parent, X, Y, Cols, Names, OnClick)
 	local CX = X + 24
+	local Out = {}
 	for c, W in ipairs(Cols) do
-		local H = Parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		H:SetPoint("TOPLEFT", CX, Y)
-		H:SetWidth(W)
-		H:SetJustifyH("LEFT")
-		H:SetText(Names[c])
+		local H
+		if OnClick then
+			H = CreateFrame("Button", nil, Parent)
+			H:SetSize(W, 16)
+			H:SetPoint("TOPLEFT", CX, Y + 2)
+			H.Label = H:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+			H.Label:SetPoint("LEFT", H, "LEFT", 0, 0)
+			H.Label:SetJustifyH("LEFT")
+			H.Label:SetText(Names[c])
+			H:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+			H:SetScript("OnClick", function() OnClick(c) end)
+		else
+			H = Parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+			H:SetPoint("TOPLEFT", CX, Y)
+			H:SetWidth(W)
+			H:SetJustifyH("LEFT")
+			H:SetText(Names[c])
+		end
+		Out[c] = H
 		CX = CX + W + 6
 	end
+	return Out
 end
 
 local function SaveDB() AuctionForeverDB = AuctionForeverDB or {} return AuctionForeverDB end
@@ -191,20 +209,16 @@ local function ShownNeed(E)
 	return E.need
 end
 local function GoldText(N) return Core.MoneyColor(math.ceil(N / 100) * 100) end
+-- Sort keys (plan: FlipRows order - the plan in buying order, then what fits now, then by gold needed). Each gives
+-- the value a column shows; the list sorts highest first, or lowest first when Buy.asc.
 SORTS = {
-	-- plan: FlipRows order (the plan, then what fits now, then by gold needed)
-	gold = function(a, b)
-		local An, Bn = a.need or 0, b.need or 0
-		if An ~= Bn then return An < Bn end
-		return (a.best or a.flip).profit > (b.best or b.flip).profit
-	end,
-	profit = function(a, b)
-		local Ap, Bp = (a.best or a.flip).profit, (b.best or b.flip).profit
-		if Ap ~= Bp then return Ap > Bp end
-		return (a.bestNeed or 0) < (b.bestNeed or 0)
-	end,
+	name = function(E) return UI().SortName(E.id) end,
+	cost = function(E) return Shown(E).cost end,
+	resell = function(E) return Shown(E).resell end,
+	profit = function(E) return (E.best or E.flip).profit end,
+	gold = function(E) return E.need or 0 end,
 }
-SORT_LABEL = { plan = "Sort: plan", gold = "Sort: gold needed", profit = "Sort: profit" }
+local BUY_NAMES = { "Item", "Buy", "Resell at", "Profit", "Status" }
 function T.DrawBuy()
 	if not BuyP then return end
 	local Off = SyncBar(BuyP.Bar, Buy.offset, #Buy.rows)
@@ -291,10 +305,15 @@ local function SortRows()
 	local Id = Buy.rows[Buy.sel] and Buy.rows[Buy.sel].id
 	Buy.rows = {}
 	for i, E in ipairs(Buy.loaded or {}) do Buy.rows[i] = E end
-	if SORTS[Buy.sort] then table.sort(Buy.rows, SORTS[Buy.sort]) end
+	if SORTS[Buy.sort] then UI().SortBy(Buy.rows, SORTS[Buy.sort], Buy.asc) end
 	Buy.sel = 1
 	for i, E in ipairs(Buy.rows) do if E.id == Id then Buy.sel = i end end
-	if BuyP and BuyP.Sort then BuyP.Sort:SetText(SORT_LABEL[Buy.sort]) end
+	if BuyP and BuyP.Headers then
+		for c, H in ipairs(BuyP.Headers) do
+			local Mark = BUY_KEYS[c] == Buy.sort and (Buy.asc and " ^" or " v") or ""
+			H.Label:SetText(BUY_NAMES[c] .. Mark)
+		end
+	end
 	T.DrawBuy()
 end
 -- Rebuild the list from your data (refresh, a purchase, a scan). Opening the tab reuses it unless your gold changed;
@@ -303,10 +322,22 @@ function T.RefreshBuy()
 	Buy.loaded, Buy.money = UI().FlipTargets() or {}, GetMoney()
 	SortRows()
 end
-function T.SetBuySort(Key)
-	Buy.sort = SORT_LABEL[Key] and Key or "plan"
+-- Sort AF Buy by a key ("plan" = the plan's order). Asc nil: gold needed lowest first, the rest highest first.
+function T.SetBuySort(Key, Asc)
+	Buy.sort = SORTS[Key] and Key or "plan"
+	if Asc == nil then Asc = Buy.sort == "gold" end
+	Buy.asc = Asc
 	Buy.offset = 0
 	SortRows()
+end
+function T.BuySort() return Buy.sort, Buy.asc end
+-- A header click: highest first, again lowest first, a third time back to the plan's order.
+function T.BuyHeaderClick(c)
+	local Key = BUY_KEYS[c]
+	if not Key then return end
+	if Buy.sort ~= Key then T.SetBuySort(Key, false)
+	elseif not Buy.asc then T.SetBuySort(Key, true)
+	else T.SetBuySort("plan") end
 end
 
 function T.SelectBuy(i)
@@ -436,7 +467,7 @@ local function BuildBuy()
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -6)
 	P.Target = Text(P, "GameFontHighlightSmall", 300, -19)
 	P.Results = Text(P, "GameFontHighlightSmall", 300, -32)
-	Header(P, 14, -44, BUY_COLS, { "Item", "Buy", "Resell at", "Profit", "Status" })
+	P.Headers = Header(P, 14, -44, BUY_COLS, BUY_NAMES, function(c) T.BuyHeaderClick(c) end)
 	P.Rows = RowList(P, 14, -60, 660, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end)
 	P:EnableMouseWheel(true)
 	P:SetScript("OnMouseWheel", function(_, Delta)
@@ -451,9 +482,6 @@ local function BuildBuy()
 	P.Detail:ClearAllPoints()
 	P.Detail:SetPoint("BOTTOMLEFT", P.Buy, "TOPLEFT", 0, 6)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
-	P.Sort = Button(P, "Sort: plan", 320, -420, 150, function()
-		T.SetBuySort(({ plan = "gold", gold = "profit", profit = "plan" })[Buy.sort])
-	end)
 	P.Status = Text(P, "GameFontHighlightSmall", 480, -425, 190)
 end
 
