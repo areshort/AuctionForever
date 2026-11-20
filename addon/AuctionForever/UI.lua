@@ -77,7 +77,7 @@ local function Vendor(id)
 	local _, _, _, _, _, _, _, _, _, _, Sell = C_Item.GetItemInfo(id)
 	return Sell or 0
 end
-local STATUS_COLOR = { good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
+local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
 
 -- Lists ----------------------------------------------------------------------------------------------------------
@@ -626,9 +626,9 @@ function L.CreateAHTab()
 		B:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		return B
 	end
-	P.Quick = Btn("Quick Scan", 20, -90, 140, function() AF.Scan.Quick(L.QuickList()); L.RefreshAHPanel() end,
-		{ "Looks up a short list of items one by one: flip candidates, sellable items in your bags, top farm reagents and fast sellers still warming up.",
-		  "Gives fresh prices, and measures sales for any item last looked at 15+ min ago." })
+	P.Quick = Btn("Quick Scan", 20, -90, 140, function() AF.Scan.Quick(); L.RefreshAHPanel() end,
+		{ "Fast: current lowest price and stock for every item, in a few requests (the same method as Auctionator's scan).",
+		  "Doesn't measure sales by itself; full scans and the cloud data do that." })
 	P.Full = Btn("Full Scan", 170, -90, 140, function() AF.Scan.Start(); L.RefreshAHPanel() end,
 		{ "Reads every listing in the auction house: fresh prices for everything, and sales measured for every item.",
 		  "The server may allow this only once every 15 min." })
@@ -681,7 +681,7 @@ function L.RefreshAHPanel()
 	P.Data:SetText(table.concat(Parts, "   "))
 	local Busy = AF.Scan.Busy()
 	P.Quick:SetEnabled(not Busy); P.Full:SetEnabled(not Busy)
-	if not Busy then P.QuickInfo:SetText(string.format("Quick Scan will look up %d items.", #L.QuickList())) end
+	if not Busy then P.QuickInfo:SetText("Quick Scan: fresh prices for everything.  Full Scan: also measures sales (scan 15+ min apart).") end
 	P.Result:SetText(AF.Scan.LastResult or "No scan yet this session.")
 end
 function L.ScanProgress()
@@ -839,7 +839,7 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
-	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick(L.QuickList()) else L.Toggle(1) end
+	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() else L.Toggle(1) end
 end
 
 AF.UI = L

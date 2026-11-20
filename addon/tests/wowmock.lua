@@ -125,3 +125,4 @@ C_Container = {
 		return { itemID = 999999, isBound = true }
 	end,
 }
+YES = "Yes"; NO = "No"

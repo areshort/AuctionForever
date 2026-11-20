@@ -84,7 +84,36 @@ ok(list(r.values())[0] == 6, 'listings that were about to expire are not counted
 lua.execute("""AuctionForeverDB = { obs = { [1] = { {0, 0.5, 30, 30000, 4, 1100} } } }""")
 lua.execute("MI = AuctionForever.Core.MergeScan(MakeItem({ perHour = 0, hoursSeen = 0, hoursWithSales = 0, sales = 0, med = nil, hi = nil, med24 = nil, medAll = nil, sellThrough = nil, soldQty = 0, qty = 20 }), 0)")
 ok(abs(L('MI.perHour') - 60) < 1e-9 and L('MI.med') == 1000 and L('MI.hi') == 1100, f"scan only: 30 sold in 30 min = {L('MI.perHour')}/h at {L('MI.med')}")
-ok(L(f'{C}.Status(MI)') == 'good', 'one scan 30 min after the cloud data is enough to rate a fast seller: ' + L(f'{C}.Status(MI)'))
+ok(L(f'{C}.Status(MI)') == 'early', 'one window with sales: "early", not yet a steady seller: ' + L(f'{C}.Status(MI)'))
+FRESH = "MakeItem({ perHour = 0, hoursSeen = 0, hoursWithSales = 0, sales = 0, med = nil, hi = nil, med24 = nil, medAll = nil, sellThrough = nil, soldQty = 0, qty = 20 })"
+# Two windows with sales -> steady seller; rate = the lower of the two.
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.5, 30, 30000, 4, 1100, 400}, {0, 0.5, 20, 20000, 3, 1050, 400} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(L(f'{C}.Status(MI)') == 'good' and abs(L('MI.perHour') - 40) < 1e-9, f"two windows: steady seller at the lower rate ({L('MI.perHour')}/h)")
+# Three windows: the median, so one huge window doesn't set the rate.
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.5, 30, 30000, 4, 1100, 4000}, {0, 0.5, 20, 20000, 3, 1050, 4000}, {0, 0.5, 75, 75000, 9, 1100, 4000} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(abs(L('MI.perHour') - 60) < 1e-9 and L('MI.spikes') == 0, f"three windows (60, 40, 150/h): median rate, not the average ({L('MI.perHour')}/h)")
+# Burst: Runecloth-like window (7,888 in 43 min) against usual windows of ~40/h is left out.
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.72, 7888, 7888*505, 12, 510, 21373}, {0, 0.5, 20, 20000, 3, 1050, 13989}, {0, 0.5, 22, 22000, 3, 1050, 13900} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(L('MI.spikes') == 1 and abs(L('MI.perHour') - 40) < 1e-9 and L(f'{C}.Status(MI)') == 'good',
+   f"burst (7,888 in 43 min vs ~40/h usual) left out: {L('MI.perHour')}/h, status {L(f'{C}.Status(MI)')}")
+# A busy hour at the usual pace is NOT a burst, even if it's a big share of the stock (Linen: 26% in 55 min).
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.92, 4353, 4353*29, 3, 30, 16427}, {0, 1.0, 4000, 4000*29, 3, 30, 12000}, {0, 1.0, 4500, 4500*29, 3, 30, 12500} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(L('MI.spikes') == 0 and L(f'{C}.Status(MI)') in ('good', 'flooded'), f"busy but usual pace (a quarter of the stock in an hour): kept, {L('MI.perHour'):.0f}/h")
+# One window alone can't be judged (no usual rate yet), and it can't make a steady seller either.
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.72, 7888, 7888*505, 12, 510, 21373} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(L('MI.spikes') == 0 and L(f'{C}.Status(MI)') == 'early', 'one window: no burst verdict yet, but only "early"')
+# Burst then a normal window: two windows -> the lower (normal) rate is used.
+lua.execute("AuctionForeverDB = { obs = { [1] = { {0, 0.72, 7888, 7888*505, 12, 510, 21373}, {0, 0.5, 20, 20000, 3, 1050, 13989} } } }")
+lua.execute(f"MI = AuctionForever.Core.MergeScan({FRESH}, 0)")
+ok(abs(L('MI.perHour') - 40) < 1e-9, f"burst + one normal window: the normal rate wins ({L('MI.perHour')}/h)")
+# Cloud hours count as windows (2 cloud hours with sales = steady).
+lua.execute("AuctionForeverDB = nil")
+ok(L(f'{C}.Status(MakeItem())') == 'good', 'cloud history alone (70 hours with sales) is enough')
 lua.execute("AuctionForeverDB = nil")
 
 # Real data file from the collector loads, and every item gets a status without errors.

@@ -14,6 +14,18 @@ def run(path, *args):
 
 
 run(os.path.join(HERE, 'wowmock.lua'))
+# Record reads of undefined globals made by add-on code (catches misplaced local declarations and typos).
+lua.execute("""
+UndefinedReads = {}
+local Allowed = { AuctionForeverDB = true, AuctionForeverChar = true, AuctionForeverData = true }
+setmetatable(_G, { __index = function(_, k)
+  if not Allowed[k] then
+    local Info = debug.getinfo(2, "S")
+    local Src = Info and Info.source or "?"
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+  end
+end })
+""")
 lua.execute('AF_NS = {}')
 ns = lua.eval('AF_NS')
 run(os.path.join(ADDON, 'Core.lua'), 'AuctionForever', ns)
@@ -187,7 +199,7 @@ if real:
        'scan 5 min later: no measurement, starting point kept')
     ok(L('AuctionForeverDB.fresh.items[2589][4]') == L('AuctionForeverData.time + 2700'), 'scan 5 min later: prices refreshed')
 
-    # Quick scan 20 min after the starting point: Linen (in the bags) is looked up and measured against it.
+    # Item lookup 20 min after the starting point: Linen (in the bags) is looked up and measured against it.
     X("""function LinenAuctions(Secs)
       local A, n = {}, 0
       for _, E in ipairs(Listings) do if E[1] == 2589 and E[2] > 0 then n = n + 1
@@ -201,7 +213,7 @@ if real:
     ql = list(L('AF_NS.UI.QuickList()').values())
     ok(2589 in ql and 999999 not in ql and len(ql) <= 45, f'quick list: {len(ql)} items, includes Linen from the bags, skips soulbound')
     X('Auctions[2589] = LinenAuctions({ [1] = 40000, [2] = 600 })')
-    X('time = function() return AuctionForeverData.time + 3600 end; Click(AuctionForeverAHPanel.Quick); PumpQuick()')
+    X('time = function() return AuctionForeverData.time + 3600 end; AF_NS.Scan.Lookup(AF_NS.UI.QuickList()); PumpQuick()')
     o2 = L('AuctionForeverDB.obs[2589][2]')
     ok(o2 is not None and abs(o2[2] - 1200 / 3600) < 1e-6 and o2[3] == L('Bought2'), f'quick scan 20 min after the start: {o2 and o2[3]} sold over {o2 and round(o2[2]*60)} min')
     ok(L('AuctionForeverDB.base[2589].auc ~= nil'), 'quick scan keeps listing IDs for exact comparison next time')
@@ -209,11 +221,11 @@ if real:
     fake = L('(function() local n = 0 for id, O in pairs(AuctionForeverDB.obs) do if id ~= 2589 and #O >= 2 and O[#O][3] > 0 then n = n + 1 end end return n end)()')
     ok(fake == 0, f'quick scan: unchanged items show no sales ({fake} false sales)')
     X('Auctions[13] = {}')
-    X('time = function() return AuctionForeverData.time + 3700 end; AF_NS.Scan.Quick({ 13 }); PumpQuick()')
+    X('time = function() return AuctionForeverData.time + 3700 end; AF_NS.Scan.Lookup({ 13 }); PumpQuick()')
     ok("didn't answer" in str(L('LastPrint')) and L('AuctionForeverDB.base[13] == nil or AuctionForeverDB.base[13].t ~= AuctionForeverData.time + 3700'),
        'an empty answer is treated as no answer, not a sell-out')
     X('Auctions[13] = nil')
-    ok('Quick scan' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
+    ok('Item lookup' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
 
     # Quick scan again 20 min later, compared listing by listing:
     #   cheapest listing 5 fewer -> 5 bought; 2nd listing gone with 10 min left -> expired; most expensive gone while a
@@ -225,14 +237,53 @@ if real:
       table.remove(Changed, #Changed)   -- most expensive: cancelled
       table.remove(Changed, 2)          -- had 10 min left: expired
       Auctions[2589] = Changed
-      time = function() return AuctionForeverData.time + 4800 end; Click(AuctionForeverAHPanel.Quick); PumpQuick()""")
+      time = function() return AuctionForeverData.time + 4800 end; AF_NS.Scan.Lookup(AF_NS.UI.QuickList()); PumpQuick()""")
     o3 = L('AuctionForeverDB.obs[2589][3]')
     ok(o3 is not None and o3[3] == 5, f'exact comparison: {o3 and o3[3]} sold (partial buy counted; expired and cancelled ignored)')
+
+    # Lookups use the server's own item key when a quick scan has learned it.
+    X('AF_NS.Scan.Keys[2589] = { itemID = 2589, itemLevel = 5, marker = "server" }; SentKey = nil; local S = C_AuctionHouse.SendSearchQuery; C_AuctionHouse.SendSearchQuery = function(k) SentKey = k; LastQuery = k.itemID end')
+    X('time = function() return AuctionForeverData.time + 5000 end; AF_NS.Scan.Lookup({ 2589 }); PumpQuick()')
+    ok(L('SentKey and SentKey.marker') == 'server', "item lookup uses the server's item key from the quick scan")
+    X('AF_NS.Scan.Keys[2589] = nil')
+
+    # Quick scan = browse everything in pages (Auctionator's method): page 1 via UPDATED, page 2 via ADDED.
+    X("""BrowsePages = { { { itemKey = { itemID = 2589 }, minPrice = 24, totalQuantity = 15000 }, { itemKey = { itemID = 14047 }, minPrice = 520, totalQuantity = 14000 } },
+                       { { itemKey = { itemID = 14047, itemLevel = 1 }, minPrice = 515, totalQuantity = 100 } } }
+      Page = 0
+      C_AuctionHouse.SendBrowseQuery = function(q) BrowseQ = q; Page = 1 end
+      C_AuctionHouse.GetBrowseResults = function() return BrowsePages[1] end
+      C_AuctionHouse.RequestMoreBrowseResults = function() Page = Page + 1 end
+      C_AuctionHouse.HasFullBrowseResults = function() return Page >= 2 end
+      ObsBefore = #AuctionForeverDB.obs[2589]
+      time = function() return AuctionForeverData.time + 5200 end
+      Click(AuctionForeverAHPanel.Quick)""")
+    ok(L('BrowseQ ~= nil and BrowseQ.searchString == ""'), 'quick scan sends one browse-everything query')
+    X('AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
+    ok('waiting' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), 'progress while waiting: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
+    X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
+    ok('items read' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), 'progress while reading pages: ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
+    X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2])')
+    ok(not L('AF_NS.Scan.Busy()'), 'quick scan done after the last page')
+    f = L('AuctionForeverDB.fresh.items[14047]')
+    ok(f[1] == 515 and f[2] == 14100 and f[4] == L('AuctionForeverData.time + 5200'), f'pages combined: lowest {f[1]}c, {f[2]} listed')
+    ok(L('AuctionForeverDB.fresh.items[2589][1]') == 24 and L('AuctionForeverDB.fresh.items[2589][3][1][1]') == 24, 'new lowest price becomes the first price level')
+    ok(L('#AuctionForeverDB.obs[2589]') == L('ObsBefore'), 'quick scan refreshes prices only; sales history untouched')
+    ok(L('AF_NS.Scan.Keys[14047] ~= nil'), "server item keys learned for later lookups")
+    ok('Quick scan: prices and stock for 2 items' in str(L('LastPrint')), 'chat summary: ' + str(L('LastPrint')))
+    I = L('AF_NS.Core.Info(14047)')
+    ok(I.low == 515 and I.qty == 14100, 'lists and tooltips use the quick-scan price')
+    # Server goes quiet mid-scan: stops after the timeout, keeps what it got.
+    X("""C_AuctionHouse.HasFullBrowseResults = function() return false end
+      C_AuctionHouse.RequestMoreBrowseResults = function() end
+      time = function() return AuctionForeverData.time + 5400 end
+      Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); RunTimers(); RunTimers()""")
+    ok(not L('AF_NS.Scan.Busy()') and 'stopped answering' in str(L('LastPrint')), 'server goes quiet: stops and keeps what it got: ' + str(L('LastPrint')))
 
     # An item that never answers is skipped after the timeout.
     X("""C_AuctionHouse.SendSearchQuery = function() end
       time = function() return AuctionForeverData.time + 9000 end
-      AF_NS.Scan.Quick({ 2589 })
+      AF_NS.Scan.Lookup({ 2589 })
       RunTimers()""")
     ok(not L('AF_NS.Scan.Busy()') and "didn't answer" in str(L('LastPrint')), 'quick scan: an item that never answers is skipped: ' + str(L('LastPrint')))
 
@@ -261,5 +312,7 @@ X('Money = 2000000; AuctionForeverDB = nil; AF_NS.UI.Toggle(2)')
 reason = str(L('AF_NS.UI.FlipEmptyReason()'))
 ok(('warming up' in reason) or ('steady sellers' in reason), 'empty Flip tab says why: ' + reason.replace('\n', ' '))
 
+undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
+ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

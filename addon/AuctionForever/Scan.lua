@@ -14,11 +14,14 @@ local MAX_AUC = 200         -- quick scan: cheapest listings kept per item for e
 local MIN_GAP = 0.25        -- hours between two looks at an item before its sales are measured (15 min)
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
-local ITEM_TIMEOUT = 6      -- quick scan: seconds to wait for one item's results
+local ITEM_TIMEOUT = 3      -- item lookup: seconds to wait for one item's results
+local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page
 
-local Mode                  -- nil, "full-wait", "full", "quick"
+local Mode                  -- nil, "full-wait", "full", "lookup", "browse"
+Scan.Keys = {}              -- itemID -> the server's item key, learned from quick scans
 local Levels, Expiring, Count, Index, Total, Started
-local Q                     -- quick scan state
+local Q                     -- item lookup state
+local BQ_STATE              -- quick scan (browse) state
 
 local function DB()
 	AuctionForeverDB = AuctionForeverDB or {}
@@ -52,6 +55,12 @@ local function ToLadder(L, E)
 	return Out
 end
 
+local function CloudQty(id)
+	local D = AuctionForeverData
+	if type(D) ~= "table" or not D.items or not D.items[id] then return nil end
+	for i, Name in ipairs(D.fields) do if Name == "qty" then return D.items[id][i] end end
+end
+
 local function CloudLadder(id)
 	local D = AuctionForeverData
 	if type(D) ~= "table" or not D.items or not D.items[id] then return nil end
@@ -68,9 +77,9 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 	local B = S.base[id]
 	local CloudTime = (type(D) == "table" and D.time and CloudLadder(id)) and (D.time - 900) or nil
 	-- D.time is when the cloud first saw its snapshot; Blizzard made it a little earlier, so it counts 15 min older.
-	local BT, BL, BA, BC
-	if B and (not CloudTime or B.t > CloudTime) then BT, BL, BA, BC = B.t, B.ladder, B.auc, B.cov
-	elseif CloudTime then BT, BL = CloudTime, CloudLadder(id) end
+	local BT, BL, BA, BC, BQ
+	if B and (not CloudTime or B.t > CloudTime) then BT, BL, BA, BC, BQ = B.t, B.ladder, B.auc, B.cov, B.qty
+	elseif CloudTime then BT, BL, BQ = CloudTime, CloudLadder(id), CloudQty(id) end
 	local Ladder = ToLadder(Map, Exp)
 	local Qty = 0
 	for _, N in pairs(Map) do Qty = Qty + N end
@@ -87,7 +96,7 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 			if BA and Auc then Sold, Value, Ev, Hi = Core.CompareAuctions(BA, Auc, H * 3600, C, Commodity)
 			else Sold, Value, Ev, Hi = Core.CompareLadders(BL or {}, Map, C) end
 			local O = S.obs[id] or {}
-			O[#O + 1] = { Now, H, Sold, Value, Ev, Hi }
+			O[#O + 1] = { Now, H, Sold, Value, Ev, Hi, BQ }
 			local Kept = {}
 			for _, X in ipairs(O) do if X[1] >= Now - KEEP_HOURS * 3600 then Kept[#Kept + 1] = X end end
 			while #Kept > KEEP_OBS do table.remove(Kept, 1) end
@@ -96,7 +105,7 @@ function Scan.Observe(id, Map, Exp, Auc, Cov, Now, Commodity)
 		end
 	end
 	-- A look too soon after the starting point only refreshes prices; otherwise it becomes the new starting point.
-	if Status ~= "soon" then S.base[id] = { t = Now, ladder = Ladder, auc = Auc, cov = Cov } end
+	if Status ~= "soon" then S.base[id] = { t = Now, ladder = Ladder, auc = Auc, cov = Cov, qty = Qty } end
 	return Status, Sold
 end
 
@@ -207,10 +216,15 @@ function Scan.Status()
 		local Done = math.min(Total or 0, (Index or 1) - 1)
 		local F = (Total or 0) > 0 and Done / Total or 1
 		return string.format("Full scan: reading listings %d%% (%s of %s)", F * 100, Commas(Done), Commas(Total or 0)), F
-	elseif Mode == "quick" and Q then
+	elseif Mode == "browse" and BQ_STATE then
+		local E = math.max(1, BQ_STATE.expected or 1)
+		local F = BQ_STATE.gotFirst and math.min(0.99, BQ_STATE.n / E) or nil
+		if not BQ_STATE.gotFirst then return "Quick scan: waiting for the server...", nil end
+		return string.format("Quick scan: %d items read (%d%%)", BQ_STATE.n, F * 100), F
+	elseif Mode == "lookup" and Q then
 		local Done = math.max(0, Q.i - 1)
 		local F = #Q.ids > 0 and Done / #Q.ids or 1
-		return string.format("Quick scan: looking up items %d of %d (%d%%)", Done, #Q.ids, F * 100), F
+		return string.format("Looking up items %d of %d (%d%%)", Done, #Q.ids, F * 100), F
 	end
 	return nil, nil
 end
@@ -237,7 +251,7 @@ function Scan.Start()
 	Notify("ScanProgress")
 end
 
--- Quick scan -----------------------------------------------------------------------------------------------------
+-- Item lookup (detailed, one item at a time) -----------------------------------------------------------------------------------------------------
 local SORTS = { { sortOrder = (Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price) or 0, reverseSort = false } }
 local QuickNext
 
@@ -293,11 +307,11 @@ end
 local function QuickFinish(Reason)
 	local Took = GetTime() - Q.started
 	if Reason then
-		Scan.LastResult = string.format("Quick scan stopped (%s) after %d of %d items.", Reason, Q.done, #Q.ids)
+		Scan.LastResult = string.format("Item lookup stopped (%s) after %d of %d items.", Reason, Q.done, #Q.ids)
 	elseif Q.measured > 0 then
-		Scan.LastResult = string.format("Quick scan: %d items in %.0f s. Sales measured for %d (%d sold something).", Q.done, Took, Q.measured, Q.withSales)
+		Scan.LastResult = string.format("Item lookup: %d items in %.0f s. Sales measured for %d (%d sold something).", Q.done, Took, Q.measured, Q.withSales)
 	else
-		Scan.LastResult = string.format("Quick scan: %d items in %.0f s. Prices updated; sales are measured %d+ min from now.", Q.done, Took, MinutesToWait(Q.ids, time()))
+		Scan.LastResult = string.format("Item lookup: %d items in %.0f s. Prices updated; sales are measured %d+ min from now.", Q.done, Took, MinutesToWait(Q.ids, time()))
 	end
 	if Q.skipped > 0 then Scan.LastResult = Scan.LastResult .. string.format(" %d didn't answer.", Q.skipped) end
 	if not Q.silent then Say(Scan.LastResult) end
@@ -330,7 +344,7 @@ function Scan.QuickSend()
 	if not (Q and Q.waitingReady) then return end
 	Q.waitingReady = false
 	local id = Q.ids[Q.i]
-	Q.current, Q.key = id, C_AuctionHouse.MakeItemKey(id)
+	Q.current, Q.key = id, Scan.Keys[id] or C_AuctionHouse.MakeItemKey(id)
 	Q.ticket = (Q.ticket or 0) + 1
 	local Ticket = Q.ticket
 	C_AuctionHouse.SendSearchQuery(Q.key, SORTS, false)
@@ -342,14 +356,123 @@ function Scan.QuickSend()
 	end)
 end
 
--- Look up these items now. Silent = no chat line; OnDone = called when finished.
-function Scan.Quick(Ids, Silent, OnDone)
+-- Look up these items now, listing by listing. Silent = no chat line; OnDone = called when finished.
+function Scan.Lookup(Ids, Silent, OnDone)
 	if Mode then if not Silent then Say("a scan is already running.") end return false end
 	if not AHOpen() then if not Silent then Say("open the auction house first.") end return false end
 	if #Ids == 0 then if not Silent then Say("nothing to quick scan yet.") end return false end
-	Mode = "quick"
+	Mode = "lookup"
 	Q = { ids = Ids, i = 0, done = 0, measured = 0, withSales = 0, soon = 0, skipped = 0, started = GetTime(), silent = Silent, onDone = OnDone }
 	QuickNext()
+	return true
+end
+
+-- Quick scan: one "browse everything" query read in pages, the way Auctionator's fast scan works. Gives every
+-- item's lowest price and total quantity (and the server's item keys) in a handful of requests. It refreshes prices
+-- and stock only; sales are measured by full scans, item lookups and the cloud.
+-- (BQ_STATE is declared at the top of the file so Scan.Status can see it)
+local function BrowseItemCount()
+	local D, N = AuctionForeverData, 0
+	if type(D) == "table" and D.items then for _ in pairs(D.items) do N = N + 1 end end
+	return N
+end
+local function BrowseAdd(Results)
+	for _, R in ipairs(Results or {}) do
+		local K = R.itemKey
+		local id = K and K.itemID
+		if id and (R.totalQuantity or 0) > 0 then
+			local A = BQ_STATE.items[id]
+			if not A then A = { R.minPrice, 0 }; BQ_STATE.items[id] = A; BQ_STATE.n = BQ_STATE.n + 1 end
+			if R.minPrice and (not A[1] or R.minPrice < A[1]) then A[1] = R.minPrice end
+			A[2] = A[2] + R.totalQuantity
+			if not Scan.Keys[id] then Scan.Keys[id] = K end
+		end
+	end
+	BQ_STATE.last = GetTime()
+end
+
+-- Pure step (tested offline): apply browse results { [id] = { minPrice, totalQty } } at time Now.
+-- Keeps each item's known price levels at or above the new lowest price (cheaper ones are gone) and adds the new
+-- lowest price when it's new. Complete = the browse reached the end, so unlisted items really have nothing listed.
+function Scan.ApplyBrowse(Items, Now, Complete)
+	local S = DB()
+	local D = AuctionForeverData
+	for id, A in pairs(Items) do
+		local Min, Qty = A[1], A[2]
+		local F = S.fresh.items[id]
+		local Prev
+		if F and (F[4] or S.fresh.time or 0) > ((type(D) == "table" and D.time) or 0) then Prev = F[3] else Prev = CloudLadder(id) end
+		local Kept = {}
+		for _, Step in ipairs(Prev or {}) do if Min and Step[1] >= Min and #Kept < LADDER then Kept[#Kept + 1] = Step end end
+		if Min and (not Kept[1] or Kept[1][1] > Min) then table.insert(Kept, 1, { Min, 1, 0 }); if #Kept > LADDER then Kept[#Kept] = nil end end
+		S.fresh.items[id] = { Min, Qty, Kept, Now }
+	end
+	if Complete then
+		local Expected = BrowseItemCount()
+		local Got = 0
+		for _ in pairs(Items) do Got = Got + 1 end
+		if Expected == 0 or Got >= 0.7 * Expected then
+			if type(D) == "table" and D.items then
+				for id in pairs(D.items) do if not Items[id] then S.fresh.items[id] = { nil, 0, {}, Now } end end
+			end
+		end
+	end
+end
+
+local function BrowseFinish(Reason)
+	local St = BQ_STATE
+	local Complete = not Reason and C_AuctionHouse.HasFullBrowseResults()
+	Scan.ApplyBrowse(St.items, time(), Complete)
+	local Took = GetTime() - St.started
+	if Reason and St.n == 0 then
+		Scan.LastResult = "Quick scan: " .. Reason .. "."
+	else
+		Scan.LastResult = string.format("Quick scan: prices and stock for %d items in %.0f s.%s", St.n, Took, Reason and (" Stopped early: " .. Reason .. ".") or "")
+	end
+	if not St.silent then Say(Scan.LastResult) end
+	local Done = St.onDone
+	BQ_STATE, Mode, Scan.Progress = nil, nil, nil
+	Notify("ScanDone")
+	if Done then Done() end
+end
+
+local function BrowseWhenReady(Fn)
+	local Ticket = BQ_STATE.ticket
+	local function Try()
+		if not BQ_STATE or BQ_STATE.ticket ~= Ticket then return end
+		if C_AuctionHouse.IsThrottledMessageSystemReady() then Fn() else C_Timer.After(0.2, Try) end
+	end
+	Try()
+end
+
+local function BrowseWatch()
+	-- Give up if the server goes quiet for BROWSE_TIMEOUT seconds.
+	local St = BQ_STATE
+	local Ticket = St.ticket
+	C_Timer.After(BROWSE_TIMEOUT, function()
+		if BQ_STATE == St and St.ticket == Ticket then BrowseFinish("the server stopped answering") end
+	end)
+end
+
+local function BrowseNext()
+	local St = BQ_STATE
+	if not St then return end
+	if C_AuctionHouse.HasFullBrowseResults() then BrowseFinish() return end
+	St.ticket = St.ticket + 1
+	BrowseWatch()
+	BrowseWhenReady(function() C_AuctionHouse.RequestMoreBrowseResults() end)
+end
+
+function Scan.Quick(Silent, OnDone)
+	if Mode then if not Silent then Say("a scan is already running.") end return false end
+	if not AHOpen() then if not Silent then Say("open the auction house first.") end return false end
+	Mode = "browse"
+	BQ_STATE = { items = {}, n = 0, started = GetTime(), ticket = 1, silent = Silent, onDone = OnDone, expected = BrowseItemCount() }
+	BrowseWatch()
+	BrowseWhenReady(function()
+		C_AuctionHouse.SendBrowseQuery({ searchString = "", sorts = {}, filters = {}, itemClassFilters = {} })
+	end)
+	Notify("ScanProgress")
 	return true
 end
 
@@ -359,6 +482,8 @@ Events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 Events:RegisterEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
 Events:RegisterEvent("COMMODITY_SEARCH_RESULTS_UPDATED")
 Events:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
+Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+Events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
 Events:SetScript("OnEvent", function(_, Event, Arg)
 	if Event == "REPLICATE_ITEM_LIST_UPDATE" and Mode == "full-wait" then
 		Mode = "full"
@@ -366,7 +491,7 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 		Total = C_AuctionHouse.GetNumReplicateItems()
 		Worker:SetScript("OnUpdate", FullStep)
 	elseif Event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
-		if Mode == "quick" then Scan.QuickSend() end
+		if Mode == "lookup" then Scan.QuickSend() end
 	elseif Event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		if Q and Q.current and Arg == Q.current then
 			local id = Q.current
@@ -381,6 +506,18 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 			ReadItems(id, Key)
 			QuickNext()
 		end
+	elseif Event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+		-- The first page of our browse (this event also fires for other searches; only the first one counts).
+		if Mode == "browse" and BQ_STATE and not BQ_STATE.gotFirst then
+			BQ_STATE.gotFirst = true
+			BrowseAdd(C_AuctionHouse.GetBrowseResults())
+			BrowseNext()
+		end
+	elseif Event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+		if Mode == "browse" and BQ_STATE and BQ_STATE.gotFirst then
+			BrowseAdd(Arg)
+			BrowseNext()
+		end
 	elseif Event == "AUCTION_HOUSE_CLOSED" then
 		if Mode == "full" or Mode == "full-wait" then
 			Worker:SetScript("OnUpdate", nil)
@@ -388,8 +525,10 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 			Scan.LastResult = "Full scan stopped: the auction house closed."
 			Say(Scan.LastResult)
 			Notify("ScanDone")
-		elseif Mode == "quick" then
+		elseif Mode == "lookup" then
 			QuickFinish("auction house closed")
+		elseif Mode == "browse" then
+			BrowseFinish("the auction house closed")
 		end
 	end
 end)

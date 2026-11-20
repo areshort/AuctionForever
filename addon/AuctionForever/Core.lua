@@ -19,6 +19,8 @@ Core.LongSellThrough = 0.9      -- needed before an 8 h or 24 h post is chosen
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 1000       -- 10 silver
+Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
+Core.MinWindows = 2             -- separate windows with sales before an item is a steady seller
 Core.ItemBudgetShare = 0.20     -- one flip item may use at most this share of the budget
 Core.ReserveShare = 0.5         -- spend up to half your gold...
 Core.MinKeep = 10000            -- ...always keeping at least 1 gold
@@ -54,31 +56,68 @@ function Core.MergeScan(I, DataTime)
 			I.fromScan, I.scanTime = true, Fresh.time
 		end
 	end
+	-- Sales windows: every compared cloud hour, and every scan window (time between two looks at the item).
+	-- The rate is the median across windows, so one big buyout can't make an item look like a fast seller. A scan
+	-- window that sold at BurstFactor times the item's usual speed (the median of its other windows) is a burst
+	-- (one buyer clearing the bottom, or a mass cancel) and is left out. It's a speed check, not a stock share:
+	-- a quarter of the stock selling over a busy hour is normal, the same amount gone in minutes is not.
+	-- An item needs sales in 2+ separate windows before it counts as a steady seller.
+	local Rates = {}
+	local CloudH = I.hoursSeen or 0
+	for _ = 1, math.floor(CloudH + 0.5) do Rates[#Rates + 1] = I.medHour or I.perHour or 0 end
+	local CloudN = #Rates
+	local Windows = math.floor((I.hoursWithSales or 0) + 0.5)
 	local Obs = DB.obs and DB.obs[id]
-	if type(Obs) == "table" and #Obs > 0 then
-		-- Each observation: { time, gap hours, sold qty, sold value, levels that dropped, highest sold price }
-		local Hours, Sold, Value, Events, WithSales, Hi = 0, 0, 0, 0, 0, 0
-		for _, O in ipairs(Obs) do
+	if type(Obs) ~= "table" then Obs = {} end
+	-- Each observation: { time, gap hours, sold qty, sold value, events, highest sold price, stock before }
+	for _, O in ipairs(Obs) do Rates[#Rates + 1] = O[3] / O[2] end
+	local function MedianWithout(Skip)
+		local T = {}
+		for i, R in ipairs(Rates) do if i ~= Skip then T[#T + 1] = R end end
+		if #T < 2 then return nil end
+		table.sort(T)
+		local M = (#T + 1) / 2
+		return (T[math.floor(M)] + T[math.ceil(M)]) / 2
+	end
+	local Keep = {}
+	for i = 1, CloudN do Keep[#Keep + 1] = Rates[i] end
+	local Hours, Sold, Value, Events, WithSales, Hi, Spikes = 0, 0, 0, 0, 0, 0, 0
+	for j, O in ipairs(Obs) do
+		local R = Rates[CloudN + j]
+		local Usual = MedianWithout(CloudN + j)
+		if R > 0 and Usual and R > Core.BurstFactor * math.max(Usual, 1 / O[2]) then
+			Spikes = Spikes + 1
+		else
+			Keep[#Keep + 1] = R
 			Hours, Sold, Value, Events = Hours + O[2], Sold + O[3], Value + O[4], Events + O[5]
-			if O[3] > 0 then WithSales = WithSales + O[2] end
+			if O[3] > 0 then WithSales = WithSales + O[2]; Windows = Windows + 1 end
 			if (O[6] or 0) > Hi then Hi = O[6] end
 		end
-		local CloudHours = I.hoursSeen or 0
-		local TotalHours = CloudHours + Hours
-		if TotalHours > 0 then
-			I.perHour = ((I.perHour or 0) * CloudHours + Sold) / TotalHours
-			I.hoursWithSales = (I.hoursWithSales or 0) + WithSales
-			I.hoursSeen = TotalHours
-		end
+	end
+	Rates = Keep
+	I.windows, I.salesWindows, I.spikes = #Rates, Windows, Spikes
+	if Hours > 0 or Spikes > 0 then
+		local TotalHours = CloudH + Hours
+		I.hoursWithSales = (I.hoursWithSales or 0) + WithSales
+		I.hoursSeen = TotalHours
 		I.soldQty = (I.soldQty or 0) + Sold
 		I.sales = (I.sales or 0) + Events
 		if Sold > 0 then
 			local ScanMed = Value / Sold
 			if not I.med then I.med, I.med24, I.medAll = ScanMed, ScanMed, ScanMed
-			else I.med = (I.med * CloudHours + ScanMed * Hours) / TotalHours end
+			elseif TotalHours > 0 then I.med = (I.med * CloudH + ScanMed * Hours) / TotalHours end
 			if not I.hi or Hi > I.hi then I.hi = math.max(Hi, I.med) end
 		end
 		I.scanHours = Hours
+	end
+	if #Rates >= 3 then
+		table.sort(Rates)
+		local M = (#Rates + 1) / 2
+		I.perHour = (Rates[math.floor(M)] + Rates[math.ceil(M)]) / 2
+	elseif #Rates == 2 then
+		I.perHour = math.min(Rates[1], Rates[2]) -- only two windows: take the lower one
+	elseif #Rates == 1 then
+		I.perHour = Rates[1]
 	end
 	return I
 end
@@ -133,6 +172,7 @@ end
 function Core.Status(I)
 	if not I then return "no data" end
 	if ((I.sales or 0) < Core.MinSales and (I.soldQty or 0) < Core.MinSales) or (I.hoursSeen or 0) < Core.MinHours * 0.25 then return "warming up" end
+	if I.salesWindows and I.salesWindows < Core.MinWindows then return I.salesWindows == 1 and "early" or "warming up" end
 	if (I.perHour or 0) <= 0 then return "slow" end
 	if (I.hoursWithSales or 0) < Core.SteadyShare * (I.hoursSeen or 1) - 0.001 then return "slow" end
 	if I.sellThrough and I.sellThrough < Core.MinSellThrough then return "slow" end
