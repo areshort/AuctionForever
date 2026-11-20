@@ -20,7 +20,7 @@ Core.FloodDays = 1              -- more listed than this many days of sales: flo
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
 Core.MinVendorProfit = 1000     -- 10 silver: listings under the vendor price must pay at least this to be a buy target
-Core.FlipMaxHours = 4           -- a flip never buys more than the cautious resale speed sells in this many hours
+Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 Core.UndercutHaircut = 0.9      -- flips plan their profit at this share of the resale price (expect an undercut or two)
 Core.MinFlipReturn = 0.12       -- a flip must expect at least this return on what it costs (and MinFlipProfitFor)
@@ -511,10 +511,11 @@ end
 
 -- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer), and
 -- isn't a falling knife: lowest price FallingKnife under the 3-day median and dropping over the last snapshots (a new,
--- lower price level, not a bargain).
+-- lower price level, not a bargain). "slow" sellers (sales in bursts, or many expiring) can be flipped too: their
+-- options are marked .slow (a risk label; sell-through already lowers their expected profit).
 function Core.FlipStatus(I)
 	local S = Core.Status(I)
-	if S ~= "good" then return S end
+	if S ~= "good" and S ~= "slow" then return S end
 	if (I.hoursSeen or 0) < Core.FlipMinHours then return "warming up" end
 	local Base, Lw = I.medAll or I.med, I.lows
 	if I.low and Base and I.low < (1 - Core.FallingKnife) * Base and type(Lw) == "table" and #Lw >= 3
@@ -568,7 +569,8 @@ end
 -- The resale for a purchase of Qty for Cost from the data at hand (the live price check uses it). nil when the item
 -- isn't a flip target any more or no resale price works.
 function Core.Resale(I, Qty, Cost)
-	if not I or Core.FlipStatus(I) ~= "good" then return nil end
+	local St = I and Core.FlipStatus(I)
+	if St ~= "good" and St ~= "slow" then return nil end
 	local Rest, Left = {}, Qty
 	for _, Step in ipairs(I.ladder or {}) do
 		local Q = Step[2]
@@ -604,7 +606,8 @@ end
 
 function Core.FlipOptions(I, Cap, MinProfit)
 	local Out = {}
-	if Core.FlipStatus(I) ~= "good" or not Cap or Cap <= 0 then return Out end
+	local St = Core.FlipStatus(I)
+	if (St ~= "good" and St ~= "slow") or not Cap or Cap <= 0 then return Out end
 	local Ladder = I.ladder
 	-- Only the cheapest price levels are kept; if more listings exist above them, the last kept level can't be
 	-- bought out (we wouldn't know what you'd be reselling under).
@@ -627,7 +630,7 @@ function Core.FlipOptions(I, Cap, MinProfit)
 		if not Rest[1] and MoreAbove then break end
 		local O = Evaluate(I, J, Qty, Cost, Rest)
 		if O and O.profit >= Core.FlipNeed(Cost, MinProfit) then
-			O.buyUpTo = P
+			O.buyUpTo, O.slow = P, St == "slow" or nil
 			Out[#Out + 1] = O
 		end
 		if Take < Q then break end

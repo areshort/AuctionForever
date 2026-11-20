@@ -106,11 +106,16 @@ ok(L('AuctionForever.Core.Flip(MakeItem({ sales = 3 }), 500000) == nil'), 'warmi
 # N = 949 * 10 * 0.95 * 0.9; floor(0.8 N + 0.2 N * 0.5) - 5000 = 2302. Buying the 9s 50c level too would expect a loss.
 lua.execute(f'EO = {C}.FlipOptions(MakeItem(), 500000)')
 ok(L('#EO') == 1 and L('EO[1].profit') == 2302, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
-# Never buy more than the cautious resale speed sells in 4 h: 30/h planned -> at most 120. (Without the cap, buying
-# the 9s 50c level too would be offered: 150 units, 5 h of sales.)
-lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000)")
+# Never buy more than the cautious resale speed sells in 8 h: 15/h planned -> at most 120. (Without the cap, buying
+# the 9s 50c level too would be offered: 150 units, 10 h of sales.)
+lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000)")
 ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)) <= 120,
-   f"flip size capped at 4 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
+   f"flip size capped at 8 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
+# Slow sellers (sales in only some hours) can be flipped, marked slow; steady ones aren't marked.
+lua.execute(f"SL = {C}.FlipOptions(MakeItem({{ hoursWithSales = 20 }}), 500000)")
+ok(L(f"{C}.Status(MakeItem({{ hoursWithSales = 20 }}))") == 'slow' and L('#SL') >= 1 and L('SL[1].slow') == True,
+   f"slow seller: still a flip target, marked slow ({L('#SL')} options)")
+ok(L('EO[1].slow') is None, 'steady seller: not marked slow')
 # Too little history: needs 4 h of data before it's a flip target (selling is unaffected).
 ok(L(f'#{C}.FlipOptions(MakeItem({{ hoursSeen = 3 }}), 500000)') == 0 and L(f'{C}.FlipStatus(MakeItem({{ hoursSeen = 3 }}))') == 'warming up'
    and L(f'{C}.Status(MakeItem({{ hoursSeen = 3 }}))') == 'good', 'under 4 h of data: no flip (still fine to sell)')
@@ -257,8 +262,8 @@ ok(L('#MR') == 0, f"11% return is under the 12% minimum: no flip ({L('#MR')})")
 X(f"MR2 = {C}.FlipOptions(MakeItem({{ sellThrough = 1, med = 1400, medAll = 1400, med24 = 1400, hi = 1500, ladder = {{ {{1000, 10}}, {{1401, 100}} }}, qty = 110 }}), 500000, 200)")
 ok(L('#MR2') == 1, f"20% return: a flip ({L('#MR2')})")
 # What you already hold counts against the 4 h limit: 30/h planned -> 120, holding 100 -> at most 20 more.
-X(f"HD = {C}.FlipOptions(MakeItem({{ sellThrough = 1, held = 100, qty = 150, ladder = {{ {{400, 20}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000, 0)")
-ok(L('#HD') >= 1 and max(L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)) <= 20, f"holding 100 already: buys at most 20 more ({[L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)]})")
+X(f"HD = {C}.FlipOptions(MakeItem({{ sellThrough = 1, held = 220, qty = 150, ladder = {{ {{400, 20}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000, 0)")
+ok(L('#HD') >= 1 and max(L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)) <= 20, f"holding 220 already (8 h of resale = 240): buys at most 20 more ({[L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)]})")
 # 4 h of data before flipping (two 2 h posting cycles).
 ok(L(f"{C}.FlipStatus(MakeItem({{ hoursSeen = 3.5 }}))") == 'warming up' and L(f"{C}.FlipStatus(MakeItem({{ hoursSeen = 4 }}))") == 'good', 'flips need 4 h of data')
 # Falling knife: lowest price 40% under the 3-day median and dropping snapshot after snapshot: no flip (selling unaffected).

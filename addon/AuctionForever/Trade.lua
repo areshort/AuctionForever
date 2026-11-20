@@ -186,8 +186,8 @@ function T.DrawBuy()
 			local Status
 			if Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
-			elseif E.plan and F == E.flip then Status = "|cff1eff00in plan|r"
-			else Status = "|cffffd100fits, not in plan|r" end
+			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
+			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
 			R.Cells[5]:SetText(Status)
 			if Need then for c = 1, 4 do R.Cells[c]:SetText("|cff808080" .. (R.Cells[c]:GetText() or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") end end
 			R.Sel:SetShown(i + Off == Buy.sel)
@@ -210,8 +210,9 @@ function T.DrawBuy()
 				NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), Core.Money(F.profit),
 				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.Money(Core.MinKeep) .. " always kept).") or ""))
 		else
-		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s",
+		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
 			NameText(E.id), F.buyQty, Core.Money(F.buyUpTo), Core.Money(F.cost), Core.Money(F.resell), F.hours, Core.Money(F.profit),
+			F.slow and ("\n" .. "|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r") or "",
 			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.Money(Core.MinKeep) .. "; one item may use only part of it).") or ""))
 		end
 	else
