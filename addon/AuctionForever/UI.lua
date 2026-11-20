@@ -285,7 +285,7 @@ function L.FlipEmptyReason()
 	if (N.good or 0) == 0 then
 		return Head .. string.format("No flips yet: no item has %d+ hours of steady sales data (%d warming up).\nThe cloud data and your scans add more every hour.", Core.FlipMinHours, N["warming up"] or 0)
 	end
-	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit within that budget right now.", N.good, Core.Money(Core.MinFlipProfitFor(Budget)))
+	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit (and a %d%%+ return) within that budget right now.", N.good, Core.Money(Core.MinFlipProfitFor(Budget)), math.floor(Core.MinFlipReturn * 100 + 0.5))
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
@@ -1056,6 +1056,25 @@ Events:RegisterEvent("CHAT_MSG_LOOT")
 Events:RegisterEvent("CHAT_MSG_MONEY")
 Events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 Events:RegisterEvent("AUCTION_HOUSE_SHOW")
+Events:RegisterEvent("OWNED_AUCTIONS_UPDATED")
+-- Your active auctions, per item and unit price, from the game's list (filled when the game shows your auctions, e.g.
+-- the Auctions tab). Core leaves them out of the price ladder: they aren't stock in front of you.
+function L.ReadOwnedAuctions()
+	local AH = rawget(_G, "C_AuctionHouse")
+	if not (AH and AH.GetOwnedAuctions) then return end
+	local Ok, List = pcall(AH.GetOwnedAuctions)
+	if not Ok or type(List) ~= "table" then return end
+	local Mine = {}
+	for _, A in ipairs(List) do
+		local id = A.itemKey and A.itemKey.itemID
+		local Q, P = A.quantity or 0, A.buyoutAmount
+		if id and P and Q > 0 and (A.status or 0) == 0 then -- 0 = active (1 = sold, waiting in the mail)
+			Mine[id] = Mine[id] or {}
+			Mine[id][P] = (Mine[id][P] or 0) + Q
+		end
+	end
+	Core.MyListings = Mine
+end
 local RefreshQueued
 Events:SetScript("OnEvent", function(_, Event, Msg)
 	if Event == "PLAYER_LOGIN" then
@@ -1074,6 +1093,8 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 		end
+	elseif Event == "OWNED_AUCTIONS_UPDATED" then
+		L.ReadOwnedAuctions()
 	elseif Event == "AUCTION_HOUSE_SHOW" then
 		L.ResetBudget()
 		L.CreateAHTab()

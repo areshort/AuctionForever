@@ -393,6 +393,9 @@ if real:
       AF_NS.UI.FlipRows = function() return FlipTargets end
       RealFlipTargets = RealFlipTargets or AF_NS.UI.FlipTargets
       AF_NS.UI.FlipTargets = function() return FlipTargets end
+      -- The live price check recomputes the resale from current data; here the data backs a 2s resale.
+      RealResale = RealResale or AF_NS.Core.Resale
+      AF_NS.Core.Resale = function(I, Q, Cost) if ResaleNil then return nil end return { resell = 200, profit = math.floor(200 * Q * 0.95) - Cost } end
       Click(AuctionForeverBuyTab)""")
     ok(L('AuctionForeverBuyPanel:IsShown() and not AuctionForeverSellPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), 'AF Buy shows its panel only')
     ok(L('AuctionForeverBuyTab._selected and not AuctionForeverSellTab._selected and not AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'AF Buy highlighted, other tabs not')
@@ -437,6 +440,10 @@ if real:
     X('Click(AuctionForeverBuyPanel.Buy)')
     c = L('LastCall("PlaceBid")')
     ok(c is not None and c[2] == 77 and c[3] == 380, f'item flip: buys the cheapest listing within the max (auction {c and c[2]} for {c and c[3]})')
+    # the resale no longer works on current data (price fell, item not a flip any more): cancelled
+    X('ResaleNil = true; Calls = {}; AF_NS.Trade.SelectBuy(1); Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260); ResaleNil = nil')
+    ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil') and 'resale' in str(L('AuctionForeverBuyPanel.Status:GetText()')).lower(),
+       'resale rechecked at the live price: no longer a flip, cancelled: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     # over budget: cancelled
     X('Money = 50000; Calls = {}; AF_NS.Trade.SelectBuy(1); Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260000)')
     ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil'), 'total over the flip budget: cancelled')
@@ -494,6 +501,8 @@ if real:
     ok(c is not None and L('LastCall("PostCommodity")[2].bag') == 0 and L('LastCall("PostCommodity")[2].slot') == 1 and c[3] == 2 and c[4] == 12 and c[5] == 47,
        f'Post calls PostCommodity(bag 0 slot 1, 8 h, 12, 47c): {c and [c[3], c[4], c[5]]}')
     ok(L('AF_NS.Trade.SelectedSell().id') != 2589, 'after posting: next item')
+    mp = L('AuctionForeverDB.myposts and AuctionForeverDB.myposts[#AuctionForeverDB.myposts]')
+    ok(mp is not None and mp[2] == 2589 and mp[3] == 12 and mp[4] == 47, f'your post is remembered (so it is not counted as other sellers posting): {mp and list(mp.values())}')
     # the server asks for confirmation
     X('CallReturns = { PostCommodity = true }; Calls = {}; AF_NS.Trade.SelectSellId(2589); AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("3"); Click(AuctionForeverSellPanel.Post)')
     ok('Confirm' in str(L('AuctionForeverSellPanel.Post:GetText()')) and L('LastCall("ConfirmPostCommodity") == nil'), 'server asks for confirmation: Post becomes Confirm')
@@ -516,6 +525,24 @@ if real:
     ok(L('LastCall("PostCommodity") == nil') and 'what you paid' in str(L('AuctionForeverSellPanel.Status:GetText()')), 'below what you paid: not posted on the first click')
     X('Click(AuctionForeverSellPanel.Post)')
     ok(L('LastCall("PostCommodity") ~= nil'), 'second click posts at a loss on purpose')
+    # Expired twice since you bought it: stop reposting at your cost; suggest the market price and say so.
+    X("""AuctionForeverDB.mysales = AuctionForeverDB.mysales or {}
+      NSales = #AuctionForeverDB.mysales
+      table.insert(AuctionForeverDB.mysales, { time() + 10, 2589, 5, 0, "expired" })
+      table.insert(AuctionForeverDB.mysales, { time() + 20, 2589, 5, 0, "expired" })
+      Click(AuctionForeverBuyTab); Click(AuctionForeverSellTab); AF_NS.Trade.SelectSellId(2589)""")
+    hint = str(L('AuctionForeverSellPanel.Hint:GetText()'))
+    ok(L('AF_NS.Trade.SelectedSell().flag') == 'cutloss' and 'cut the loss' in hint.lower(), 'expired twice: suggests cutting the loss: ' + hint)
+    X('for i = #AuctionForeverDB.mysales, NSales + 1, -1 do table.remove(AuctionForeverDB.mysales, i) end')
+    # Your own auctions (once the game lists them) aren't stock in front of you.
+    X("""C_AuctionHouse.GetOwnedAuctions = function() return {
+        { itemKey = { itemID = 2589 }, buyoutAmount = 47, quantity = 12, status = 0 },
+        { itemKey = { itemID = 2589 }, buyoutAmount = 47, quantity = 3, status = 0 },
+        { itemKey = { itemID = 14047 }, buyoutAmount = 900, quantity = 1, status = 1 } } end
+      FireEvent("OWNED_AUCTIONS_UPDATED")""")
+    ok(L('AF_NS.Core.MyListings and AF_NS.Core.MyListings[2589] and AF_NS.Core.MyListings[2589][47]') == 15 and L('AF_NS.Core.MyListings[14047] == nil'),
+       'own active listings known per item and price (sold ones left out)')
+    X('C_AuctionHouse.GetOwnedAuctions = nil; AF_NS.Core.MyListings = nil')
     # Skip walks the queue and wraps
     n = len(q)
     X('AF_NS.Trade.SelectSell(1)')
@@ -584,13 +611,18 @@ X("""AuctionForeverDB.obs[777010] = nil
   After[99901] = { 7, 95, 40000 }; After[99902] = { 3, 200, 40000 }
   AF_NS.Scan.Observe(777010, MkMap(After), nil, After, 1000, T0 + 240, true)""")
 o = L('AuctionForeverDB.obs[777010] and AuctionForeverDB.obs[777010][#AuctionForeverDB.obs[777010]]')
-ok(o is not None and o[8] == 10, f'new listings counted from listing IDs: 10 ({o and o[8]})')
-# Ladders only (full scan): stock now - stock before + sold. 10 listed, 6 sold, 6 new at 150c -> 10 now.
+ok(o is not None and o[8] == 7, f'new listings counted from listing IDs: the 7 at 95c; the 3 at 2s (far above) are no competition ({o and o[8]})')
+# Ladders only (full scan): stock now - stock before + sold, at the cheap end. 10 listed, 6 sold, 6 new at 105c.
 X("""AuctionForeverDB.obs[777011] = nil
   AuctionForeverDB.base[777011] = { t = T0, ladder = { { 100, 10, 0 } }, qty = 10 }
-  AF_NS.Scan.Observe(777011, { [100] = 4, [150] = 6 }, nil, nil, nil, T0 + 1200, true)""")
+  AF_NS.Scan.Observe(777011, { [100] = 4, [105] = 6 }, nil, nil, nil, T0 + 1200, true)""")
 o = L('AuctionForeverDB.obs[777011] and AuctionForeverDB.obs[777011][#AuctionForeverDB.obs[777011]]')
 ok(o is not None and o[3] == 6 and o[8] == 6, f'ladder window: 6 sold, 6 new ({o and o[3]}, {o and o[8]})')
+X("""AuctionForeverDB.obs[777012] = nil
+  AuctionForeverDB.base[777012] = { t = T0, ladder = { { 100, 10, 0 } }, qty = 10 }
+  AF_NS.Scan.Observe(777012, { [100] = 4, [150] = 6 }, nil, nil, nil, T0 + 1200, true)""")
+o = L('AuctionForeverDB.obs[777012] and AuctionForeverDB.obs[777012][#AuctionForeverDB.obs[777012]]')
+ok(o is not None and o[8] == 0, f'6 new at 150c with 100c lowest: far above, not counted ({o and o[8]})')
 # Full scan (no auction IDs) then lookups minutes later: the first lookup keeps its IDs as an exact starting point,
 # the next compares listing by listing and measures the busy item.
 X("""AuctionForeverDB.obs[777010] = nil

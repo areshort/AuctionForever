@@ -135,6 +135,9 @@ end
 -- only the cheapest levels, so only prices both looks fully cover are counted).
 local function NewListed(BaseAuc, Auc, BL, Map, Cov, Sold)
 	local Cut = Cov or math.huge
+	-- Only listings at the cheap end compete with sellers near the bottom (Core.NewCutoff; same rule as the cloud).
+	local Cheap = Core.NewCutoff(Map)
+	if Cheap then Cut = math.min(Cut, Cheap) end
 	if BaseAuc and Auc then
 		local N = 0
 		for Aid, R in pairs(Auc) do if not BaseAuc[Aid] and R[2] <= Cut then N = N + R[1] end end

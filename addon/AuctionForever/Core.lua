@@ -20,7 +20,11 @@ Core.FloodDays = 1              -- more listed than this many days of sales: flo
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 1000       -- 10 silver: the most a flip must earn (see MinFlipProfitFor)
 Core.FlipMaxHours = 4           -- a flip never buys more than the cautious resale speed sells in this many hours
-Core.FlipMinHours = 12          -- hours of sales data an item needs before it's a flip target
+Core.FlipMinHours = 24          -- hours of sales data an item needs before it's a flip target (a full day/night cycle)
+Core.UndercutHaircut = 0.9      -- flips plan their profit at this share of the resale price (expect an undercut or two)
+Core.MinFlipReturn = 0.12       -- a flip must expect at least this return on what it costs (and MinFlipProfitFor)
+Core.UnsoldValue = 0.5          -- what a unit that doesn't sell is worth, as a share of the resale (a later, cheaper relist)
+Core.FallingKnife = 0.30        -- lowest price this far under the 3-day median and still dropping: not a flip
 Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
 Core.MinWindows = 2             -- separate windows with sales before an item is a steady seller
 Core.PlanRateShare = 0.75       -- flips plan resales at this share of the measured sales speed (the low end)
@@ -38,8 +42,52 @@ function Core.Info(id)
 	I.ladder = I.ladder or {}
 	I.soldQty = (I.perHour or 0) * (I.hoursSeen or 0)
 	I = Core.MergeScan(I, D.time)
+	-- Your own listings aren't stock in front of you (known once the game has shown your auctions).
+	local Mine = Core.MyListings and Core.MyListings[id]
+	if Mine then
+		local Listed = 0
+		for _, Q in pairs(Mine) do Listed = Listed + Q end
+		I.ladder = Core.RemoveMine(I.ladder, Mine)
+		I.qty = math.max(0, (I.qty or 0) - Listed)
+		I.low = I.ladder[1] and I.ladder[1][1] or (I.qty > 0 and I.low or nil)
+		I.myListed = Listed
+	end
+	-- What you already hold of it (bought and not sold yet, in bags or listed): flips count it against their limit.
+	local DB = AuctionForeverDB
+	if type(DB) == "table" and type(DB.buys) == "table" then
+		for _, B in ipairs(DB.buys) do
+			if B[2] == id then I.held = (Core.Holding(DB, id)) break end
+		end
+	end
+	if I.myListed then I.held = math.max(I.held or 0, I.myListed) end
 	Core.AddMySales(I, id)
 	return I
+end
+
+-- A price ladder without your own listings. Mine = { [price] = qty }.
+function Core.RemoveMine(Ladder, Mine)
+	local Out = {}
+	for _, Step in ipairs(Ladder or {}) do
+		local Q = Step[2] - (Mine[Step[1]] or 0)
+		if Q > 0 then Out[#Out + 1] = { Step[1], Q, Step[3] } end
+	end
+	return Out
+end
+
+-- Highest price a new listing can have and still count as competition for sellers at the cheap end: the price where
+-- the cheapest 25% of the stock is reached, at least 10% over the lowest. Map = { [price] = qty }. Same rule as the
+-- cloud collector's new_cutoff.
+function Core.NewCutoff(Map)
+	local Steps, Total = {}, 0
+	for P, Q in pairs(Map or {}) do Steps[#Steps + 1] = { P, Q }; Total = Total + Q end
+	if #Steps == 0 then return nil end
+	table.sort(Steps, function(a, b) return a[1] < b[1] end)
+	local Run, P25 = 0, Steps[#Steps][1]
+	for _, St in ipairs(Steps) do
+		Run = Run + St[2]
+		if Run * 4 >= Total then P25 = St[1] break end
+	end
+	return math.max(P25, math.floor(Steps[1][1] * 1.1))
 end
 
 -- Your own auction results from the mailbox (Mail.lua): exact, kept apart from the market's sales rate.
@@ -83,8 +131,30 @@ function Core.MergeScan(I, DataTime)
 	-- (one buyer clearing the bottom, or a mass cancel) and is left out. It's a speed check, not a stock share:
 	-- a quarter of the stock selling over a busy hour is normal, the same amount gone in minutes is not.
 	-- An item needs sales in 2+ separate windows before it counts as a steady seller.
-	local Rates = {}
+	-- Your own trades aren't the market: in the cloud's hours your purchases were counted as sales and your posts as
+	-- new listings. Take them out (spread over the hours watched). Scans already leave your purchases out.
 	local CloudH = I.hoursSeen or 0
+	local From, To = (DataTime or 0) - CloudH * 3600, DataTime or 0
+	local OwnBought, OwnPosted = 0, 0
+	for _, B in ipairs(type(DB.buys) == "table" and DB.buys or {}) do
+		if B[2] == id and B[1] >= From and B[1] <= To then OwnBought = OwnBought + B[3] end
+	end
+	local Posts = type(DB.myposts) == "table" and DB.myposts or {}
+	for _, Ps in ipairs(Posts) do
+		if Ps[2] == id and Ps[1] >= From and Ps[1] <= To then OwnPosted = OwnPosted + Ps[3] end
+	end
+	if CloudH > 0 and OwnBought > 0 then
+		local Less = OwnBought / CloudH
+		if I.perHour then I.perHour = math.max(0, I.perHour - Less) end
+		if I.medHour then I.medHour = math.max(0, I.medHour - Less) end
+		I.soldQty = math.max(0, (I.soldQty or 0) - OwnBought)
+	end
+	local function PostedIn(T0, T1)
+		local N = 0
+		for _, Ps in ipairs(Posts) do if Ps[2] == id and Ps[1] >= T0 and Ps[1] <= T1 then N = N + Ps[3] end end
+		return N
+	end
+	local Rates = {}
 	for _ = 1, math.floor(CloudH + 0.5) do Rates[#Rates + 1] = I.medHour or I.perHour or 0 end
 	local CloudN = #Rates
 	local Windows = math.floor((I.hoursWithSales or 0) + 0.5)
@@ -94,8 +164,10 @@ function Core.MergeScan(I, DataTime)
 	for _, O in ipairs(Obs) do Rates[#Rates + 1] = O[3] / O[2] end
 	-- New listings per hour (other sellers posting): cloud hours and scan windows together.
 	local NewQ, NewH = 0, 0
-	if I.newHour then NewQ, NewH = I.newHour * CloudH, CloudH end
-	for _, O in ipairs(Obs) do if O[8] then NewQ, NewH = NewQ + O[8], NewH + O[2] end end
+	if I.newHour then NewQ, NewH = math.max(0, I.newHour * CloudH - OwnPosted), CloudH end
+	for _, O in ipairs(Obs) do
+		if O[8] then NewQ, NewH = NewQ + math.max(0, O[8] - PostedIn(O[1] - O[2] * 3600, O[1])), NewH + O[2] end
+	end
 	if NewH > 0 then I.newHour = NewQ / NewH end
 	local function MedianWithout(Skip)
 		local T = {}
@@ -384,6 +456,22 @@ end
 -- Lowest price that gets back what you paid after the AH cut.
 function Core.CostFloor(UnitCost) return math.ceil(UnitCost / (1 - Core.Cut) - 1e-9) end
 
+-- Time to stop holding out for what you paid: the market's lowest price stayed under Floor for a whole watched day,
+-- or your listings of it expired twice since you bought it. Then selling at the market (taking the loss) or simply
+-- holding beats reposting at your cost and losing deposits.
+function Core.CutLoss(I, Floor, DB, id)
+	if I and I.lowHi24 and Floor and I.lowHi24 < Floor then return true end
+	local Since
+	for _, B in ipairs(DB and DB.buys or {}) do
+		if B[2] == id and (not Since or B[1] < Since) then Since = B[1] end
+	end
+	local N = 0
+	for _, R in ipairs(DB and DB.mysales or {}) do
+		if R[2] == id and R[5] == "expired" and (not Since or R[1] >= Since) then N = N + 1 end
+	end
+	return N >= 2
+end
+
 -- How your flips sold in the last Days: units sold, profit after the cut, and what the plans expected for them.
 function Core.FlipResults(DB, Now, Days)
 	local Out = { sold = 0, profit = 0, expected = 0 }
@@ -421,16 +509,73 @@ function Core.MinFlipProfitFor(Budget)
 	return math.max(200, math.min(Core.MinFlipProfit, math.floor(0.04 * (Budget or 0))))
 end
 
--- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer).
+-- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer), and
+-- isn't a falling knife: lowest price FallingKnife under the 3-day median and dropping over the last snapshots (a new,
+-- lower price level, not a bargain).
 function Core.FlipStatus(I)
 	local S = Core.Status(I)
-	if S == "good" and (I.hoursSeen or 0) < Core.FlipMinHours then return "warming up" end
+	if S ~= "good" then return S end
+	if (I.hoursSeen or 0) < Core.FlipMinHours then return "warming up" end
+	local Base, Lw = I.medAll or I.med, I.lows
+	if I.low and Base and I.low < (1 - Core.FallingKnife) * Base and type(Lw) == "table" and #Lw >= 3
+		and Lw[#Lw - 2] > Lw[#Lw - 1] and Lw[#Lw - 1] > Lw[#Lw] then
+		return "falling"
+	end
 	return S
+end
+
+local function Chance(I) return math.max(0.05, math.min(1, I.sellThrough or 1)) end
+-- How fast a resale sells: sales (planned at PlanRateShare) minus other sellers' new listings when known.
+local function ResaleSpeed(I)
+	local Net = Core.NetSpeed(I)
+	return Net and math.max(0, Net) or (I.perHour or 0) * Core.PlanRateShare
+end
+-- Highest resale price the data backs: what buyers paid in the last day and over the longer window (both).
+function Core.ResaleCap(I)
+	local A, B = I.med24 or I.med, I.medAll or I.med
+	if A and B then return math.min(A, B) end
+	return A or B
+end
+
+-- Reselling Qty bought for Cost, with Rest still listed after the purchase: 1c under what's left (you must be the
+-- cheapest), never above ResaleCap. Expected profit: the price planned at UndercutHaircut, the AH cut, the chance it
+-- sells (sell-through), units that don't sell valued at UnsoldValue of the resale, and the deposit lost on those.
+-- Returns an option table, or nil when no price works.
+local function Evaluate(I, J, Qty, Cost, Rest)
+	local Top = Core.ResaleCap(I)
+	if not Top or Qty <= 0 then return nil end
+	local Under = Rest[1] and math.min(Rest[1][1] - 1, Top) or Top
+	local Dep2 = Core.Deposit and Core.Deposit(I, Core.Durations[1], Qty) or 0
+	local Floor = math.ceil((Cost + Dep2) / Qty / (1 - Core.Cut)) + 1
+	local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest, Under)
+	if not H then return nil end
+	local Ch = Chance(I)
+	local Dep = Core.Deposit and Core.Deposit(I, H, Qty) or 0
+	local Net = Price * Qty * (1 - Core.Cut) * Core.UndercutHaircut
+	local Profit = math.floor(Net * Ch + Net * (1 - Ch) * Core.UnsoldValue - (1 - Ch) * Dep + 1e-6) - Cost
+	return { qty = Qty, buyQty = Qty, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit, chance = Ch }
+end
+
+-- The resale for a purchase of Qty for Cost from the data at hand (the live price check uses it). nil when the item
+-- isn't a flip target any more or no resale price works.
+function Core.Resale(I, Qty, Cost)
+	if not I or Core.FlipStatus(I) ~= "good" then return nil end
+	local Rest, Left = {}, Qty
+	for _, Step in ipairs(I.ladder or {}) do
+		local Q = Step[2]
+		if Left > 0 then local T = math.min(Left, Q); Q = Q - T; Left = Left - T end
+		if Q > 0 then Rest[#Rest + 1] = { Step[1], Q } end
+	end
+	return Evaluate(I, setmetatable({ perHour = ResaleSpeed(I) }, { __index = I }), Qty, Cost, Rest)
+end
+
+-- Least expected profit for a flip costing Cost: MinProfit, and MinFlipReturn of the cost.
+function Core.FlipNeed(Cost, MinProfit)
+	return math.max(MinProfit or Core.MinFlipProfit, math.ceil(Core.MinFlipReturn * Cost))
 end
 
 function Core.FlipOptions(I, Cap, MinProfit)
 	local Out = {}
-	MinProfit = MinProfit or Core.MinFlipProfit
 	if Core.FlipStatus(I) ~= "good" or not Cap or Cap <= 0 then return Out end
 	local Ladder = I.ladder
 	-- Only the cheapest price levels are kept; if more listings exist above them, the last kept level can't be
@@ -438,12 +583,9 @@ function Core.FlipOptions(I, Cap, MinProfit)
 	local Known = 0
 	for _, Step in ipairs(Ladder) do Known = Known + Step[2] end
 	local MoreAbove = (I.qty or 0) > Known
-	-- Other sellers' new listings land in front of yours too: resale speed is sales minus new listings when known.
-	local Net = Core.NetSpeed(I)
-	local J = setmetatable({ perHour = Net and math.max(0, Net) or (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
-	-- Never more than the cautious resale speed sells in FlipMaxHours: a big buy rides on that speed holding.
-	local MaxQty = math.floor(J.perHour * Core.FlipMaxHours)
-	local Chance = math.max(0.05, math.min(1, I.sellThrough or 1))
+	local J = setmetatable({ perHour = ResaleSpeed(I) }, { __index = I })
+	-- Never more than the cautious resale speed sells in FlipMaxHours, counting what you already hold of it.
+	local MaxQty = math.floor(J.perHour * Core.FlipMaxHours) - (I.held or 0)
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
 		local P, Q = Ladder[Level][1], Ladder[Level][2]
@@ -454,18 +596,11 @@ function Core.FlipOptions(I, Cap, MinProfit)
 		local Rest = {}
 		if Take < Q then Rest[#Rest + 1] = { P, Q - Take } end
 		for j = Level + 1, #Ladder do Rest[#Rest + 1] = Ladder[j] end
-		local Floor = math.ceil(Cost / Qty / (1 - Core.Cut)) + 1
-		-- After buying you must be the cheapest: resell 1c under what's left, so other sellers' stock isn't in
-		-- front of yours (they undercut the lowest price all the time).
 		if not Rest[1] and MoreAbove then break end
-		local Under = Rest[1] and (Rest[1][1] - 1) or nil
-		local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest, Under)
-		if H then
-			-- Expected profit: only sellThrough of what you post sells, on average.
-			local Profit = math.floor(Price * Qty * (1 - Core.Cut) * Chance) - Cost
-			if Profit >= MinProfit then
-				Out[#Out + 1] = { qty = Qty, buyQty = Qty, buyUpTo = P, cost = Cost, resell = Price, hours = H, durationIndex = Idx, fill = Fill, profit = Profit, chance = Chance }
-			end
+		local O = Evaluate(I, J, Qty, Cost, Rest)
+		if O and O.profit >= Core.FlipNeed(Cost, MinProfit) then
+			O.buyUpTo = P
+			Out[#Out + 1] = O
 		end
 		if Take < Q then break end
 	end

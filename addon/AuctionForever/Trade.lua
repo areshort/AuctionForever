@@ -318,9 +318,12 @@ end
 local function OnPriceUpdated(Unit, Total)
 	if Buy.state ~= "price" or not Buy.pending then return end
 	local Pd = Buy.pending
-	local Profit = math.floor(Pd.resell * Pd.qty * (1 - Core.Cut) * (Pd.chance or 1)) - Total
+	-- Resale from the data as it is now (not the price planned when the list was made), at the live cost.
+	local R = Core.Resale(Core.Info(Pd.id), Pd.qty, Total)
+	local Profit = R and R.profit
+	if R then Pd.resell = R.resell end
 	local Budget = UI().FlipBudget()
-	local MinProfit = Core.MinFlipProfitFor(Budget)
+	local MinProfit = Core.FlipNeed(Total, Core.MinFlipProfitFor(Budget))
 	if Unit > Pd.max then
 		ResetPurchase(true)
 		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.Money(Unit), Core.Money(Pd.max)))
@@ -328,6 +331,9 @@ local function OnPriceUpdated(Unit, Total)
 	elseif Total > Budget then
 		ResetPurchase(true)
 		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Core.Money(Total), Core.Money(Budget)))
+	elseif not R then
+		ResetPurchase(true)
+		SayBuy("The resale doesn't work any more on current data (the price fell or the item stopped selling well). Not bought.")
 	elseif Profit < MinProfit then
 		ResetPurchase(true)
 		SayBuy(string.format("At today's price the expected profit would be %s (under %s). Not bought.", Core.Money(Profit), Core.Money(MinProfit)))
@@ -381,7 +387,12 @@ local function Suggest(G)
 	local I = G.info
 	G.held, G.cost = Core.Holding(SaveDB(), G.id)
 	local Lo = math.max(Floor(G), PaidFloor(G) or 0)
+	-- The market stayed under what you paid all day, or it expired twice: price at the market (the loss is shown)
+	-- instead of reposting at your cost and losing deposits.
+	local Cut = PaidFloor(G) and Core.CutLoss(I, PaidFloor(G), SaveDB(), G.id)
+	if Cut then Lo = Floor(G) end
 	local Price, H, Idx, Qty, Flag = Core.SellPrice(I, G.count, Lo)
+	if Cut and Price and Price < PaidFloor(G) then Flag = "cutloss" end
 	if not Price then H, Idx, Price, Qty = 2, 1, math.max(Lo, Core.Market(I) or Lo), G.count end
 	G.price, G.durIdx, G.qty, G.flag = math.max(Lo, math.floor(Price)), Idx, Qty, Flag
 end
@@ -509,6 +520,7 @@ function T.DrawSell()
 		loss = "|cffff4040Being the cheapest would sell below your floor (vendor or what you paid): holding may be better.|r",
 		flooding = "|cffffd100More is being posted than sold: priced 1c under the cheapest; prices may keep falling.|r",
 		guess = "New listings per hour not measured yet: priced 1c under the cheapest to be safe.",
+		cutloss = "|cffff4040The market has stayed under what you paid (all day, or it expired twice): priced at the market to cut the loss. Or keep it and wait.|r",
 	}
 	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: the highest price that still sells within 2 h with other sellers posting.")
 	SellP.Info:SetText(Line)
@@ -562,8 +574,20 @@ function T.SelectSellId(id)
 	return false
 end
 
-local function AfterPost(Qty)
+-- Your posts, kept 30 days, so your own listings aren't counted as other sellers posting (Core.MergeScan).
+local POST_DAYS = 30
+local function RememberPost(id, Qty, Price)
+	local DB = SaveDB()
+	DB.myposts = DB.myposts or {}
+	local Now = time()
+	table.insert(DB.myposts, { Now, id, Qty, Price })
+	local Kept = {}
+	for _, R in ipairs(DB.myposts) do if R[1] >= Now - POST_DAYS * 86400 then Kept[#Kept + 1] = R end end
+	DB.myposts = Kept
+end
+local function AfterPost(Qty, Price)
 	local G = T.SelectedSell()
+	if G and Price then RememberPost(G.id, Qty, Price) end
 	if G then
 		G.count = G.count - Qty
 		if G.count <= 0 then table.remove(Sell.queue, Sell.idx); Sell.idx = Sell.idx - 1 end
@@ -581,7 +605,7 @@ function T.PostClick()
 		if Pd.commodity then C_AuctionHouse.ConfirmPostCommodity(Pd[1], Pd[2], Pd[3], Pd[4])
 		else C_AuctionHouse.ConfirmPostItem(Pd[1], Pd[2], Pd[3], nil, Pd[4]) end
 		SaySell(string.format("Posted %d at %s each.", Pd[3], Core.Money(Pd[4])))
-		AfterPost(Pd[3])
+		AfterPost(Pd[3], Pd[4])
 		return
 	end
 	local Price, Qty, Dur = T.SellPrice(), tonumber(SellP.Qty:GetText()), Sell.dur or 1
@@ -615,7 +639,7 @@ function T.PostClick()
 		return
 	end
 	SaySell(string.format("Posted %d at %s each.", Qty, Core.Money(Price)))
-	AfterPost(Qty)
+	AfterPost(Qty, Price)
 end
 
 local function MoneyBox(Parent, X, Y, W, Suffix)
