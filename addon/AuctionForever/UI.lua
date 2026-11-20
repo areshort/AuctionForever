@@ -120,13 +120,17 @@ end
 L.ItemName, L.Icon, L.Vendor, L.Stacks = function(id) return ItemName(id) end, function(id) return Icon(id) end, function(id) return Vendor(id) end, function(id) return Stacks(id) end
 L.Kind, L.Flippable = function(id) return Kind(id) end, function(id) return Flippable(id) end
 
--- Real deposits from the game for commodities (others: not known, counted as 0), so post durations weigh the
+-- Real deposits from the game for commodities (others: estimated below), so post durations weigh the
 -- deposit lost when a post doesn't sell. Remembered per item/duration/quantity.
 local DepositCache = {}
 -- Gear and other single items (and anything while the auction house is closed): the deposit is an estimate, a
--- share of the vendor price per hour posted (seen in game: 24 h = 3x the vendor price).
+-- share of the vendor price per hour posted (seen in game: 24 h = 3x the vendor price). Forever's minimum deposit
+-- is 1 copper a post (not 1 silver), so cheap items cost next to nothing to post.
 Core.DepositPerHour = 3 / 24
-local function EstimatedDeposit(I, H, Qty) return math.floor(Vendor(I.id) * Core.DepositPerHour * H) * (Qty or 1) end
+Core.MinDeposit = 1
+local function EstimatedDeposit(I, H, Qty)
+	return math.max(Core.MinDeposit, math.floor(Vendor(I.id) * Core.DepositPerHour * H) * (Qty or 1))
+end
 Core.Deposit = function(I, H, Qty)
 	if not (I and I.id) then return 0 end
 	local AH = rawget(_G, "C_AuctionHouse") -- not there until the auction house UI exists
@@ -309,6 +313,75 @@ function L.FlipRows()
 	return Now
 end
 
+-- Missed flips (measuring how long flip chances last): after every finished full or quick scan, the flips AF Buy
+-- would show you now are logged in AuctionForeverDB.flipLog as { id, price (buy up to), qty, profit, firstSeen,
+-- lastSeen, goneAt, bought }. A logged flip still offered at the same or a lower price on a later scan gets a new
+-- lastSeen; one that isn't offered any more gets goneAt (bought = you bought some of it since it was first seen).
+-- Only runs when a scan you started finishes; never on a timer.
+L.FlipLogMax = 300
+function L.LogFlips(Now)
+	local DB = Account()
+	DB.flipLog = type(DB.flipLog) == "table" and DB.flipLog or {}
+	local Log = DB.flipLog
+	local Cur = {}
+	for _, R in ipairs(L.FlipRows()) do
+		local F = R.flip
+		if F and not F.vendor and F.buyUpTo then Cur[R.id] = F end
+	end
+	local Open = {}
+	for _, E in ipairs(Log) do
+		if not E[7] then
+			local F = Cur[E[1]]
+			if F and F.buyUpTo <= E[2] then
+				E[6] = Now
+				Open[E[1]] = true
+			else
+				E[7] = Now
+				for _, B in ipairs(type(DB.buys) == "table" and DB.buys or {}) do
+					if B[2] == E[1] and B[1] >= E[5] and B[1] <= Now then E[8] = true break end
+				end
+			end
+		end
+	end
+	for id, F in pairs(Cur) do
+		if not Open[id] then Log[#Log + 1] = { id, F.buyUpTo, F.buyQty or F.qty or 0, F.profit or 0, Now, Now } end
+	end
+	while #Log > L.FlipLogMax do table.remove(Log, 1) end
+end
+
+-- "/af missed": how long logged flips lasted before someone else took them.
+function L.MissedSummary()
+	local Log = type(AuctionForeverDB) == "table" and type(AuctionForeverDB.flipLog) == "table" and AuctionForeverDB.flipLog or {}
+	local Gone, Lasted, ByItem, Bought = 0, {}, {}, 0
+	for _, E in ipairs(Log) do
+		if E[7] then
+			if E[8] then Bought = Bought + 1
+			else
+				Gone = Gone + 1
+				Lasted[#Lasted + 1] = (E[6] or E[5]) - E[5]
+				local B = ByItem[E[1]] or { id = E[1], n = 0, profit = 0 }
+				B.n, B.profit = B.n + 1, B.profit + (E[4] or 0)
+				ByItem[E[1]] = B
+			end
+		end
+	end
+	local Lines = { string.format("Missed flips: %d logged, %d gone before you bought (%d you bought), %d still open.", #Log, Gone, Bought, #Log - Gone - Bought) }
+	if #Lasted > 0 then
+		table.sort(Lasted)
+		local M = (#Lasted + 1) / 2
+		local Med = (Lasted[math.floor(M)] + Lasted[math.ceil(M)]) / 2
+		Lines[#Lines + 1] = string.format("Gone ones were still there for %d min (median) after first seen, until the scan before they vanished.", math.floor(Med / 60 + 0.5))
+	end
+	local Top = {}
+	for _, B in pairs(ByItem) do Top[#Top + 1] = B end
+	table.sort(Top, function(a, b) if a.profit ~= b.profit then return a.profit > b.profit end return a.id < b.id end)
+	for i = 1, math.min(5, #Top) do
+		local B = Top[i]
+		Lines[#Lines + 1] = string.format("  %s: %d missed, %s expected profit", ItemName(B.id), B.n, Core.MoneyColor(B.profit))
+	end
+	return Lines
+end
+
 -- Why the Flip list is empty, in one line.
 function L.FlipEmptyReason()
 	local Budget = L.FlipBudget()
@@ -324,7 +397,7 @@ function L.FlipEmptyReason()
 	if (N.good or 0) == 0 then
 		return Head .. string.format("No flips yet: no item has %d+ hours of steady sales data (%d warming up).\nThe cloud data and your scans add more every hour.", Core.FlipMinHours, N["warming up"] or 0)
 	end
-	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit (and a %d%%+ return) within that budget right now.", N.good, Core.MoneyColor(Core.MinFlipProfitFor(Budget)), math.floor(Core.MinFlipReturn * 100 + 0.5))
+	return Head .. string.format("%d steady sellers, but none has a listing cheap enough to\nflip for %s+ expected profit (and a %d%%+ return, %d%%+ for slow sellers) within that budget right now.", N.good, Core.MoneyColor(Core.MinFlipProfitFor(Budget)), math.floor(Core.MinFlipReturn * 100 + 0.5), math.floor(Core.MinFlipReturnSlow * 100 + 0.5))
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
@@ -1197,7 +1270,9 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
-	if Msg:match("^keep") and AF.Bags then AF.Bags.KeepCommand(Msg) elseif Msg:match("^icon") and AF.Bags then AF.Bags.IconCommand(Msg) elseif Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run() else L.Toggle(1) end
+	if Msg:match("^keep") and AF.Bags then AF.Bags.KeepCommand(Msg) elseif Msg:match("^icon") and AF.Bags then AF.Bags.IconCommand(Msg) elseif Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run()
+	elseif Msg == "missed" then for _, Ln in ipairs(L.MissedSummary()) do print("|cffffd100AuctionForever:|r " .. Ln) end
+	else L.Toggle(1) end
 end
 
 AF.UI = L

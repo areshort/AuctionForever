@@ -81,11 +81,11 @@ ok(L(f'{C}.Budget(100000)') == 95000, '10g -> 9g 50s budget (keep 50s)')
 ok(L(f'{C}.Budget(15000)') == 10000, '1g 50s -> 1g (keep 50s)')
 ok(L(f'{C}.Budget(4000)') == 0, 'under 50s: nothing')
 # Flip options: you must be the cheapest after buying, reselling 1c under what's left.
-# Buy 10 at 5s -> resell 949, profit planned at 90% of it: floor(949*10*0.95*0.9) - 5000 = 3113. Buying the 30 at
-# 9s 50c too (resell 999) would plan floor(999*40*0.95*0.9) - 33500 = 665, a 2% return: under the 12% minimum.
+# Buy 10 at 5s -> resell 949, profit planned at 97% of it: floor(949*10*0.95*0.97) - 5000 = 3745. Buying the 30 at
+# 9s 50c too (resell 999) would plan floor(999*40*0.95*0.97) - 33500 = 3323, a 9.9% return: under the 10% minimum.
 lua.execute(f'O = {C}.FlipOptions(MakeItem({{ sellThrough = 1 }}), 500000); Flip = {C}.Flip(MakeItem({{ sellThrough = 1 }}), 500000)')
-ok(L('O[1].buyQty == 10 and O[1].resell == 949 and O[1].profit == 3113'), f'first option: resell 1c under the next listing ({L("O[1].resell")}, {L("O[1].profit")})')
-ok(L('#O == 1 and Flip.buyQty == 10 and Flip.profit == 3113'), f'buying the next level too is a 2% return: not offered ({L("#O")} options)')
+ok(L('O[1].buyQty == 10 and O[1].resell == 949 and O[1].profit == 3745'), f'first option: resell 1c under the next listing ({L("O[1].resell")}, {L("O[1].profit")})')
+ok(L('#O == 1 and Flip.buyQty == 10 and Flip.profit == 3745'), f'buying the next level too is a 9.9% return: not offered ({L("#O")} options)')
 # Only the 12 cheapest levels are kept: buying through all of them, with more listings above, isn't a flip
 # (seen with Minor Mana Potion: "resell at 6s 15c" after buying every known level).
 lua.execute(f"Trunc = {C}.FlipOptions(MakeItem({{ ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 300 }}), 500000)")
@@ -103,9 +103,9 @@ lua.execute('Wall = AuctionForever.Core.Flip(MakeItem({ ladder = { {500, 10}, {5
 ok(L('Wall == nil'), 'cheap listing with lots of stock just above: skipped')
 ok(L('AuctionForever.Core.Flip(MakeItem({ sales = 3 }), 500000) == nil'), 'warming up: no flip')
 # Expected profit: only sellThrough of what you post sells (80% here); the rest is worth half. 10 at 5s resold at 949:
-# N = 949 * 10 * 0.95 * 0.9; floor(0.8 N + 0.2 N * 0.5) - 5000 = 2302. Buying the 9s 50c level too would expect a loss.
+# N = 949 * 10 * 0.95 * 0.97; floor(0.8 N + 0.2 N * 0.5) - 5000 = 2870. Buying the 9s 50c level too doesn't pay.
 lua.execute(f'EO = {C}.FlipOptions(MakeItem(), 500000)')
-ok(L('#EO') == 1 and L('EO[1].profit') == 2302, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
+ok(L('#EO') == 1 and L('EO[1].profit') == 2870, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
 # Never buy more than the cautious resale speed sells in 8 h: 15/h planned -> at most 120. (Without the cap, buying
 # the 9s 50c level too would be offered: 150 units, 10 h of sales.)
 lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000)")
@@ -127,7 +127,7 @@ ok(L(f'#{C}.FlipOptions(MakeItem({{ hoursSeen = 3 }}), 500000)') == 0 and L(f'{C
 ok(L(f'{C}.MinFlipProfitFor(4848)') == 500 and L(f'{C}.MinFlipProfitFor(15000)') == 500 and L(f'{C}.MinFlipProfitFor(100000)') == 500,
    f"minimum flip profit: {L(f'{C}.MinFlipProfitFor(4848)')}, {L(f'{C}.MinFlipProfitFor(15000)')}, {L(f'{C}.MinFlipProfitFor(100000)')}")
 lua.execute(f"Small = {C}.FlipOptions(MakeItem({{ sellThrough = 1, ladder = {{ {{500, 1}}, {{1000, 100}} }}, qty = 101 }}), 600, 300)")
-ok(L('#Small') == 1 and L('Small[1].profit') == 354, f"a 3s 54c flip counts when your minimum is 3s ({L('#Small')}, {L('Small[1] and Small[1].profit')})")
+ok(L('#Small') == 1 and L('Small[1].profit') == 420, f"a 4s 20c flip counts when your minimum is 3s ({L('#Small')}, {L('Small[1] and Small[1].profit')})")
 # Value per day and money text
 ok(L(f'{C}.ValuePerDay(MakeItem())') == 1000 * 40 * 24, 'value per day = price x sold per day')
 ok(L(f'{C}.Money(12345)') == '1g 23s' and L(f'{C}.Money(250)') == '2s 50c' and L(f'{C}.Money(7)') == '7c', 'money text')
@@ -248,23 +248,43 @@ ok(L('R2') == 0 and not any(b[2] == 2589 for b in [list(v.values()) for v in L('
 # Resale never above what buyers actually paid, in both the last day and the longer window (med24, medAll).
 X(f"RC = {C}.FlipOptions(MakeItem({{ sellThrough = 1, med = 900, medAll = 900 }}), 500000, 200)")
 ok(L('#RC') >= 1 and L('RC[1].resell') <= 900, f"resale capped at the real sale median (900c), not 1c under the next listing ({L('RC[1] and RC[1].resell')})")
-# Profit planned at 90% of the resale price (expect an undercut or two): 10 at 5s resold at 900 -> floor(900*0.9*0.95*10) - 5000 = 2695.
-ok(L('RC[1].buyQty') == 10 and L('RC[1].profit') == 2695, f"profit planned at 90% of the resale price ({L('RC[1] and RC[1].profit')})")
+# Profit planned at 97% of the resale price (commodity buyers take the cheapest, newest first at a tie, so matching
+# the lowest sells; 3% for the odd undercut): 10 at 5s resold at 900 -> floor(900*0.97*0.95*10) - 5000 = 3293.
+ok(L('RC[1].buyQty') == 10 and L('RC[1].profit') == 3293, f"profit planned at 97% of the resale price ({L('RC[1] and RC[1].profit')})")
+ok(L(f'{C}.UndercutHaircut') == 0.97, 'undercut haircut is 3%')
 # Expected deposit loss counts: deposit 1s a unit at 2 h, 60% chance -> 40% of the deposit expected lost; unsold
-# 40% valued at half price: floor(N*0.6 + N*0.4*0.5 - 0.4*1000) - 5000 with N = 900*10*0.95*0.9 = 7695 -> 756.
+# 40% valued at half price: floor(N*0.6 + N*0.4*0.5 - 0.4*1000) - 5000 with N = 900*10*0.95*0.97 = 8293.5 -> 1234.
 X(f"{C}.Deposit = function(I, H, Q) return 100 * Q * (H == 2 and 1 or 4) end")
 X(f"DP = {{ {C}.Resale(MakeItem({{ sellThrough = 0.6, med = 900, medAll = 900 }}), 10, 5000) }}")
 X(f"{C}.Deposit = nil")
-ok(L('#DP') >= 1 and L('DP[1].profit') == 756, f"expected deposit loss and half-value leftovers counted ({L('DP[1] and DP[1].profit')})")
+ok(L('#DP') >= 1 and L('DP[1].profit') == 1234, f"expected deposit loss and half-value leftovers counted ({L('DP[1] and DP[1].profit')})")
 # Unsold units are worth half the resale (a later relist at a worse price), not nothing: 60% chance, no deposit ->
-# floor(7695 * 0.8) - 5000 = 1156.
+# floor(8293.5 * 0.8) - 5000 = 1634.
 X(f"US = {C}.FlipOptions(MakeItem({{ sellThrough = 0.6, med = 900, medAll = 900 }}), 500000, 0)")
-ok(L('#US') >= 1 and L('US[1].profit') == 1156, f"leftovers valued at half the resale ({L('US[1] and US[1].profit')})")
-# Minimum return: 12% of the cost, on top of the minimum amount. 10 at 10s resold at 13s: floor(1300*0.9*0.95*10) - 10000 = 1115 (11%).
-X(f"MR = {C}.FlipOptions(MakeItem({{ sellThrough = 1, med = 1400, medAll = 1400, med24 = 1400, hi = 1500, ladder = {{ {{1000, 10}}, {{1301, 100}} }}, qty = 110 }}), 500000, 200)")
-ok(L('#MR') == 0, f"11% return is under the 12% minimum: no flip ({L('#MR')})")
-X(f"MR2 = {C}.FlipOptions(MakeItem({{ sellThrough = 1, med = 1400, medAll = 1400, med24 = 1400, hi = 1500, ladder = {{ {{1000, 10}}, {{1401, 100}} }}, qty = 110 }}), 500000, 200)")
-ok(L('#MR2') == 1, f"20% return: a flip ({L('#MR2')})")
+ok(L('#US') >= 1 and L('US[1].profit') == 1634, f"leftovers valued at half the resale ({L('US[1] and US[1].profit')})")
+# Minimum return, on top of the minimum amount: 10% of the cost for fast, steady sellers, 20% for slow ones.
+# 10 at 10s resold at R: floor(R*10*0.95*0.97) - 10000. (More is listed above the known levels, so buying through
+# the second level is never an option.)
+def MR(next_price, slow=False):
+    extra = ', hoursWithSales = 20' if slow else ''
+    X(f"MRX = {C}.FlipOptions(MakeItem({{ sellThrough = 1, med = 1400, medAll = 1400, med24 = 1400, hi = 1500{extra}, ladder = {{ {{1000, 10}}, {{{next_price}, 100}} }}, qty = 210 }}), 500000, 200)")
+    return int(L('#MRX')), L('MRX[1] and MRX[1].profit')
+n, p = MR(1184)
+ok(n == 0, f"steady seller, resold at 11s 83c: 9.0% return is under the 10% minimum: no flip ({n})")
+n, p = MR(1206)
+ok(n == 1 and p == 1104, f"steady seller, resold at 12s 05c: 11.0% return is a flip ({n}, {p})")
+n, p = MR(1206, slow=True)
+ok(n == 0, f"slow seller, same 11% return: under its 20% minimum, no flip ({n})")
+n, p = MR(1250, slow=True)
+ok(n == 0, f"slow seller, 15.1% return: no flip ({n})")
+n, p = MR(1326, slow=True)
+ok(n == 1 and p == 2209, f"slow seller, 22.1% return: a flip ({n}, {p})")
+# FlipNeed: the return by speed (an item or its FlipStatus); unknown speed is held to the slow sellers' return.
+ok(L(f'{C}.FlipNeed(10000, 200, "good")') == 1000 and L(f'{C}.FlipNeed(10000, 200, "slow")') == 2000
+   and L(f'{C}.FlipNeed(10000, 200)') == 2000 and L(f'{C}.FlipNeed(1000, 500, "good")') == 500,
+   f"flip need: 10% steady, 20% slow or unknown, never under the minimum profit ({L(f'{C}.FlipNeed(10000, 200, [[good]])')}, {L(f'{C}.FlipNeed(10000, 200, [[slow]])')})")
+ok(L(f'{C}.FlipNeed(10000, 200, MakeItem())') == 1000 and L(f'{C}.FlipNeed(10000, 200, MakeItem({{ hoursWithSales = 20 }}))') == 2000,
+   'flip need from an item: its FlipStatus decides (steady 10%, slow 20%)')
 # What you already hold counts against the 4 h limit: 30/h planned -> 120, holding 100 -> at most 20 more.
 X(f"HD = {C}.FlipOptions(MakeItem({{ sellThrough = 1, held = 220, qty = 150, ladder = {{ {{400, 20}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000, 0)")
 ok(L('#HD') >= 1 and max(L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)) <= 20, f"holding 220 already (8 h of resale = 240): buys at most 20 more ({[L(f'HD[{i}].buyQty') for i in range(1, int(L('#HD')) + 1)]})")
@@ -276,7 +296,7 @@ ok(L(f"{C}.FlipStatus(MakeItem({{ low = 600, lows = {{ 900, 800, 600 }} }}))") =
 ok(L(f"{C}.FlipStatus(MakeItem({{ low = 600, lows = {{ 600, 650, 600 }} }}))") == 'good', 'cheap but steady (not dropping): still a target')
 # Resale recomputed for a purchase from the data at hand (used when the server gives the live price).
 X(f"RS = {C}.Resale(MakeItem({{ sellThrough = 1, med = 900, medAll = 900 }}), 10, 5000)")
-ok(L('RS ~= nil and RS.resell <= 900 and RS.profit == 2695'), f"resale for a purchase from current data ({L('RS and RS.profit')})")
+ok(L('RS ~= nil and RS.resell <= 900 and RS.profit == 3293'), f"resale for a purchase from current data ({L('RS and RS.profit')})")
 ok(L(f"{C}.Resale(MakeItem({{ sales = 3 }}), 10, 5000) == nil"), 'no resale once the item is no longer a good seller')
 # Your own trades aren't the market: your purchases aren't others' sales, your posts aren't others' new listings.
 X(f"""AuctionForeverDB = {{ buys = {{ {{ 1000000, 1, 72, 7200, 0 }} }}, myposts = {{ {{ 1000000, 1, 36, 500 }} }} }}
@@ -296,11 +316,13 @@ X(f"""CL1 = {C}.CutLoss(MakeItem({{ lowHi24 = 900 }}), 1000, {{}}, 1)
   CDB2.mysales[2] = nil
   CL4 = {C}.CutLoss(MakeItem(), 1000, CDB2, 1)""")
 ok(L('CL1') and not L('CL2') and L('CL3') and not L('CL4'), f"cut the loss: under all day {L('CL1')}, not {L('CL2')}; 2 expiries {L('CL3')}, 1 {L('CL4')}")
-# Buy to vendor: every listing under the vendor price, cheapest first; needs 10s+ profit; no AH cut.
+# Buy to vendor: every listing under the vendor price, cheapest first; needs 2s+ profit; no AH cut.
 X(f"VD = {C}.VendorDeal({{ {{500, 3}}, {{900, 2}}, {{1000, 5}} }}, 1000)")
 ok(L('VD and VD.vendor and VD.buyQty == 5 and VD.buyUpTo == 900 and VD.cost == 3300 and VD.profit == 1700 and VD.resell == 1000'),
    f"vendor deal: 3 at 5s + 2 at 9s under a 10s vendor price -> 17s profit ({L('VD and VD.profit')})")
-ok(L(f"{C}.VendorDeal({{ {{995, 50}} }}, 1000)") is None, 'under 10s total profit (50 x 5c = 2s 50c): not a target')
+ok(L(f"{C}.VendorDeal({{ {{997, 50}} }}, 1000)") is None, 'under 2s total profit (50 x 3c = 1s 50c): not a target')
+ok(L(f"{C}.VendorDeal({{ {{996, 50}} }}, 1000)") is not None and L(f"{C}.VendorDeal({{ {{995, 50}} }}, 1000).profit") == 250,
+   '2s+ total profit (50 x 4c = 2s; 50 x 5c = 2s 50c): a target')
 X(f"VC = {C}.VendorDeal({{ {{500, 3}}, {{900, 2}} }}, 1000, 1500)")
 ok(L('VC and VC.buyQty == 3 and VC.cost == 1500'), 'vendor deal within the budget: buys only what it can afford')
 ok(L(f"{C}.VendorDeal({{ {{1, 200}} }}, 0)") is None, 'vendor pays nothing (ammo): never a target')

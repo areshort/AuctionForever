@@ -68,6 +68,12 @@ local function Notify(Fn)
 	end
 end
 
+-- A full or quick scan (both look at the whole auction house) finished: log the flips AF Buy would show now, for
+-- "/af missed". Once per finished scan; an error there must never break the scan.
+local function LogFlips()
+	if AF.UI and AF.UI.LogFlips then pcall(AF.UI.LogFlips, time()) end
+end
+
 -- { [price] = qty } -> cheapest LADDER levels { {price, qty, expiringQty}, ... }
 local function ToLadder(L, E)
 	local Prices = {}
@@ -316,6 +322,7 @@ local function FullStep(_, Elapsed)
 		Say(Scan.LastResult)
 		Levels, Expiring = nil, nil
 		Notify("ScanDone")
+		if not Partial then LogFlips() end -- an incomplete listing would make flips look gone
 	end
 end
 
@@ -652,6 +659,7 @@ local function BrowseFinish(Reason)
 		if (R.skipped or 0) > 0 then Scan.LastResult = Scan.LastResult .. string.format(" %d didn't answer.", R.skipped) end
 		if not St.silent then Say(Scan.LastResult) end
 		Notify("ScanDone")
+		if St.n > 0 then LogFlips() end
 		if Done then Done() end
 	end) then
 		Q.phase = "busy"
@@ -659,6 +667,7 @@ local function BrowseFinish(Reason)
 	end
 	if not St.silent then Say(Scan.LastResult) end
 	Notify("ScanDone")
+	if not Reason and St.n > 0 then LogFlips() end
 	if Done then Done() end
 end
 

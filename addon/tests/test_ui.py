@@ -190,10 +190,18 @@ if real:
       AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)""")
     bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
     ok('reading' in bt and ' of ' in bt and '%' in bt and L('AuctionForeverAHPanel.Bar:GetValue()') >= 0.3, 'progress while reading (bar past the waiting part): ' + bt)
-    X("""function Pump() for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end
+    # The missed-flips log runs once when the scan finishes; an error in it must not break the scan.
+    X("""LogFlipCalls, RealLogFlips = 0, AF_NS.UI.LogFlips
+      AF_NS.UI.LogFlips = function(Now) LogFlipCalls = LogFlipCalls + 1; LogFlipNow = Now; error("log failed") end
+      function Pump() for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end
           for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end end
-        Pump()""")
+        Pump()
+      AF_NS.UI.LogFlips = RealLogFlips""")
     ok(not L('AF_NS.Scan.Busy()'), 'full scan finished')
+    ok(L('LogFlipCalls') == 1 and L('LogFlipNow') == L('time()'), f"finished full scan logs the flips on offer once ({L('LogFlipCalls')} calls), at the scan's time")
+    ok('Sales measured' in str(L('AF_NS.Scan.LastResult')), 'an error in the flip log does not break the scan: ' + str(L('AF_NS.Scan.LastResult')))
+    X('AF_NS.UI.LogFlips(time())')
+    ok(L('type(AuctionForeverDB.flipLog) == "table"'), f"flip log written from the real planner ({L('AuctionForeverDB.flipLog and #AuctionForeverDB.flipLog')} flips on offer)")
     ok(not L('AuctionForeverAHPanel.Bar:IsShown()') and L('AuctionForeverAHPanel.QuickInfo:IsShown()'), 'progress bar goes away when done')
     expect = L('LinenBefore[1][2] + LinenBefore[2][2] + (LinenBefore[3][2] - math.floor(LinenBefore[3][2] / 2))')
     obs = L('AuctionForeverDB.obs[2589] and AuctionForeverDB.obs[2589][1]')
@@ -275,6 +283,8 @@ if real:
       C_AuctionHouse.HasFullBrowseResults = function() return Page >= 2 end
       ObsBefore = #AuctionForeverDB.obs[2589]
       time = function() return AuctionForeverData.time + 5200 end
+      QLogCalls, RealLogFlipsQ = 0, AF_NS.UI.LogFlips
+      AF_NS.UI.LogFlips = function() QLogCalls = QLogCalls + 1 end
       Click(AuctionForeverAHPanel.Quick)""")
     ok(L('BrowseQ ~= nil and BrowseQ.searchString == ""'), 'quick scan sends one browse-everything query')
     X('AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
@@ -283,6 +293,7 @@ if real:
     ok('items read' in str(L('AuctionForeverAHPanel.Bar.Text:GetText()')) and L('AuctionForeverAHPanel.Bar:GetValue()') <= 0.8, 'progress while reading pages (first 80% of one bar): ' + str(L('AuctionForeverAHPanel.Bar.Text:GetText()')))
     X('FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2]); BrowseLinen = { AuctionForeverDB.fresh.items[2589][1], AuctionForeverDB.fresh.items[2589][3][1][1] }; Browse14047 = AuctionForeverDB.fresh.items[14047]; PumpQuick()')
     ok(not L('AF_NS.Scan.Busy()'), 'quick scan done after the last page (and its busy-item lookups)')
+    ok(L('QLogCalls') == 1, f"finished quick scan logs the flips on offer once, after its busy-item lookups ({L('QLogCalls')})")
     f = L('Browse14047')
     ok(f[1] == 515 and f[2] == 14100 and f[4] == L('AuctionForeverData.time + 5200'), f'pages combined: lowest {f[1]}c, {f[2]} listed')
     ok(L('BrowseLinen[1]') == 24 and L('BrowseLinen[2]') == 24, 'new lowest price becomes the first price level')
@@ -299,6 +310,7 @@ if real:
       time = function() return AuctionForeverData.time + 5400 end
       Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); RunTimers(); RunTimers()""")
     ok(not L('AF_NS.Scan.Busy()') and 'stopped answering' in str(L('LastPrint')), 'server goes quiet: stops and keeps what it got: ' + str(L('LastPrint')))
+    ok(L('QLogCalls') == 1, f"quick scan that stopped early: flips not logged ({L('QLogCalls')})")
 
     # Quick scan phase 2: exact lookups of the busiest items (top by sales per hour), right after the browse.
     busy = list(L('AF_NS.Scan.BusyIds(20)').values()) if L('AF_NS.Scan.BusyIds') else []
@@ -317,6 +329,8 @@ if real:
     ok(not L('AF_NS.Scan.Busy()') and L('#Looked') == len(busy), f"looked up {L('#Looked')} busy items")
     lp = str(L('LastPrint'))
     ok('Quick scan: prices and stock for' in lp and 'busy items' in lp.lower(), 'one chat line for both phases: ' + lp)
+    ok(L('QLogCalls') == 2, f"quick scan with busy-item lookups: logged once more, not once per lookup ({L('QLogCalls')})")
+    X('AF_NS.UI.LogFlips = RealLogFlipsQ')
 
     # The client ignores searches for items it hasn't cached: wait for GetItemKeyInfo before searching.
     X("""Sent = 0; CacheAsks = 0
@@ -426,7 +440,11 @@ if real:
     ok('price' in str(L('AuctionForeverBuyPanel.Status:GetText()')).lower(), 'says the price changed: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     ok('Confirm' not in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'button back to Buy')
     # price fine: confirm with a second click
-    X('Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260)')
+    X('''RealFlipNeed = AF_NS.Core.FlipNeed
+      AF_NS.Core.FlipNeed = function(C, M, Sp) NeedSpeed = Sp; return RealFlipNeed(C, M, Sp) end
+      Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260)
+      AF_NS.Core.FlipNeed = RealFlipNeed''')
+    ok(L('type(NeedSpeed) == "table" and NeedSpeed.id == 2589'), 'live price check: the return it needs is judged from the item (slow sellers need more)')
     ok('Confirm 10' in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'price fine: button asks to confirm: ' + str(L('AuctionForeverBuyPanel.Buy:GetText()')))
     ok(L('LastCall("ConfirmCommoditiesPurchase") == nil'), 'nothing bought before the second click')
     X('Click(AuctionForeverBuyPanel.Buy)')
@@ -807,6 +825,9 @@ X('''OldNum, OldInfo, OldRep, OldTL = C_AuctionHouse.GetNumReplicateItems, C_Auc
   C_AuctionHouse.GetNumReplicateItems = function() return GrowN end
   C_AuctionHouse.GetReplicateItemInfo = function(i) if i <= GrowN then return "x", 1, 1, 1, true, 1, "", 0, 0, 100, 0, false, nil, "o", "o", 0, 600000 + (i % 50), true end end
   AuctionForeverDB.lastFull = nil; AF_NS.Scan.WaitGaveUp = nil
+  -- An incomplete listing would make logged flips look gone: no missed-flips logging then.
+  LogFlipCalls, RealLogFlips = 0, AF_NS.UI.LogFlips
+  AF_NS.UI.LogFlips = function(Now) LogFlipCalls = LogFlipCalls + 1 end
   AF_NS.UI.ShowAHPanel(); Click(AuctionForeverAHPanel.Full); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
   for k = 1, 5 do for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end
   GrowN = 300
@@ -814,6 +835,8 @@ X('''OldNum, OldInfo, OldRep, OldTL = C_AuctionHouse.GetNumReplicateItems, C_Auc
 rd = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog].read')
 ok(not L('AF_NS.Scan.Busy()') and rd is not None and rd[1] == 300 and rd[2] == 300,
    f"listing still arriving while read: all 300 read, not the first 100 ({rd and list(rd.values())})")
+ok(L('LogFlipCalls') == 0 and 'incomplete' in str(L('AF_NS.Scan.LastResult')), f"full scan that looked incomplete: flips not logged ({L('LogFlipCalls')} calls)")
+X('AF_NS.UI.LogFlips = RealLogFlips')
 X('C_AuctionHouse.GetNumReplicateItems, C_AuctionHouse.GetReplicateItemInfo, C_AuctionHouse.ReplicateItems, C_AuctionHouse.GetReplicateItemTimeLeft = OldNum, OldInfo, OldRep, OldTL')
 # Deposit from the game decides between durations (commodities).
 X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
@@ -891,7 +914,8 @@ ok(lst[:2] == [(2592, True, 20), (2589, True, 150)] if len(lst) >= 2 else False,
 ok(not any(r[0] == 4306 for r in lst), 'the Flips list keeps only what you can do now')
 tg = L('AF_NS.UI.FlipTargets()')
 tl2 = [(tg[i].id, tg[i].plan) for i in range(1, int(L('#AF_NS.UI.FlipTargets()')) + 1)]
-ok(tl2[-1] == (4306, False), f'AF Buy also lists targets your gold cannot reach yet, last: {tl2}')
+# (Vendor buys from the real data that need more gold can sort after it since the 2s vendor minimum.)
+ok((4306, False) in tl2 and tl2.index((4306, False)) >= 2, f'AF Buy also lists targets your gold cannot reach yet, after the plan: {tl2}')
 need = L('(function() for _, E in ipairs(AF_NS.UI.FlipTargets()) do if E.id == 4306 then return E.need end end end)()')
 ok(need is not None and abs(need - L('AF_NS.Core.GoldFor(7500)')) <= 1, f'a target shows the gold it needs: {need}')
 # An option that fits your budget counts as buyable even when it only came from the any-gold list.
@@ -998,6 +1022,63 @@ X("""AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 }, { 30, 200 } 
 f = L('AuctionForeverDB.fresh.items[2589]')
 ok(f[1] == 30 and f[2] == 150 and f[3][1][2] == 150, f'after buying 350: cheapest level gone, 150 left at 30c ({f[1]}, {f[2]})')
 ok(L('AuctionForeverDB.base[2589].ladder[1][1]') == 30 and L('AuctionForeverDB.base[2589].ladder[1][2]') == 150, 'sales starting point adjusted too (your purchase is not counted as sales)')
+# Forever's minimum deposit is 1 copper: a cheap item's estimated deposit rounds to 1c, never 0 (and never 1 silver).
+X("""RealGI2 = C_Item.GetItemInfo
+  C_Item.GetItemInfo = function(id) local r = { RealGI2(id) }; if id == 777003 then r[1] = "Cheap"; r[11] = 1 elseif id == 777004 then r[1] = "Pricier"; r[11] = 100 end return unpack(r, 1, 11) end""")
+ok(L('AF_NS.Core.Deposit({ id = 777003 }, 2, 1)') == 1 and L('AF_NS.Core.Deposit({ id = 777003 }, 24, 1)') == 3,
+   f"estimated deposit: at least 1c (vendor 1c: 2 h {L('AF_NS.Core.Deposit({ id = 777003 }, 2, 1)')}c, 24 h {L('AF_NS.Core.Deposit({ id = 777003 }, 24, 1)')}c)")
+ok(L('AF_NS.Core.Deposit({ id = 777004 }, 2, 1)') == 25 and L('AF_NS.Core.Deposit({ id = 777004 }, 24, 2)') == 600,
+   'estimated deposit otherwise unchanged: 3/24 of the vendor price per hour (vendor 1s: 2 h 25c, 24 h x2 6s)')
+X('C_Item.GetItemInfo = RealGI2')
+# Empty Flip list names both returns.
+X('RealFS = AF_NS.Core.FlipStatus; AF_NS.Core.FlipStatus = function() return "good" end; OldGM5 = GetMoney; GetMoney = function() return 200000 end')
+er2 = str(L('AF_NS.UI.FlipEmptyReason()'))
+X('AF_NS.Core.FlipStatus = RealFS; GetMoney = OldGM5')
+ok('10%+ return, 20%+ for slow sellers' in er2, 'empty Flip list states the 10% / 20% returns: ' + er2.replace('\n', ' '))
+# Missed flips: every finished scan logs the flips on offer; later scans mark them still there or gone.
+X("""RealRows = AF_NS.UI.FlipRows
+  Offer = {}
+  AF_NS.UI.FlipRows = function() return Offer end
+  function Fl(id, P, Q, Pr) return { id = id, flip = { buyUpTo = P, buyQty = Q, qty = Q, profit = Pr, cost = P * Q } } end
+  AuctionForeverDB = AuctionForeverDB or {}
+  AuctionForeverDB.flipLog = nil; AuctionForeverDB.buys = {}
+  Offer = { Fl(880001, 50, 10, 900), Fl(880002, 70, 5, 600), Fl(880003, 30, 2, 500), { id = 880009, flip = { vendor = true, buyUpTo = 5, buyQty = 1, profit = 300 } } }
+  AF_NS.UI.LogFlips(1000)""")
+fl = L('AuctionForeverDB.flipLog')
+first = [list(fl[i].values()) for i in range(1, len(fl) + 1)] if fl else []
+ok(len(first) == 3 and all(e[4] == 1000 and e[5] == 1000 and len(e) == 6 for e in first) and sorted(e[0] for e in first) == [880001, 880002, 880003],
+   f'first scan: the 3 flips on offer logged (vendor buys left out): {first}')
+e1 = [e for e in first if e[0] == 880001][0]
+ok(e1[1] == 50 and e1[2] == 10 and e1[3] == 900, f'logged as id, price, qty, profit, firstSeen, lastSeen: {e1}')
+X("""AuctionForeverDB.buys = { { 1300, 880003, 2, 60, 250 } }
+  Offer = { Fl(880001, 45, 10, 950) }
+  AF_NS.UI.LogFlips(1600)""")
+def Entry(id, nth=1):
+    n = 0
+    for i in range(1, int(L('#AuctionForeverDB.flipLog')) + 1):
+        e = L(f'AuctionForeverDB.flipLog[{i}]')
+        if e[1] == id:
+            n += 1
+            if n == nth: return {k: e[k] for k in range(1, 9)}
+    return None
+a, b, c = Entry(880001), Entry(880002), Entry(880003)
+ok(a[6] == 1600 and a[7] is None and int(L('#AuctionForeverDB.flipLog')) == 3, f'still offered at the same or a lower price: lastSeen updated, no new entry ({a})')
+ok(b[7] == 1600 and b[6] == 1000 and not b[8], f'no longer offered: goneAt set ({b})')
+ok(c[7] == 1600 and c[8] is True, f'gone after you bought some: marked bought ({c})')
+X('Offer = { Fl(880001, 60, 10, 900) }; AF_NS.UI.LogFlips(2200)')
+a1, a2 = Entry(880001), Entry(880001, 2)
+ok(a1[7] == 2200 and a2 is not None and a2[2] == 60 and a2[5] == 2200 and a2[7] is None, f'offered again only at a higher price: the old one is gone, a new one logged ({a1}, {a2})')
+# /af missed: counts, median time seen, top items.
+X('LastPrint = nil; Printed = {}; RealPrint = print; print = function(...) Printed[#Printed + 1] = table.concat({ tostring((...)) }, " ") end; SlashCmdList.AUCTIONFOREVER("missed"); print = RealPrint')
+pr = [str(v) for v in L('Printed').values()]
+ok(len(pr) >= 3 and '4 logged, 2 gone before you bought (1 you bought), 1 still open' in pr[0], f'/af missed summary: {pr}')
+ok(any('5 min (median)' in p for p in pr), f'median time a gone flip was still seen: (600 s + 0 s) / 2 = 5 min: {pr}')
+ok(any('880001' in p or 'Item 880001' in p for p in pr) and all(all(ord(ch) < 128 for ch in p) for p in pr), f'top items listed, ASCII only: {pr}')
+# Capped: oldest entries dropped.
+X("""Offer = {}; for k = 1, 310 do Offer[k] = Fl(881000 + k, 10, 1, 600) end
+  AF_NS.UI.LogFlips(3000)""")
+ok(int(L('#AuctionForeverDB.flipLog')) == 300 and L('AuctionForeverDB.flipLog[1][1]') != 880001, f"log capped at 300 entries, oldest dropped ({L('#AuctionForeverDB.flipLog')})")
+X('AF_NS.UI.FlipRows = RealRows; AuctionForeverDB.flipLog = nil')
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

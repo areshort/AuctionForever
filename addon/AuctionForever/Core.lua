@@ -19,11 +19,18 @@ Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn 
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
-Core.MinVendorProfit = 1000     -- 10 silver: listings under the vendor price must pay at least this to be a buy target
+Core.MinVendorProfit = 200      -- 2 silver: listings under the vendor price must pay at least this to be a buy target
+                                -- (a sure profit: no AH cut, no deposit, no waiting)
 Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
-Core.UndercutHaircut = 0.9      -- flips plan their profit at this share of the resale price (expect an undercut or two)
-Core.MinFlipReturn = 0.12       -- a flip must expect at least this return on what it costs (and MinFlipProfitFor)
+-- Flips plan their profit at this share of the resale price. Flips are commodities only, and commodity buyers fill
+-- cheapest first (newest first at the same price), so matching the lowest price sells; the small haircut is for
+-- being undercut by a few copper now and then, not for a race to the bottom.
+Core.UndercutHaircut = 0.97
+-- A flip must expect at least this return on what it costs (and MinFlipProfitFor): less for fast, steady sellers
+-- (FlipStatus "good"), more for slow ones (sales in bursts, or many expiring: the money is tied up longer).
+Core.MinFlipReturn = 0.10
+Core.MinFlipReturnSlow = 0.20
 Core.UnsoldValue = 0.5          -- what a unit that doesn't sell is worth, as a share of the resale (a later, cheaper relist)
 Core.FallingKnife = 0.30        -- lowest price this far under the 3-day median and still dropping: not a flip
 Core.BurstFactor = 4            -- a scan window selling this many times faster than the item usually does: a burst
@@ -600,9 +607,18 @@ function Core.VendorDeal(Ladder, Vendor, Cap)
 	return { vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 
--- Least expected profit for a flip costing Cost: MinProfit, and MinFlipReturn of the cost.
-function Core.FlipNeed(Cost, MinProfit)
-	return math.max(MinProfit or Core.MinFlipProfit, math.ceil(Core.MinFlipReturn * Cost))
+-- Least return on the cost a flip needs: MinFlipReturnSlow for "slow" sellers, MinFlipReturn otherwise. Speed is an
+-- item (its FlipStatus is worked out) or a status string; nil = the item isn't known, so the stricter (slow) return.
+function Core.FlipReturn(Speed)
+	local St = Speed
+	if type(Speed) == "table" then St = Core.FlipStatus(Speed) end
+	if St == "good" then return Core.MinFlipReturn end
+	return Core.MinFlipReturnSlow
+end
+
+-- Least expected profit for a flip costing Cost: MinProfit, and the item's return (FlipReturn) of the cost.
+function Core.FlipNeed(Cost, MinProfit, Speed)
+	return math.max(MinProfit or Core.MinFlipProfit, math.ceil(Core.FlipReturn(Speed) * Cost - 1e-9))
 end
 
 function Core.FlipOptions(I, Cap, MinProfit)
@@ -630,7 +646,7 @@ function Core.FlipOptions(I, Cap, MinProfit)
 		for j = Level + 1, #Ladder do Rest[#Rest + 1] = Ladder[j] end
 		if not Rest[1] and MoreAbove then break end
 		local O = Evaluate(I, J, Qty, Cost, Rest)
-		if O and O.profit >= Core.FlipNeed(Cost, MinProfit) then
+		if O and O.profit >= Core.FlipNeed(Cost, MinProfit, St) then
 			O.buyUpTo, O.slow = P, St == "slow" or nil
 			Out[#Out + 1] = O
 		end

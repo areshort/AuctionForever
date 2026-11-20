@@ -393,10 +393,12 @@ local function OnPriceUpdated(Unit, Total)
 		R = { resell = Pd.resell }
 		Profit, MinProfit = Pd.resell * Pd.qty - Total, Core.MinVendorProfit
 	else
-		R = Core.Resale(Core.Info(Pd.id), Pd.qty, Total)
+		local Now = Core.Info(Pd.id)
+		R = Core.Resale(Now, Pd.qty, Total)
 		Profit = R and R.profit
 		if R then Pd.resell = R.resell end
-		MinProfit = Core.FlipNeed(Total, Core.MinFlipProfitFor(UI().FlipBudget()))
+		-- The return it needs depends on how fast it sells (slow sellers need more), from the data as it is now.
+		MinProfit = Core.FlipNeed(Total, Core.MinFlipProfitFor(UI().FlipBudget()), Now)
 	end
 	local Budget = UI().FlipBudget()
 	if Unit > Pd.max then
