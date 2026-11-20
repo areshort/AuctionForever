@@ -141,7 +141,7 @@ if real:
     """)
     ok(L('AuctionForeverAHTab ~= nil') and L('#AuctionHouseFrame.Tabs') == 2, "AuctionForever tab created without joining Blizzard's tab list")
     pt = L('AuctionForeverAHTab._points[#AuctionForeverAHTab._points]')
-    ok(pt is not None and pt[1] == 'LEFT' and pt[4] == 700 - 20 - 15, f'tab placed right of the last tab, Auctionator included (offset {pt and pt[4]})')
+    ok(pt is not None and pt[1] == 'LEFT' and pt[4] == 700 - 20 + 3, f'tab placed right of the last tab, Auctionator included (offset {pt and pt[4]})')
     ok(L('not AuctionForeverAHPanel:IsShown()'), 'panel hidden until the tab is clicked')
     X('Click(AuctionForeverAHTab)')
     ok(L('AuctionForeverAHPanel:IsShown() and AuctionForeverAHTab._selected and not AuctionHouseFrame.BuyTab._selected'), 'clicking the tab shows the panel and highlights it')

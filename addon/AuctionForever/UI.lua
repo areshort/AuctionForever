@@ -561,7 +561,7 @@ local function PlaceTab()
 	local Right = Buy:GetRight()
 	for _, B in ipairs(TabRow()) do if (B:GetRight() or 0) > Right then Right = B:GetRight() end end
 	AH.Tab:ClearAllPoints()
-	AH.Tab:SetPoint("LEFT", Buy, "LEFT", Right - Buy:GetLeft() - 15, 0)
+	AH.Tab:SetPoint("LEFT", Buy, "LEFT", Right - Buy:GetLeft() + 3, 0) -- standard tabs sit 3 px apart
 end
 function L.ShowAHPanel()
 	AH.Panel:Show()
