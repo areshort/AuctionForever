@@ -420,12 +420,15 @@ if real:
     X('Money = 2000000')
     # stale data: selecting re-checks the item quietly
     X('AuctionForeverDB.fresh.items[14047][4] = Now - 600; LookupSpy = {}; AF_NS.Trade.SelectBuy(2)')
-    ok(L('LookupSpy[1] ~= nil and LookupSpy[1].ids[1] == 14047 and LookupSpy[1].silent == true'), 'data older than 2 min: selected item re-checked silently')
-    # another lookup running (e.g. AF Sell's price check): the re-check waits and runs right after it, not dropped
-    X('LookupSpy = {}; RealBusy = AF_NS.Scan.Busy; AF_NS.Scan.Busy = function() return true end; AF_NS.Trade.SelectBuy(2)')
+    ok(L('LookupSpy[1] == nil'), 'selecting a flip target does not start a price check (the purchase gets the live price)')
+    # Refresh prices: re-checks the listed targets on purpose
+    X('LookupSpy = {}; Click(AuctionForeverBuyPanel.Refresh)')
+    ok(L('LookupSpy[1] ~= nil and #LookupSpy[1].ids >= 1 and #LookupSpy[1].ids <= 20'), 'Refresh prices re-checks the listed targets')
+    # another lookup running: the refresh waits and runs right after it, not dropped
+    X('LookupSpy = {}; RealBusy = AF_NS.Scan.Busy; AF_NS.Scan.Busy = function() return true end; Click(AuctionForeverBuyPanel.Refresh)')
     ok(L('LookupSpy[1] == nil'), 'while another scan runs: no lookup started yet')
     X('AF_NS.Scan.Busy = RealBusy; AF_NS.UI.ScanDone(); AdvanceTime(0.2)')
-    ok(L('LookupSpy[1] ~= nil and LookupSpy[1].ids[1] == 14047'), 'when it finishes: the waiting re-check runs')
+    ok(L('LookupSpy[1] ~= nil'), 'when it finishes: the waiting refresh runs')
     # empty list explains why
     X('FlipTargets = {}; AF_NS.Trade.RefreshBuy()')
     ok(L('AuctionForeverBuyPanel.Empty:IsShown()'), 'no targets: shows the reason')
@@ -449,7 +452,9 @@ if real:
     ok(10620 not in ids, 'items worth more at the vendor left out')
     lin = [q[i] for i in range(1, len(q) + 1) if q[i].id == 2589]
     ok(lin and lin[0].count == 25, f'stacks of the same item grouped: {lin and lin[0].count}')
-    ok(L('LookupSpy[1] ~= nil and LookupSpy[1].silent == true') and sorted(L('LookupSpy[1].ids').values()) == sorted(ids), 'opening AF Sell re-checks the queue items quietly')
+    ok(L('LookupSpy[1] == nil or #LookupSpy[1].ids == 1'), 'opening AF Sell checks at most the selected item, not the whole queue')
+    X('LookupSpy = {}; Click(AuctionForeverSellPanel.Refresh)')
+    ok(L('LookupSpy[1] ~= nil') and sorted(L('LookupSpy[1].ids').values()) == sorted(ids), 'Refresh prices re-checks the whole queue')
     ok(L('AF_NS.Trade.SelectedSell() ~= nil') and ids and L('AF_NS.Trade.SelectedSell().id') == ids[0], 'first queue item selected')
     X('AF_NS.Trade.SelectSellId(2589)')
     price = L('AF_NS.Trade.SellPrice()')
@@ -639,6 +644,20 @@ X('C_Item.GetItemInfoInstant = function(id) return id, "Weapon", "", "", 1, 2, 0
 ok(not L('AF_NS.UI.Stacks(727)'), 'stack size not loaded, weapon: not stackable')
 X('C_Item.GetItemMaxStackSizeByID = function() return 1 end; C_Item.GetItemInfoInstant = OldInst')
 ok(not L('AF_NS.UI.Stacks(2589)'), 'loaded stack size of 1 wins')
+X('C_Item.GetItemMaxStackSizeByID = OldMax')
+# Item details come from caches when the game hasn't loaded the item: saved first, then the cloud file.
+X("""AF_NS.UI.ItemName(2589)
+  OldGI2 = C_Item.GetItemInfo; C_Item.GetItemInfo = function() return nil end""")
+ok(L('AF_NS.UI.Vendor(2589)') == 5, 'vendor price from the saved cache when the game has nothing loaded')
+nm = L('(AF_NS.UI.ItemName(2589))'); ok(nm == 'Item 2589', 'name from the saved cache: ' + str(nm))
+X('AuctionForeverData.info = AuctionForeverData.info or {}; AuctionForeverData.info[777001] = { 123, 3, 1 }; AuctionForeverData.names = AuctionForeverData.names or {}; AuctionForeverData.names[777001] = "Shipped Thing"')
+n, q = L('AF_NS.UI.ItemName(777001)')
+ok(L('AF_NS.UI.Vendor(777001)') == 123 and n == 'Shipped Thing' and q == 3, f'cloud file details: vendor 123c, name, quality {q}')
+X('C_Item.GetItemInfo = OldGI2')
+# What can be flipped comes from the commodity flag in the data, not the game's stack size.
+X('AuctionForeverData.info[777002] = { 0, 2, 0 }; C_Item.GetItemMaxStackSizeByID = function() return nil end')
+ok(L('AF_NS.UI.Flippable(777001)') and not L('AF_NS.UI.Flippable(777002)'), 'commodity flag decides: commodity flips, non-commodity does not')
+ok(L('AF_NS.UI.Kind(777001)') == 'commodity' and L('AF_NS.UI.Kind(777002)') == 'item', 'kind from the data file')
 X('C_Item.GetItemMaxStackSizeByID = OldMax')
 # Empty flip list says what the budget is.
 X('OldMoney = GetMoney; GetMoney = function() return 15000 end')

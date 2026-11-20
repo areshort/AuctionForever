@@ -65,11 +65,12 @@ ok(n['low'] == 110 and n['qty'] == 5, 'numbers: current lowest and quantity')
 asked = []
 def fake_names(ids):
     asked.extend(ids)
-    return {i: ('Linen "Cloth"' if i == 17 else '') for i in ids}
+    return {i: (['Linen "Cloth"', 7, 1] if i == 17 else ['', 0, 1]) for i in ids}
 st2, out2 = os.path.join(d, 'n_state.json.gz'), os.path.join(d, 'n_data.lua')
 C.run(st2, out2, [], g1, now_ts=2_000_000, names_fn=fake_names)
 body = open(out2, encoding='utf-8').read()
 ok('names={' in body and '[17]="Linen \\"Cloth\\""' in body, 'names written into the data file (quotes escaped)')
+ok('info={' in body and '[17]={7,1,1}' in body, 'vendor price, quality and commodity flag written into the data file')
 first = len(asked)
 C.run(st2, out2, [], g2, now_ts=2_003_600, names_fn=fake_names)
 ok(first > 0 and all(i not in asked[first:] for i in asked[:first]), 'known names are not looked up again')

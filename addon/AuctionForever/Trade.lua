@@ -172,11 +172,15 @@ function T.SelectBuy(i)
 	Buy.sel = ((i - 1) % #Buy.rows) + 1
 	Buy.bought = 0
 	T.DrawBuy()
-	local E = Buy.rows[Buy.sel]
-	if E and IsStale(E.id) then
-		SayBuy("Checking the current price...")
-		Recheck({ E.id }, function() T.RefreshBuy(); SayBuy("") end)
-	end
+	-- No price check here: the list comes from your scans, and the purchase itself gets the live price from the
+	-- server (and cancels if it rose). "Refresh prices" re-checks the list on purpose.
+end
+
+function T.RefreshBuyPrices()
+	local Ids = {}
+	for i = 1, math.min(20, #Buy.rows) do Ids[#Ids + 1] = Buy.rows[i].id end
+	if #Ids == 0 then return end
+	if Recheck(Ids, function() T.RefreshBuy(); SayBuy("Prices refreshed.") end) then SayBuy("Refreshing prices for " .. #Ids .. " items...") end
 end
 
 local function BuyNext()
@@ -200,7 +204,7 @@ function T.BuyClick()
 		return
 	end
 	if Buy.state then return end
-	local Kind = Scan.Kind[E.id]
+	local Kind = Scan.Kind[E.id] or UI().Kind(E.id)
 	if not Kind then
 		SayBuy("Checking the current price first; click Buy again in a moment.")
 		Recheck({ E.id }, function() T.RefreshBuy() end)
@@ -275,7 +279,8 @@ local function BuildBuy()
 	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
-	P.Status = Text(P, "GameFontHighlightSmall", 320, -425, 440)
+	P.Refresh = Button(P, "Refresh prices", 320, -420, 130, function() T.RefreshBuyPrices() end)
+	P.Status = Text(P, "GameFontHighlightSmall", 460, -425, 300)
 end
 
 -- AF Sell -----------------------------------------------------------------------------------------------------
@@ -438,13 +443,22 @@ function T.SelectSell(i)
 	Sell.idx = ((i - 1) % #Sell.queue) + 1 -- wraps from the end back to the start
 	FillFields()
 	local G = T.SelectedSell()
+	-- The one live check: the item you're about to post, if your data on it is over 2 min old.
 	if G and IsStale(G.id) then
 		local Id = G.id
+		SaySell("Checking the current price...")
 		Recheck({ Id }, function()
 			if T.SelectedSell() and T.SelectedSell().id == Id and not Sell.edited then Rebuild(false) else Rebuild(true) end
+			SaySell("")
 		end)
 	end
 	Sell.edited = false
+end
+function T.RefreshSellPrices()
+	local Ids = {}
+	for _, G in ipairs(Sell.queue) do Ids[#Ids + 1] = G.id end
+	if #Ids == 0 then return end
+	if Recheck(Ids, function() Rebuild(Sell.edited); SaySell("Prices refreshed.") end) then SaySell("Refreshing prices for " .. #Ids .. " items...") end
 end
 function T.SelectSellId(id)
 	for i, G in ipairs(Sell.queue) do if G.id == id then T.SelectSell(i) return true end end
@@ -517,13 +531,10 @@ end
 
 local function BuildSell()
 	SellP = UI().NewAHPage("AF Sell", "AuctionForeverSellTab", "AuctionForeverSellPanel", function()
+		-- The queue comes from your bags and your scans; only the selected item gets a live price check.
 		Sell.queue = T.BuildQueue()
-		Sell.idx, Sell.edited = 1, false
-		FillFields() -- the whole queue is re-checked below, so no separate check for the first item
-		local Ids = {}
-		for _, G in ipairs(Sell.queue) do Ids[#Ids + 1] = G.id end
-		-- Fresh prices for the whole queue before posting.
-		if Recheck(Ids, function() Rebuild(Sell.edited) end) then SaySell("Checking current prices for " .. #Ids .. " items...") end
+		Sell.edited = false
+		T.SelectSell(1)
 	end)
 	local P = SellP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Sell")
@@ -555,6 +566,7 @@ local function BuildSell()
 	P.Hint:SetText("Prefilled from recent sales: the best price that should sell within the duration.")
 	P.Post = Button(P, "Post", X, -270, 160, function() T.PostClick() end)
 	P.Skip = Button(P, "Skip", X + 170, -270, 90, function() T.SelectSell(Sell.idx + 1) end)
+	P.Refresh = Button(P, "Refresh prices", X + 270, -270, 130, function() T.RefreshSellPrices() end)
 	P.Status = Text(P, "GameFontHighlightSmall", X, -304, 480)
 end
 

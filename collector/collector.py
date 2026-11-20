@@ -47,11 +47,12 @@ def _get(path, tok, tries=3):
             time.sleep(10 * (i + 1))
 
 
-NAMES_PER_RUN = 4000  # item names looked up per run at most (the first run fills most; the rest follow next run)
+NAMES_PER_RUN = 4000  # items looked up per run at most (the first run fills most; the rest follow next run)
+QUALITY = {'POOR': 0, 'COMMON': 1, 'UNCOMMON': 2, 'RARE': 3, 'EPIC': 4, 'LEGENDARY': 5, 'ARTIFACT': 6, 'HEIRLOOM': 7}
 
 
 def fetch_names(ids, tok=None):
-    """Item names from the static game data, {id: name}; items Blizzard doesn't know get "" so they aren't retried."""
+    """Item details from the static game data, {id: [name, vendor price, quality]}; unknown items get ["", 0, 1]."""
     from concurrent.futures import ThreadPoolExecutor
     tok = tok or _token()
 
@@ -60,10 +61,11 @@ def fetch_names(ids, tok=None):
         for t in range(3):
             try:
                 req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok})
-                return i, json.load(urllib.request.urlopen(req, timeout=30)).get('name') or ''
+                d = json.load(urllib.request.urlopen(req, timeout=30))
+                return i, [d.get('name') or '', int(d.get('sell_price') or 0), QUALITY.get((d.get('quality') or {}).get('type'), 1)]
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return i, ''
+                    return i, ['', 0, 1]
                 time.sleep(2 * (t + 1))  # 429 / 5xx: wait and retry
             except (urllib.error.URLError, TimeoutError):
                 time.sleep(2 * (t + 1))
@@ -74,14 +76,18 @@ def fetch_names(ids, tok=None):
 
 
 def update_names(state, mk, names_fn):
-    """Add names for listed items that don't have one yet. Returns how many were added."""
-    have = state.setdefault('names', {})
-    missing = sorted({str(i) for i in mk} - set(have), key=int)[:NAMES_PER_RUN]
+    """Add name, vendor price and quality for listed items that don't have them yet. Returns how many were added."""
+    names = state.setdefault('names', {})
+    details = state.setdefault('details', {})
+    missing = sorted({str(i) for i in mk} - set(details), key=int)[:NAMES_PER_RUN]
     if not missing or not names_fn:
         return 0
     got = names_fn([int(k) for k in missing])
-    for i, n in got.items():
-        have[str(i)] = n
+    for i, d in got.items():
+        if isinstance(d, str):
+            d = [d, 0, 1]
+        names[str(i)] = d[0]
+        details[str(i)] = [d[1], d[2]]
     return len(got)
 
 
@@ -258,8 +264,11 @@ FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'h
 
 def write_lua(path, state, mk, now_ts):
     keys = set(state['hourly']) | {str(i) for i in mk}
-    parts, names = [], []
+    parts, names, info = [], [], []
     have = state.get('names', {})
+    det = state.get('details', {})
+    # Commodities come from Blizzard's separate commodities list (stackable goods sold by quantity).
+    goods = {str(v[0]) for v in (state.get('listings') or {}).values() if v[4] == 'c'}
     for k in sorted(keys, key=int):
         n = item_numbers(k, state, mk, now_ts)
         if not n['low'] and not n['sales']:
@@ -268,10 +277,14 @@ def write_lua(path, state, mk, now_ts):
         parts.append(f'[{k}]={lua(row)}')
         if have.get(k):
             names.append(f'[{k}]={lua(have[k])}')
+        d = det.get(k) or [None, None]
+        info.append(f'[{k}]={lua([d[0], d[1], 1 if k in goods else 0])}')
     body = (f'-- Written by the AuctionForever collector. Do not edit.\n'
             f'AuctionForeverData = {{v=1,house={HOUSE},time={int(now_ts)},hours={round(sum(c[1] for c in state.get("compared", [])), 1)},\n'
             f'fields={lua(FIELDS + ["ladder"])},\nitems={{\n' + ',\n'.join(parts) + '\n},\n'
-            'names={\n' + ',\n'.join(names) + '\n}}\n')
+            'names={\n' + ',\n'.join(names) + '\n},\n'
+            '-- [itemID] = {vendor price, quality, commodity (1) or not (0)}\n'
+            'info={\n' + ',\n'.join(info) + '\n}}\n')
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         f.write(body)

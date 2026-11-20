@@ -27,14 +27,24 @@ local function NameCache()
 	AuctionForeverDB.names = AuctionForeverDB.names or {}
 	return AuctionForeverDB.names
 end
-local function ItemName(id)
-	local Name, _, Quality = C_Item.GetItemInfo(id)
+-- Saved per item: { name, quality, vendor price, stack size }, learned whenever the game has the item loaded,
+-- so lists never wait on the game for an item seen before. The cloud file ships name, vendor price and quality.
+local function Remember(id)
+	local Name, _, Quality, _, _, _, _, Stack, _, _, Sell = C_Item.GetItemInfo(id)
+	if not Name then return nil end
 	local Cache = NameCache()
-	if Name then
-		local C = Cache[id]
-		if not C or C[1] ~= Name or C[2] ~= Quality then Cache[id] = { Name, Quality } end
-		return Name, Quality
-	end
+	local C = Cache[id]
+	if not C or C[1] ~= Name or C[2] ~= Quality or C[3] ~= Sell or C[4] ~= Stack then Cache[id] = { Name, Quality, Sell, Stack } end
+	return Name, Quality
+end
+local function Shipped(id)
+	local D = AuctionForeverData
+	return type(D) == "table" and type(D.info) == "table" and D.info[id] or nil
+end
+local function ItemName(id)
+	local Name, Quality = Remember(id)
+	local Cache = NameCache()
+	if Name then return Name, Quality end
 	if not Pending[id] then
 		Pending[id] = true
 		if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
@@ -42,19 +52,13 @@ local function ItemName(id)
 	local C = Cache[id]
 	if C then return C[1], C[2] end
 	local D = AuctionForeverData
-	local Shipped = type(D) == "table" and type(D.names) == "table" and D.names[id]
-	if Shipped then return Shipped, 1 end
+	local ShippedName = type(D) == "table" and type(D.names) == "table" and D.names[id]
+	if ShippedName then local I = Shipped(id); return ShippedName, I and I[2] or 1 end
 	return "|cff808080loading...|r", 1
 end
 -- Remember a name the client just loaded (preloads included, not only rows drawn on screen).
 local function LearnName(id)
-	if not id then return end
-	local Name, _, Quality = C_Item.GetItemInfo(id)
-	if Name then
-		local Cache = NameCache()
-		local C = Cache[id]
-		if not C or C[1] ~= Name or C[2] ~= Quality then Cache[id] = { Name, Quality } end
-	end
+	if id then Remember(id) end
 end
 -- Ask the server for names the lists will need, a few at a time, so they're ready when the window opens.
 function L.Preload(Ids)
@@ -92,11 +96,29 @@ local function Stacks(id)
 	if not ClassID then return false end
 	return ClassID ~= 2 and ClassID ~= 4 -- 2 = weapon, 4 = armor
 end
+-- "commodity" or "item" from the cloud data (exact: it comes from the auction data), nil if not known yet.
+local function Kind(id)
+	local I = Shipped(id)
+	if I and I[3] ~= nil then return I[3] == 1 and "commodity" or "item" end
+	return nil
+end
+-- Can it be flipped? Commodities only (gear is one-off listings with random stats); items the cloud data doesn't
+-- know yet are judged by type.
+local function Flippable(id)
+	local K = Kind(id)
+	if K then return K == "commodity" end
+	return Stacks(id)
+end
 local function Vendor(id)
 	local _, _, _, _, _, _, _, _, _, _, Sell = C_Item.GetItemInfo(id)
-	return Sell or 0
+	if Sell then return Sell end
+	local C = NameCache()[id]
+	if C and C[3] then return C[3] end
+	local I = Shipped(id)
+	return I and I[1] or 0
 end
 L.ItemName, L.Icon, L.Vendor, L.Stacks = function(id) return ItemName(id) end, function(id) return Icon(id) end, function(id) return Vendor(id) end, function(id) return Stacks(id) end
+L.Kind, L.Flippable = function(id) return Kind(id) end, function(id) return Flippable(id) end
 local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
 L.StatusText = StatusText
@@ -131,7 +153,7 @@ function L.FlipRows()
 	local Out = {}
 	if Budget <= 0 then return Out end
 	for id in pairs(D.items) do
-		if Stacks(id) then
+		if Flippable(id) then
 			local I = Core.Info(id)
 			local F = Core.Flip(I, Budget)
 			if F then Out[#Out + 1] = { id = id, info = I, flip = F } end
