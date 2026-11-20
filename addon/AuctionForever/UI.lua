@@ -37,6 +37,17 @@ local function Remember(id)
 	if not C or C[1] ~= Name or C[2] ~= Quality or C[3] ~= Sell or C[4] ~= Stack then Cache[id] = { Name, Quality, Sell, Stack } end
 	return Name, Quality
 end
+-- Shorter item names for list rows (the tooltip shows the full name; sorting uses it): recipe items lose their type
+-- prefix (the icon shows the type) and "Enchant " becomes "Ench ". Only a prefix at the very start is dropped, and
+-- only the recipe kinds found in Forever's item names (not "Libram", "Codex" etc.: those are real items).
+L.RECIPE_PREFIXES = { "Pattern: ", "Plans: ", "Recipe: ", "Formula: ", "Schematic: ", "Blueprint: ", "Manual: " }
+function L.ShortName(Name)
+	if type(Name) ~= "string" then return Name end
+	for _, P in ipairs(L.RECIPE_PREFIXES) do
+		if Name:sub(1, #P) == P then Name = Name:sub(#P + 1) break end
+	end
+	return (Name:gsub("%f[%a]Enchant ", "Ench "))
+end
 local function Shipped(id)
 	local D = AuctionForeverData
 	return type(D) == "table" and type(D.info) == "table" and D.info[id] or nil
@@ -745,11 +756,11 @@ local Rows = {}
 local Data, Offset, Tab = {}, 0, 1
 local Columns = {
 	-- Gather: Expected each (net each x sell rate - deposit lost) is the default sort; Sales/day = the whole market's.
-	gather = { { "Item", 145, "name" }, { "Tier", 32, "tier" }, { "Net each", 72, "net" }, { "Sell rate", 52, "rate" },
-		{ "Expected each", 78, "expected" }, { "Sales/day", 58, "salesDay" }, { "Your gold/hr", 70, "mine" }, { "Status", 58, "status" } },
+	gather = { { "Item", 196, "name" }, { "Tier", 28, "tier" }, { "Net each", 66, "net" }, { "Sell rate", 50, "rate" },
+		{ "Expected each", 74, "expected" }, { "Sales/day", 54, "salesDay" }, { "Your gold/hr", 66, "mine" }, { "Status", 56, "status" } },
 	-- Craft: Expected/craft (products x sell rate - deposit lost - mats bought) is the default sort.
-	craft = { { "Item", 130, "name" }, { "Tier", 32, "tier" }, { "Profession", 75, "skill" }, { "Profit/craft", 75, "profit" },
-		{ "Sell rate", 52, "rate" }, { "Expected/craft", 80, "expected" }, { "Sales/day", 55, "salesDay" }, { "Added each", 75, "added" } },
+	craft = { { "Item", 180, "name" }, { "Tier", 28, "tier" }, { "Profession", 66, "skill" }, { "Profit/craft", 68, "profit" },
+		{ "Sell rate", 50, "rate" }, { "Expected/craft", 78, "expected" }, { "Sales/day", 54, "salesDay" }, { "Added each", 68, "added" } },
 	[2] = { { "Item", 190 }, { "Profit", 80 }, { "Buy", 110 }, { "Resell", 80 }, { "Sells/hr", 60 }, { "Time", 40 }, { "Status", 50 } },
 }
 
@@ -866,7 +877,7 @@ function L.Refresh()
 			R.Icon:SetTexture(Icon(E.id))
 			R.id = E.id
 			local I = E.info
-			local NameText = (Color and Color.hex or "|cffffffff") .. Name .. "|r"
+			local NameText = (Color and Color.hex or "|cffffffff") .. L.ShortName(Name) .. "|r"
 			R.entry = E
 			if Tab == 1 and E.spell then
 				local Short = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
@@ -1029,6 +1040,7 @@ function L.CreateWindow()
 		R:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		Rows[r] = R
 	end
+	Frame.Rows = Rows
 	Frame.Empty = Frame.List:CreateFontString(nil, "OVERLAY", "GameFontDisable")
 	Frame.Empty:SetPoint("CENTER", Frame.Inset, "CENTER")
 	Frame.List:EnableMouseWheel(true)

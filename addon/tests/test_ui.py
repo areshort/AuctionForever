@@ -985,6 +985,13 @@ X('AF_NS.Trade.SetBuySort("plan"); AF_NS.Trade.SelectBuy(1)')
 det = str(L('AuctionForeverBuyPanel.Detail:GetText()'))
 tc = str(L('AuctionForeverBuyPanel.Rows[1].Cells[2]:GetText()'))
 ok('expected return' in det.split(chr(10))[0] and tc.endswith('|r') and tc[10:11] in 'SABCD', f'AF Buy row shows its tier ({tc}) and the detail line says why: {det.split(chr(10))[0]}')
+# AF Buy rows: short name in the row, the full name in the detail line.
+X("""BuyId = AF_NS.Trade.Rows()[1].id; RealGII3 = C_Item.GetItemInfo
+  C_Item.GetItemInfo = function(id) if id == BuyId then return "Pattern: Enchant Something Long", nil, 1 end return RealGII3(id) end
+  AF_NS.UI.ItemName(BuyId); AF_NS.Trade.SelectBuy(1)""")
+bc, bd = str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')), str(L('AuctionForeverBuyPanel.Detail:GetText()'))
+ok('Ench Something Long' in bc and 'Pattern' not in bc and 'Pattern: Enchant Something Long' in bd, f'AF Buy: short name in the row ({bc}), full in the detail')
+X('C_Item.GetItemInfo = RealGII3; AF_NS.UI.ItemName(BuyId); AF_NS.Trade.DrawBuy()')
 X('AF_NS.Trade.SetBuySort("plan")')
 tg = L('AF_NS.Trade.TargetGold()')
 mins = [L(f'AF_NS.Trade.Rows()[{i}].minGold') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
@@ -1238,6 +1245,31 @@ ok(any('First Aid' in t for t in tip) and any('yellow 55' in t for t in tip) and
    and any('(AH)' in t for t in tip) and any('Sell rate 90%' in t for t in tip) and any('Tier ' in t and 'by expected earnings (price x sell rate); sells 120/day' in t for t in tip)
    and all(all(ord(c) < 128 for c in t) for t in tip),
    f'craft tooltip: profession, ranks, reagents with source, sell rate, tier line (ASCII): {tip}')
+# Short names in list rows: recipe prefix dropped (start only), "Enchant " -> "Ench "; Libram etc. kept.
+sn = {n: L(f'AF_NS.UI.ShortName({n!r})') for n in ('Formula: Enchant Gloves - Greater Agility', 'Pattern: Wicked Leather Headband',
+      'Plans: Thorium Belt', 'Recipe: Flask of the Titans', 'Schematic: Gnomish Cloaking Device', 'Blueprint: Spinning Wheel',
+      'Manual: Heavy Silk Bandage', 'Libram of Voracity', 'Libram: Foo', 'Codex of Holy Word: Fortitude', 'Enchanted Leather',
+      'Lesser Pattern: Test', 'Scroll of Enchant Recipe: X')}
+ok(sn['Formula: Enchant Gloves - Greater Agility'] == 'Ench Gloves - Greater Agility' and sn['Pattern: Wicked Leather Headband'] == 'Wicked Leather Headband'
+   and sn['Plans: Thorium Belt'] == 'Thorium Belt' and sn['Recipe: Flask of the Titans'] == 'Flask of the Titans'
+   and sn['Schematic: Gnomish Cloaking Device'] == 'Gnomish Cloaking Device' and sn['Blueprint: Spinning Wheel'] == 'Spinning Wheel'
+   and sn['Manual: Heavy Silk Bandage'] == 'Heavy Silk Bandage', f'recipe prefixes dropped, Enchant shortened: {sn}')
+ok(sn['Libram of Voracity'] == 'Libram of Voracity' and sn['Libram: Foo'] == 'Libram: Foo' and sn['Codex of Holy Word: Fortitude'] == 'Codex of Holy Word: Fortitude'
+   and sn['Enchanted Leather'] == 'Enchanted Leather' and sn['Lesser Pattern: Test'] == 'Lesser Pattern: Test'
+   and sn['Scroll of Enchant Recipe: X'] == 'Scroll of Ench Recipe: X', f'only recipe prefixes at the start; Libram/Codex/Enchanted kept: {sn}')
+# In the Gather list: a recipe item's row shows the short name, but the name sort uses the full name: "Recipe: Enchant
+# Alpha" sorts after the "Item ..." names (highest first: row 1), where its short form "Ench Alpha" would sort last.
+X("""RealGII2 = C_Item.GetItemInfo
+  C_Item.GetItemInfo = function(id) if id == 2589 then return "Recipe: Enchant Alpha", nil, 1 end return RealGII2(id) end
+  AF_NS.UI.ItemName(2589)
+  Click(AuctionForeverFrame.FarmBar.Gather); Click(AuctionForeverFrame.Headers[1])""")
+ok(L('AuctionForeverFrame.Rows[1].id') == 2589 and L('AF_NS.UI.SortName(2589)') == 'Recipe: Enchant Alpha',
+   f'name sort uses the full name ("Recipe: ..." first, highest first): row 1 = {L("AuctionForeverFrame.Rows[1].id")}')
+cell = str(L('AuctionForeverFrame.Rows[1].Cells[1]:GetText()'))
+ok('Ench Alpha' in cell and 'Recipe' not in cell, f'Gather row shows the short name: {cell}')
+X("""C_Item.GetItemInfo = RealGII2; AF_NS.UI.ItemName(2589)
+  Click(AuctionForeverFrame.Headers[5]); Click(AuctionForeverFrame.FarmBar.Craft)""")
+ok(L('AF_NS.UI.SortName(2589)') != 'Recipe: Enchant Alpha', 'real name back')
 # Tier boundaries on hand-made scores: 10 rows -> S = top 10% (1), A = 10-30% (2), B = 30-60% (3), C = 60-80% (2), D = 2.
 X('''TR = {} for k = 1, 10 do TR[k] = { id = k, s = 11 - k } end
   AF_NS.UI.MarkTiers(TR, function(R) return R.s end)''')

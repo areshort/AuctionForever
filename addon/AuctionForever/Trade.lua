@@ -53,10 +53,11 @@ function T.OnScanDone()
 		if not Scan.Lookup(P[1], true, P[2]) and P[2] then P[2]() end
 	end)
 end
-local function NameText(id)
+-- Short: the list-row form of the name (see UI.ShortName); the detail lines keep the full name.
+local function NameText(id, Short)
 	local Name, Quality = UI().ItemName(id)
 	local Color = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[Quality or 1]
-	return (Color and Color.hex or "|cffffffff") .. Name .. "|r"
+	return (Color and Color.hex or "|cffffffff") .. (Short and UI().ShortName(Name) or Name) .. "|r"
 end
 local function Text(Parent, Font, X, Y, W)
 	local FS = Parent:CreateFontString(nil, "OVERLAY", Font or "GameFontHighlight")
@@ -183,7 +184,7 @@ local function RecordBuy(id, Qty, Total, Resell)
 end
 
 -- AF Buy ------------------------------------------------------------------------------------------------------
-local BUY_COLS = { 170, 32, 150, 90, 90, 80 }
+local BUY_COLS = { 190, 28, 140, 84, 80, 84 }
 
 local function SayBuy(Msg) if BuyP then BuyP.Status:SetText(Msg or "") end end
 local function ResetPurchase(Cancel)
@@ -251,7 +252,7 @@ function T.DrawBuy()
 			local F = Shown(E)
 			local Need = ShownNeed(E)
 			R.Icon:SetTexture(UI().Icon(E.id))
-			R.Cells[1]:SetText(NameText(E.id))
+			R.Cells[1]:SetText(NameText(E.id, true))
 			local Tier, TColor = T.Tier(F)
 			R.Cells[2]:SetText(TColor .. Tier .. "|r")
 			R.Cells[3]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
@@ -263,7 +264,7 @@ function T.DrawBuy()
 			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
 			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
 			R.Cells[6]:SetText(Status)
-			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ItemName(E.id) .. "|r") end -- not affordable yet: name greyed
+			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ShortName((UI().ItemName(E.id))) .. "|r") end -- not affordable yet: name greyed
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
 	end
@@ -645,7 +646,7 @@ function T.DrawSell()
 		R.id = G and G.id
 		if G then
 			R.Icon:SetTexture(UI().Icon(G.id))
-			R.Cells[1]:SetText(NameText(G.id))
+			R.Cells[1]:SetText(NameText(G.id, true))
 			R.Cells[2]:SetText("x" .. G.count)
 			R.Sel:SetShown(i + Off == Sell.idx)
 		end
