@@ -35,9 +35,11 @@ function Methods:GetPoint() return "CENTER", nil, "CENTER", 10, 20 end
 function Methods:GetWidth() return 140 end
 function Methods:GetCenter() return 500, 500 end
 function Methods:GetEffectiveScale() return 1 end
+function Methods:SetFrameLevel(n) self._level = n end
 function CreateFrame(kind, name, parent, template)
 	local f = NewObj(kind, name)
 	f._parent = parent
+	f._template = template
 	if template == "ButtonFrameTemplate" then f.Inset = NewObj("Frame") end
 	if template == "PanelTabButtonTemplate" and parent then rawset(parent, "Tabs", rawget(parent, "Tabs") or {}); table.insert(rawget(parent, "Tabs"), f) end
 	return f
@@ -113,9 +115,9 @@ function Methods:GetObjectType() return self._kind end
 function Methods:GetTop() return rawget(self, "_top") end
 function Methods:GetLeft() return rawget(self, "_left") end
 function Methods:GetRight() return rawget(self, "_right") end
-function Methods:GetFrameLevel() return 1 end
+function Methods:GetFrameLevel() local P = rawget(self, "_parent") return rawget(self, "_level") or (P and P:GetFrameLevel() + 1) or 1 end
 function Methods:SetEnabled(v) self._disabled = not v end
-function Methods:IsEnabled() return not self._disabled end
+function Methods:IsEnabled() return not rawget(self, "_disabled") end
 function Methods:SetValue(v) self._value = v end
 function Methods:GetValue() return self._value end
 function Methods:HookScript(k, fn) self._hooks[k] = self._hooks[k] or {}; table.insert(self._hooks[k], fn) end

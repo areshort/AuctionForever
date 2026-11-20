@@ -197,6 +197,7 @@ function T.DrawBuy()
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
 	BuyP.Buy:SetEnabled(E ~= nil and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
+	BuyP.Skip:SetEnabled(#Buy.rows > 1)
 	if E then
 		local F = Shown(E)
 		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s",

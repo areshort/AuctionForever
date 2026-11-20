@@ -464,6 +464,12 @@ if real:
     # empty list explains why
     X('FlipTargets = {}; AF_NS.Trade.RefreshBuy()')
     ok(L('AuctionForeverBuyPanel.Empty:IsShown()'), 'no targets: shows the reason')
+    ok(not L('AuctionForeverBuyPanel.Skip:IsEnabled()'), 'no targets: Next is greyed out')
+    ok(L('AuctionForeverBuyPanel.Refresh._template') == 'RefreshButtonTemplate' and L('AuctionForeverSellPanel.Refresh._template') == 'RefreshButtonTemplate',
+       "both AF pages use Blizzard's sharp refresh button")
+    ok(L('AuctionForeverBuyPanel.Refresh:GetFrameLevel() > AuctionForeverBuyPanel.Cover:GetFrameLevel()'), 'refresh button sits above the cover strip')
+    ok(L('AuctionForeverSellPanel:GetFrameLevel()') > 350 and L('AuctionForeverSellPanel:GetFrameLevel()') < 1000,
+       "AF pages sit above Blizzard's sell item box and Post button (level 350), below its dialogs (1000)")
 
     # ---- AF Sell ----
     X("""Bag = { { itemID = 2589, stackCount = 20, isBound = false }, { itemID = 999999, stackCount = 1, isBound = true },

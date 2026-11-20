@@ -771,7 +771,8 @@ function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide, OnRefresh)
 	local P = CreateFrame("Frame", PanelName, AuctionHouseFrame)
 	P:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPLEFT", 4, -58)
 	P:SetPoint("BOTTOMRIGHT", AuctionHouseFrame, "BOTTOMRIGHT", -4, 28)
-	P:SetFrameLevel(AuctionHouseFrame:GetFrameLevel() + 60)
+	-- Above Blizzard's sell frame item box and Post button (fixed frameLevel 350), below its dialog overlay (1000).
+	P:SetFrameLevel(math.max(AuctionHouseFrame:GetFrameLevel() + 60, 400))
 	P:EnableMouse(true)
 	local Bg = P:CreateTexture(nil, "BACKGROUND")
 	Bg:SetAllPoints()
@@ -790,12 +791,17 @@ function L.NewAHPage(Text, TabName, PanelName, OnShow, OnHide, OnRefresh)
 	P.Cover = Cover
 	if OnRefresh then
 		-- Round refresh button at the top right, where Blizzard's pages have theirs.
-		local R = CreateFrame("Button", nil, Cover)
+		-- Blizzard's own refresh button (sharp atlas art); the old 32px texture only if the template is missing.
+		local Ok, R = pcall(CreateFrame, "Button", nil, Cover, "RefreshButtonTemplate")
+		if not Ok or not R then
+			R = CreateFrame("Button", nil, Cover)
+			R:SetNormalTexture("Interface\\Buttons\\UI-RefreshButton")
+			R:SetPushedTexture("Interface\\Buttons\\UI-RefreshButton-Down")
+			R:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		end
 		R:SetSize(26, 26)
 		R:SetPoint("TOPRIGHT", AuctionHouseFrame, "TOPRIGHT", -12, -27)
-		R:SetNormalTexture("Interface\\Buttons\\UI-RefreshButton")
-		R:SetPushedTexture("Interface\\Buttons\\UI-RefreshButton-Down")
-		R:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		R:SetFrameLevel(Cover:GetFrameLevel() + 5)
 		R:SetScript("OnClick", OnRefresh)
 		R:SetScript("OnEnter", function(self)
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
