@@ -963,21 +963,48 @@ pr = [L(f'AF_NS.Trade.Rows()[{i}].best.profit') for i in range(1, int(L('#AF_NS.
 ok(pr == sorted(pr, reverse=True), f'sort by profit: highest first {pr}')
 # AF Buy column headers sort: highest first, again lowest first, a third time back to the plan's order.
 X('AF_NS.Trade.SetBuySort("plan")')
-def buyheads(): return [L(f'AuctionForeverBuyPanel.Headers[{i}].Label:GetText()') for i in range(1, 8) if L(f'rawget(AuctionForeverBuyPanel.Headers, {i})')]
+def buyheads(): return [L(f'AuctionForeverBuyPanel.Headers[{i}].Label:GetText()') for i in range(1, 9) if L(f'rawget(AuctionForeverBuyPanel.Headers, {i})')]
 def buyrows(): return [L(f'AF_NS.Trade.Rows()[{i}]') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
-ok(L('rawget(AuctionForeverBuyPanel, "Sort") == nil') and buyheads() == ['Item', 'Tier', 'Buy', 'Resell at', 'Profit', 'Status'],
+ok(L('rawget(AuctionForeverBuyPanel, "Sort") == nil') and buyheads() == ['Item', 'Tier', 'Sell rate', 'Buy', 'Resell at', 'Profit', 'Status'],
    f'AF Buy: no sort button, plain headers in plan order: {buyheads()}')
-X('AF_NS.Trade.DrawBuy(); Click(AuctionForeverBuyPanel.Headers[5])')
+X('AF_NS.Trade.DrawBuy(); Click(AuctionForeverBuyPanel.Headers[6])')
 pr = [(r.best or r.flip).profit for r in buyrows()]
-ok(pr == sorted(pr, reverse=True) and buyheads()[4] == 'Profit v' and L('(AF_NS.Trade.BuySort())') == 'profit', f'click Profit: highest first, marked {pr}')
-X('Click(AuctionForeverBuyPanel.Headers[5])')
+ok(pr == sorted(pr, reverse=True) and buyheads()[5] == 'Profit v' and L('(AF_NS.Trade.BuySort())') == 'profit', f'click Profit: highest first, marked {pr}')
+X('Click(AuctionForeverBuyPanel.Headers[6])')
 pr = [(r.best or r.flip).profit for r in buyrows()]
-ok(pr == sorted(pr) and buyheads()[4] == 'Profit ^', 'click Profit again: lowest first')
-X('Click(AuctionForeverBuyPanel.Headers[5])')
-ok(L('(AF_NS.Trade.BuySort())') == 'plan' and L('AF_NS.Trade.Rows()[1].plan') == True and buyheads()[4] == 'Profit', 'third click: back to the plan order')
-X('Click(AuctionForeverBuyPanel.Headers[3])')
+ok(pr == sorted(pr) and buyheads()[5] == 'Profit ^', 'click Profit again: lowest first')
+X('Click(AuctionForeverBuyPanel.Headers[6])')
+ok(L('(AF_NS.Trade.BuySort())') == 'plan' and L('AF_NS.Trade.Rows()[1].plan') == True and buyheads()[5] == 'Profit', 'third click: back to the plan order')
+X('Click(AuctionForeverBuyPanel.Headers[4])')
 co = [r.flip.cost for r in buyrows()]
-ok(co == sorted(co, reverse=True) and buyheads()[2] == 'Buy v', f'click Buy: by cost {co}')
+ok(co == sorted(co, reverse=True) and buyheads()[3] == 'Buy v', f'click Buy: by cost {co}')
+# Sell rate column: the item's sell rate as a colored percent (as on the Farm tab), "?" when not measured; sorts by it
+# (not measured last), third click back to the plan order.
+X('Click(AuctionForeverBuyPanel.Headers[3])')
+sr = [L(f'AF_NS.Trade.BuyRate(AF_NS.Trade.Rows()[{i}])') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+known = [x for x in sr if x is not None]
+ok(buyheads()[2] == 'Sell rate v' and known == sorted(known, reverse=True) and sr[:len(known)] == known and len(known) > 1,
+   f'click Sell rate: highest first, not measured last {sr}')
+r1, c1 = L('AF_NS.Trade.Rows()[1]'), str(L('AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()'))
+ok(c1 == str(L(f'AF_NS.UI.RateText({sr[0]})')) and c1.endswith(f'{int(sr[0] * 100 + 0.5)}%|r'), f'Sell rate cell: colored percent ({c1})')
+X('Click(AuctionForeverBuyPanel.Headers[3])')
+ok(buyheads()[2] == 'Sell rate ^', 'Sell rate again: lowest first')
+X('Click(AuctionForeverBuyPanel.Headers[3])')
+ok(L('(AF_NS.Trade.BuySort())') == 'plan', 'Sell rate: third click back to the plan order')
+X("""BuyE = AF_NS.Trade.Rows()[1]; SavedST = BuyE.info.sellThrough
+  BuyE.info.sellThrough = 0.95; AF_NS.Trade.DrawBuy(); C95 = AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()
+  BuyE.info.sellThrough = 0.5; AF_NS.Trade.DrawBuy(); C50 = AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()
+  BuyE.info.sellThrough = 0.3; AF_NS.Trade.DrawBuy(); C30 = AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()
+  BuyE.info.sellThrough = 0.1; AF_NS.Trade.DrawBuy(); C10 = AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()
+  BuyE.info.sellThrough = nil; AF_NS.Trade.SelectBuy(1); CNil = AuctionForeverBuyPanel.Rows[1].Cells[3]:GetText()
+  DNil = AuctionForeverBuyPanel.Detail:GetText()
+  BuyE.info.sellThrough = 0.69; AF_NS.Trade.SelectBuy(1); D69 = AuctionForeverBuyPanel.Detail:GetText()
+  BuyE.info.sellThrough = SavedST; AF_NS.Trade.DrawBuy()""")
+cols = [str(L(v)) for v in ('C95', 'C50', 'C30', 'C10', 'CNil')]
+ok(cols == ['|cff1eff0095%|r', '|cffffd10050%|r', '|cffff404030%|r', '|cff9d9d9d10%|r', '|cff9d9d9d?|r'],
+   f'Sell rate colors: green 70+, yellow 40+, red 20+, gray below, "?" not measured: {cols}')
+d69, dnil = str(L('D69')).split(chr(10))[0], str(L('DNil')).split(chr(10))[0]
+ok('expected return, sells 69%' in d69 and 'sell rate not measured yet' in dnil, f'detail line: tier and sell rate ({d69} / {dnil})')
 X('Click(AuctionForeverBuyPanel.Headers[2])')
 rt = [L(f'AF_NS.Trade.Return(AF_NS.Trade.Rows()[{i}].flip)') or -1 for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
 ok(rt == sorted(rt, reverse=True) and buyheads()[1] == 'Tier v', f'click Tier: by expected return {rt}')
@@ -986,10 +1013,10 @@ ok(L('(AF_NS.Trade.BuySort())') == 'plan', 'Tier: third click back to the plan o
 X('Click(AuctionForeverBuyPanel.Headers[1])')
 nm = [str(L(f'AF_NS.UI.SortName({r.id})')) for r in buyrows()]
 ok(nm == sorted(nm, reverse=True) and buyheads()[0] == 'Item v', 'click Item: by name')
-X('Click(AuctionForeverBuyPanel.Headers[6])')
+X('Click(AuctionForeverBuyPanel.Headers[7])')
 nd = [r.need or 0 for r in buyrows()]
-ok(nd == sorted(nd, reverse=True) and buyheads()[5] == 'Status v', 'click Status: by gold needed')
-X('AF_NS.Trade.DrawBuy(); AuctionForeverBuyPanel:GetScript("OnMouseWheel")(AuctionForeverBuyPanel, -1); Click(AuctionForeverBuyPanel.Headers[4])')
+ok(nd == sorted(nd, reverse=True) and buyheads()[6] == 'Status v', 'click Status: by gold needed')
+X('AF_NS.Trade.DrawBuy(); AuctionForeverBuyPanel:GetScript("OnMouseWheel")(AuctionForeverBuyPanel, -1); Click(AuctionForeverBuyPanel.Headers[5])')
 ok(L('AuctionForeverBuyPanel.Bar:GetValue()') == 0, 'a re-sort scrolls back to the top')
 # Tier bands on expected return (profit / cost): 35% = S, 34.9% = A, 25% = A, 24.9% = B, 15% = B, 10% = C, 9.9% = D;
 # vendor buys graded the same way; no profit or no cost = D.
@@ -1022,7 +1049,7 @@ ok(dp is not None and dp[1] == 'BOTTOMLEFT' and L('AuctionForeverBuyPanel.Detail
    'AF Buy detail text sits on top of the buttons (long text grows upward)')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
-cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[3]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[5]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))
+cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[6]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))
       for i in range(1, min(14, int(L('#AF_NS.Trade.Rows()'))) + 1)]
 coin = str(L('AF_NS.Core.MoneyColor(1)')).split('1c')[0]
 ok(len(cr) > 0 and all(coin in str(b) and coin in str(p) for b, p, _ in cr), f'AF Buy amounts in coin colors ({cr[0][0]!r} / {cr[0][1]!r})')
