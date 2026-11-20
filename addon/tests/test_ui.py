@@ -411,6 +411,8 @@ if real:
     ok(c is not None and c[2] == 2589 and c[3] == 10, 'second click confirms 10')
     X('FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
     ok(L('AF_NS.Trade.SelectedBuy().id') == 14047, 'after buying: next target selected (Buy next)')
+    b = L('AuctionForeverDB.buys and AuctionForeverDB.buys[#AuctionForeverDB.buys]')
+    ok(b is not None and b[2] == 2589 and b[3] == 10 and b[4] == 260 and b[5] == 164, f'purchase remembered: 10 for 2s 60c, plan expected 1s 64c each ({b and list(b.values())})')
     # not a commodity: buys the cheapest listing within the max, one per click
     X('Click(AuctionForeverBuyPanel.Buy)')
     c = L('LastCall("PlaceBid")')
@@ -484,6 +486,14 @@ if real:
     # never below vendor
     X('Calls = {}; AF_NS.Trade.SelectSellId(2589); AF_NS.Trade.SetSellPrice(2); Click(AuctionForeverSellPanel.Post)')
     ok(L('LastCall("PostCommodity") == nil') and 'vendor' in str(L('AuctionForeverSellPanel.Status:GetText()')).lower(), 'price below vendor: not posted, says why')
+    # bought with AF Buy at 26c each: AF Sell shows it and asks before selling at a loss
+    X('AF_NS.Trade.SelectSellId(2589)')
+    info = str(L('AuctionForeverSellPanel.Info:GetText()'))
+    ok('You paid' in info and '26c' in info, 'AF Sell shows what you paid: ' + info.split(chr(10))[-1])
+    X('Calls = {}; AF_NS.Trade.SetSellPrice(20); Click(AuctionForeverSellPanel.Post)')
+    ok(L('LastCall("PostCommodity") == nil') and 'what you paid' in str(L('AuctionForeverSellPanel.Status:GetText()')), 'below what you paid: not posted on the first click')
+    X('Click(AuctionForeverSellPanel.Post)')
+    ok(L('LastCall("PostCommodity") ~= nil'), 'second click posts at a loss on purpose')
     # Skip walks the queue and wraps
     n = len(q)
     X('AF_NS.Trade.SelectSell(1)')

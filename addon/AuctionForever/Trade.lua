@@ -114,6 +114,13 @@ local function Header(Parent, X, Y, Cols, Names)
 	end
 end
 
+local function SaveDB() AuctionForeverDB = AuctionForeverDB or {} return AuctionForeverDB end
+-- Remember a purchase: what you paid and the profit the plan expected per unit.
+local function RecordBuy(id, Qty, Total, Resell)
+	local Expect = Resell and (math.floor(Resell * (1 - Core.Cut)) - Total / math.max(1, Qty)) or 0
+	Core.AddBuy(SaveDB(), id, Qty, Total, time(), Expect)
+end
+
 -- AF Buy ------------------------------------------------------------------------------------------------------
 local BUY_COLS = { 200, 150, 90, 90, 80 }
 
@@ -156,6 +163,9 @@ function T.DrawBuy()
 	else
 		BuyP.Detail:SetText("")
 	end
+	local R = Core.FlipResults(SaveDB(), time(), 7)
+	BuyP.Results:SetText(R.sold > 0 and string.format("Your flips, last 7 days: %d sold, profit %s (plan expected %s)",
+		R.sold, Core.Money(R.profit), Core.Money(R.expected)) or "")
 	local P = UI().LastPlan
 	if P and P.count > 0 then
 		BuyP.Budget:SetText(string.format("Plan for your %s budget: %d items, cost %s, profit %s", Core.Money(P.budget), P.count, Core.Money(P.cost), Core.Money(P.profit)))
@@ -225,7 +235,7 @@ function T.BuyClick()
 		return
 	end
 	-- Not a commodity: buy the cheapest listing at or under the max, one listing per click.
-	local Budget = Core.Budget(GetMoney())
+	local Budget = UI().FlipBudget()
 	local List = Scan.Listings[E.id] or {}
 	local Best, BestI
 	for i, A in ipairs(List) do
@@ -240,6 +250,7 @@ function T.BuyClick()
 	C_AuctionHouse.PlaceBid(Best.auctionID, Best.buyout)
 	table.remove(List, BestI)
 	Scan.Consume(E.id, Best.qty)
+	RecordBuy(E.id, Best.qty, Best.buyout, F.resell)
 	Buy.bought = (Buy.bought or 0) + Best.qty
 	SayBuy(string.format("Bought %d for %s (%d of %d).", Best.qty, Core.Money(Best.buyout), Buy.bought, F.buyQty))
 	if Buy.bought >= F.buyQty then BuyNext() else T.DrawBuy() end
@@ -249,7 +260,7 @@ local function OnPriceUpdated(Unit, Total)
 	if Buy.state ~= "price" or not Buy.pending then return end
 	local Pd = Buy.pending
 	local Profit = math.floor(Pd.resell * Pd.qty * (1 - Core.Cut)) - Total
-	local Budget = Core.Budget(GetMoney())
+	local Budget = UI().FlipBudget()
 	if Unit > Pd.max then
 		ResetPurchase(true)
 		SayBuy(string.format("Price went up: now %s each (max %s). Not bought.", Core.Money(Unit), Core.Money(Pd.max)))
@@ -274,7 +285,8 @@ local function BuildBuy()
 		function() T.RefreshBuy(); T.SelectBuy(Buy.sel) end, function() ResetPurchase(true) end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
-	P.Budget = Text(P, "GameFontHighlightSmall", 300, -18)
+	P.Budget = Text(P, "GameFontHighlightSmall", 300, -12)
+	P.Results = Text(P, "GameFontHighlightSmall", 300, -26)
 	Header(P, 14, -44, BUY_COLS, { "Item", "Buy", "Resell at", "Profit", "Status" })
 	P.Rows = RowList(P, 14, -60, 660, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end)
 	P:EnableMouseWheel(true)
@@ -295,11 +307,14 @@ local QUEUE_COLS = { 150, 40 }
 
 local function SaySell(Msg) if SellP then SellP.Status:SetText(Msg or "") end end
 local function Floor(G) return math.max(1, math.ceil((G.vendor or 0) / (1 - Core.Cut))) end
+-- Lowest price that pays back what you paid for this item (nil if you didn't buy it with AF Buy).
+local function PaidFloor(G) return G.cost and Core.CostFloor(G.cost) or nil end
 
 -- Suggested price, amount and duration for one bag item.
 local function Suggest(G)
 	local I = G.info
-	local Lo = Floor(G)
+	G.held, G.cost = Core.Holding(SaveDB(), G.id)
+	local Lo = math.max(Floor(G), PaidFloor(G) or 0)
 	local H, Idx, Price = Core.ChooseDuration(I, G.count, Lo)
 	if not Price then H, Idx, Price = 2, 1, math.max(Lo, Core.Market(I) or Lo) end
 	G.price, G.durIdx = math.max(Lo, math.floor(Price)), Idx
@@ -420,8 +435,15 @@ function T.DrawSell()
 	end
 	local I = G.info
 	SellP.Name:SetText(NameText(G.id))
-	SellP.Info:SetText(string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
-		G.count, Core.Money(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I))))
+	local Line = string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
+		G.count, Core.Money(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
+	if G.cost then
+		local Price = T.SellPrice() or G.price
+		local Each = math.floor(Price * (1 - Core.Cut)) - G.cost
+		Line = Line .. string.format("\nYou paid %s each (%d bought). At this price: %s%s|r each.", Core.Money(G.cost), G.held,
+			Each >= 0 and "|cff1eff00profit " or "|cffff4040loss ", Core.Money(math.abs(Each)))
+	end
+	SellP.Info:SetText(Line)
 end
 
 -- Fill the fields with the suggestion for the selected item.
@@ -497,6 +519,12 @@ function T.PostClick()
 	local Price, Qty, Dur = T.SellPrice(), tonumber(SellP.Qty:GetText()), Sell.dur or 1
 	if not Price then SaySell("Enter a price.") return end
 	if Price < Floor(G) then SaySell("That's below what the vendor pays (" .. Core.Money(Floor(G)) .. " after the cut). Not posted.") return end
+	if PaidFloor(G) and Price < PaidFloor(G) and Sell.lossOk ~= G.id then
+		Sell.lossOk = G.id
+		SaySell("That's below what you paid (" .. Core.Money(PaidFloor(G)) .. " after the cut). Click Post again to sell at a loss.")
+		return
+	end
+	Sell.lossOk = nil
 	Qty = Qty and math.floor(Qty)
 	if not Qty or Qty < 1 then SaySell("Enter how many to post.") return end
 	if Qty > G.count then SaySell("You only have " .. G.count .. ".") return end
@@ -528,7 +556,7 @@ local function MoneyBox(Parent, X, Y, W, Suffix)
 	B:SetPoint("TOPLEFT", X, Y)
 	B:SetAutoFocus(false)
 	B:SetNumeric(true)
-	B:SetScript("OnTextChanged", function(_, User) if User then Sell.edited = true; T.UpdateDeposit() end end)
+	B:SetScript("OnTextChanged", function(_, User) if User then Sell.edited = true; T.UpdateDeposit(); T.DrawSell() end end)
 	B:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 	local S = Parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	S:SetPoint("LEFT", B, "RIGHT", 2, 0)
@@ -593,6 +621,7 @@ Events:SetScript("OnEvent", function(_, Event, A1, A2)
 			ResetPurchase(false)
 			SayBuy(string.format("Bought %d for %s.", Pd.qty, Core.Money(Pd.total)))
 			Scan.Consume(Pd.id, Pd.qty)
+			RecordBuy(Pd.id, Pd.qty, Pd.total, Pd.resell)
 			BuyNext()
 		end
 	elseif Event == "COMMODITY_PURCHASE_FAILED" then

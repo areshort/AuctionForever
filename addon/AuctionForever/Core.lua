@@ -265,6 +265,80 @@ end
 
 -- Best flip for an item: buy the cheapest listings (level by level), then resell on the market as it would look
 -- after the purchase. Returns a table {buyQty, buyUpTo, cost, resell, hours, durationIndex, profit} or nil.
+-- What you paid -------------------------------------------------------------------------------------------------
+-- DB.buys = { { time, itemID, qty, total paid, expected profit per unit } }, kept 30 days. Sales come from your
+-- "Auction successful" mail in DB.mysales = { { time, itemID, qty, total, "sold" | "expired" } }. Units bought first
+-- are counted as sold first.
+local BUY_DAYS = 30
+function Core.AddBuy(DB, id, Qty, Total, Now, ExpectEach)
+	if not (DB and id and Qty and Qty > 0) then return end
+	DB.buys = DB.buys or {}
+	table.insert(DB.buys, { Now, id, Qty, Total or 0, ExpectEach or 0 })
+	local Newest = 0
+	for _, B in ipairs(DB.buys) do Newest = math.max(Newest, B[1]) end
+	local Kept = {}
+	for _, B in ipairs(DB.buys) do if B[1] >= Newest - BUY_DAYS * 86400 then Kept[#Kept + 1] = B end end
+	DB.buys = Kept
+end
+
+-- Walk purchases and sales of one item (or all items) in time order. OnSale(row, matched units, their cost,
+-- their expected profit) is called for each sale that used bought units. Returns the lots still held per item.
+local function MatchSales(DB, OnlyId, OnSale)
+	local Lots = {}
+	local Events = {}
+	for _, B in ipairs(DB and DB.buys or {}) do
+		if not OnlyId or B[2] == OnlyId then Events[#Events + 1] = { B[1], 0, B } end
+	end
+	for _, R in ipairs(DB and DB.mysales or {}) do
+		if R[5] == "sold" and (not OnlyId or R[2] == OnlyId) then Events[#Events + 1] = { R[1], 1, R } end
+	end
+	table.sort(Events, function(a, b) if a[1] ~= b[1] then return a[1] < b[1] end return a[2] < b[2] end)
+	for _, E in ipairs(Events) do
+		local X = E[3]
+		local id = X[2]
+		Lots[id] = Lots[id] or {}
+		if E[2] == 0 then
+			table.insert(Lots[id], { left = X[3], unit = X[4] / X[3], expect = X[5] or 0 })
+		else
+			local Need, Units, Cost, Expect = X[3], 0, 0, 0
+			local L = Lots[id]
+			while Need > 0 and L[1] do
+				local T = math.min(Need, L[1].left)
+				Units, Cost, Expect = Units + T, Cost + T * L[1].unit, Expect + T * L[1].expect
+				L[1].left, Need = L[1].left - T, Need - T
+				if L[1].left <= 0 then table.remove(L, 1) end
+			end
+			if Units > 0 and OnSale then OnSale(X, Units, Cost, Expect) end
+		end
+	end
+	return Lots
+end
+
+-- Bought units of this item you still hold (bags or listed), and their average cost each (0, nil if none).
+function Core.Holding(DB, id)
+	local L = MatchSales(DB, id)[id] or {}
+	local Qty, Cost = 0, 0
+	for _, Lot in ipairs(L) do Qty, Cost = Qty + Lot.left, Cost + Lot.left * Lot.unit end
+	if Qty <= 0 then return 0, nil end
+	return Qty, math.ceil(Cost / Qty - 1e-9)
+end
+
+-- Lowest price that gets back what you paid after the AH cut.
+function Core.CostFloor(UnitCost) return math.ceil(UnitCost / (1 - Core.Cut) - 1e-9) end
+
+-- How your flips sold in the last Days: units sold, profit after the cut, and what the plans expected for them.
+function Core.FlipResults(DB, Now, Days)
+	local Out = { sold = 0, profit = 0, expected = 0 }
+	MatchSales(DB, nil, function(R, Units, Cost, Expect)
+		if R[1] < Now - Days * 86400 then return end
+		local Net = math.floor(R[4] * (1 - Core.Cut)) * Units / R[3]
+		Out.sold = Out.sold + Units
+		Out.profit = Out.profit + math.floor(Net - Cost + 0.5)
+		Out.expected = Out.expected + math.floor(Expect + 0.5)
+	end)
+	return Out
+end
+
 -- How much of the flip budget one item may take: 40% while the budget is small (5g or less), shrinking smoothly to 20%
 -- at a 50g budget, so a bigger budget is always spread over more items.
 function Core.ItemShare(Budget)

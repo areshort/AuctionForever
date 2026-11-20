@@ -153,5 +153,24 @@ ok(int(L('#P')) == 0 and L('P.profit') == 0, 'no candidates: empty plan')
 X(f"I = MakeItem(); O = {C}.FlipOptions(I, 20000 * {C}.ItemShare(20000)); F = {C}.Flip(I, 20000)")
 best = L('(function() local b for _, o in ipairs(O) do if not b or o.profit > b.profit then b = o end end return b and b.profit end)()')
 ok(best == L('F and F.profit'), f'Flip = best of FlipOptions ({best} vs {L("F and F.profit")})')
+# ---- What you paid: purchases, cost per unit still held, and how flips turned out.
+X = lua.execute
+X(f"""CDB = {{}}
+  {C}.AddBuy(CDB, 250069, 2, 4998, 1000, 919)   -- 2 Flank au Poivre at 24s 99c, plan expected 9s 19c profit each
+  {C}.AddBuy(CDB, 250069, 2, 6000, 2000, 500)   -- 2 more at 30s
+  H1, C1 = {C}.Holding(CDB, 250069)""")
+ok(L('H1') == 4 and L('C1') == 2750, f"holding 4, average cost 27s 50c ({L('H1')}, {L('C1')})")
+X(f"""CDB.mysales = {{ {{ 3000, 250069, 3, 3 * 3598, "sold" }} }}   -- 3 sold at 35s 98c
+  H2, C2 = {C}.Holding(CDB, 250069)""")
+ok(L('H2') == 1 and L('C2') == 3000, f"after 3 sold: 1 left, at 30s (first bought, first sold) ({L('H2')}, {L('C2')})")
+X(f"R = {C}.FlipResults(CDB, 3000 + 60, 7)")
+# revenue 3 * 3598 * 0.95 = 10254.3 -> 10254; cost 4998 + 3000 = 7998; profit 2256; expected 2*919 + 500 = 2338
+ok(L('R.sold') == 3 and L('R.profit') == 2256 and L('R.expected') == 2338, f"flip results: sold 3, profit {L('R.profit')} (expected {L('R.expected')})")
+X(f"CDB.mysales[2] = {{ 3100, 250069, 1, 0, 'expired' }}; H3 = {C}.Holding(CDB, 250069)")
+ok(L('H3') == 1, 'expired mail: you still hold it')
+ok(L(f"({C}.Holding(CDB, 2589))") == 0, 'never bought: nothing held')
+ok(L(f"{C}.CostFloor(2750)") == -(-2750 * 100 // 95), 'cost floor: what you paid plus the 5% cut')
+X(f"{C}.AddBuy(CDB, 2589, 5, 100, 1000 - 31 * 86400, 0); R2 = {C}.Holding(CDB, 2589)")
+ok(L('R2') == 0 and not any(b[2] == 2589 for b in [list(v.values()) for v in L('CDB.buys').values()]) if L('CDB.buys') else True, 'purchases older than 30 days dropped')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
