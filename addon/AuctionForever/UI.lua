@@ -119,6 +119,24 @@ local function Vendor(id)
 end
 L.ItemName, L.Icon, L.Vendor, L.Stacks = function(id) return ItemName(id) end, function(id) return Icon(id) end, function(id) return Vendor(id) end, function(id) return Stacks(id) end
 L.Kind, L.Flippable = function(id) return Kind(id) end, function(id) return Flippable(id) end
+
+-- Real deposits from the game for commodities (others: not known, counted as 0), so post durations weigh the
+-- deposit lost when a post doesn't sell. Remembered per item/duration/quantity.
+local DepositCache = {}
+Core.Deposit = function(I, H, Qty)
+	local AH = rawget(_G, "C_AuctionHouse") -- not there until the auction house UI exists
+	if not (I and I.id and AH and AH.CalculateCommodityDeposit) or Kind(I.id) ~= "commodity" then return 0 end
+	local Idx
+	for i, D in ipairs(Core.Durations) do if D == H then Idx = i end end
+	if not Idx then return 0 end
+	local K = I.id .. ":" .. Idx .. ":" .. Qty
+	if DepositCache[K] == nil then
+		local Ok, D = pcall(AH.CalculateCommodityDeposit, I.id, Idx, Qty)
+		if not (Ok and type(D) == "number") then return 0 end
+		DepositCache[K] = D
+	end
+	return DepositCache[K]
+end
 local STATUS_COLOR = { early = "|cffffd100", good = "|cff1eff00", ["warming up"] = "|cff9d9d9d", slow = "|cffff8040", flooded = "|cffff8040", falling = "|cffff8040", ["no data"] = "|cff9d9d9d" }
 local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|r" end
 L.StatusText = StatusText

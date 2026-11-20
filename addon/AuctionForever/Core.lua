@@ -15,7 +15,7 @@ Core.MinHours = 1               -- fewer hours of sales watched than this: "warm
 Core.EarlyHours = 6             -- under this many hours of sales, numbers are labeled "early"
 Core.SteadyShare = 0.7          -- share of watched hours with at least one sale
 Core.MinSellThrough = 0.6       -- share of ended listings that sold
-Core.LongSellThrough = 0.9      -- needed before an 8 h or 24 h post is chosen
+Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn this much more than a shorter one
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 1000       -- 10 silver
@@ -214,10 +214,11 @@ end
 -- Highest price that sells MyQty within Hours, never above the ceiling or below Floor.
 -- Candidates: 1c under each listed price, and the ceiling itself when nothing is listed below it.
 -- Returns price, fill hours (or nil when nothing fits).
-function Core.PostPrice(I, MyQty, Hours, Floor, Ladder)
+function Core.PostPrice(I, MyQty, Hours, Floor, Ladder, MaxPrice)
 	Ladder = Ladder or I.ladder
 	local Cap = Core.Ceiling(I)
 	if not Cap then return nil end
+	if MaxPrice then Cap = math.min(Cap, MaxPrice) end
 	Floor = Floor or 1
 	local Best, BestFill
 	local function Try(P)
@@ -233,14 +234,23 @@ end
 
 -- The duration to post for: 2 h unless a longer one earns at least 10% more and the item reliably sells.
 -- Returns hours, index (1/2/3), price, fill hours.
-function Core.ChooseDuration(I, MyQty, Floor, Ladder)
-	local P2, F2 = Core.PostPrice(I, MyQty, 2, Floor, Ladder)
-	local BestH, BestIdx, BestP, BestF = 2, 1, P2, F2
-	if (I.sellThrough or 0) >= Core.LongSellThrough then
-		for Idx = 2, 3 do
-			local H = Core.Durations[Idx]
-			local P, F = Core.PostPrice(I, MyQty, H, Floor, Ladder)
-			if P and (not BestP or P >= BestP * 1.10) then BestH, BestIdx, BestP, BestF = H, Idx, P, F end
+-- Core.Deposit(I, Hours, Qty) -> deposit in copper; set by the UI from the game (nil = not known, counted as 0).
+-- Expected earnings of a post: chance it sells (the item's measured sell-through) x what you get after the cut,
+-- minus the deposit you lose when it doesn't sell.
+local function Expected(I, H, Qty, P)
+	local Chance = math.max(0.05, math.min(1, I.sellThrough or 1))
+	local Dep = Core.Deposit and Core.Deposit(I, H, Qty) or 0
+	return Chance * P * Qty * (1 - Core.Cut) - (1 - Chance) * Dep
+end
+-- The duration that earns the most: a longer one must earn at least LongerGain more than the best shorter one.
+function Core.ChooseDuration(I, MyQty, Floor, Ladder, MaxPrice)
+	local Qty = math.max(1, MyQty or 1)
+	local BestH, BestIdx, BestP, BestF, BestE
+	for Idx, H in ipairs(Core.Durations) do
+		local P, F = Core.PostPrice(I, Qty, H, Floor, Ladder, MaxPrice)
+		if P then
+			local E = Expected(I, H, Qty, P)
+			if not BestE or E >= BestE * Core.LongerGain then BestH, BestIdx, BestP, BestF, BestE = H, Idx, P, F, E end
 		end
 	end
 	if not BestP then return nil end
@@ -355,6 +365,11 @@ function Core.FlipOptions(I, Cap)
 	local Out = {}
 	if Core.Status(I) ~= "good" or not Cap or Cap <= 0 then return Out end
 	local Ladder = I.ladder
+	-- Only the cheapest price levels are kept; if more listings exist above them, the last kept level can't be
+	-- bought out (we wouldn't know what you'd be reselling under).
+	local Known = 0
+	for _, Step in ipairs(Ladder) do Known = Known + Step[2] end
+	local MoreAbove = (I.qty or 0) > Known
 	local J = setmetatable({ perHour = (I.perHour or 0) * Core.PlanRateShare }, { __index = I })
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
@@ -367,7 +382,11 @@ function Core.FlipOptions(I, Cap)
 		if Take < Q then Rest[#Rest + 1] = { P, Q - Take } end
 		for j = Level + 1, #Ladder do Rest[#Rest + 1] = Ladder[j] end
 		local Floor = math.ceil(Cost / Qty / (1 - Core.Cut)) + 1
-		local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest)
+		-- After buying you must be the cheapest: resell 1c under what's left, so other sellers' stock isn't in
+		-- front of yours (they undercut the lowest price all the time).
+		if not Rest[1] and MoreAbove then break end
+		local Under = Rest[1] and (Rest[1][1] - 1) or nil
+		local H, Idx, Price, Fill = Core.ChooseDuration(J, Qty, Floor, Rest, Under)
 		if H then
 			local Profit = math.floor(Price * Qty * (1 - Core.Cut)) - Cost
 			if Profit >= Core.MinFlipProfit then

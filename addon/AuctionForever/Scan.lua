@@ -21,7 +21,8 @@ Scan.MIN_EVENTS = MIN_EVENTS
 local KEEP_HOURS = 72
 local KEEP_OBS = 30
 local WAIT_SHARE = 0.3      -- full scan bar: the first 30% is waiting for the server, the rest reading listings
-local RESEND = { 20, 40 }   -- full scan: ask again after this many seconds of silence
+local RESEND = { 10, 20, 30, 40, 50 } -- full scan: ask again after this many seconds of silence (the server has
+                                     -- answered only right after a repeat, so repeat often)
 local FULL_TIMEOUT = 60
 local ITEM_TIMEOUT = 5      -- item lookup: seconds to wait for one item (loading its details + answer)
 local BROWSE_TIMEOUT = 15   -- quick scan: seconds to wait for the next page

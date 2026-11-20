@@ -639,14 +639,21 @@ ok(L('Replicates') == 1, 'full scan asks the server once')
 X('AdvanceTime(5); AuctionForeverAHPanel._scripts.OnUpdate(AuctionForeverAHPanel, 0.2)')
 bt, bv = str(L('AuctionForeverAHPanel.Bar.Text:GetText()')), L('AuctionForeverAHPanel.Bar:GetValue()')
 ok('%' in bt and 0.1 < bv < 0.3, f'waiting: bar fills with a percentage ({bt}, {bv:.2f})')
-X('AdvanceTime(16)')
-ok(L('Replicates') == 2, 'no answer after 20 s: asked again')
-X('AdvanceTime(20)')
-ok(L('Replicates') == 3, 'no answer after 40 s: asked a third time')
-X('AdvanceTime(25)')
-ok(not L('AF_NS.Scan.Busy()') and 'asked 3 times' in str(L('AF_NS.Scan.LastResult')), 'gives up after 60 s: ' + str(L('AF_NS.Scan.LastResult')))
+X('AdvanceTime(6)')
+ok(L('Replicates') == 2, 'no answer after 10 s: asked again')
+X('AdvanceTime(40)')
+ok(L('Replicates') == 6, 'asks every 10 s up to 50 s: ' + str(L('Replicates')))
+X('AdvanceTime(15)')
+ok(not L('AF_NS.Scan.Busy()') and 'asked 6 times' in str(L('AF_NS.Scan.LastResult')), 'gives up after 60 s: ' + str(L('AF_NS.Scan.LastResult')))
 log = L('AuctionForeverDB.scanlog[#AuctionForeverDB.scanlog]')
-ok(log is not None and log[2] == 'no answer' and log[4] == 3, 'scan log records the failed try')
+ok(log is not None and log[2] == 'no answer' and log[4] == 6, 'scan log records the failed try')
+# Deposit from the game decides between durations (commodities).
+X("""OldDep = C_AuctionHouse.CalculateCommodityDeposit
+  C_AuctionHouse.CalculateCommodityDeposit = function(id, idx, q) return idx * 1000 * q end
+  AuctionForeverData.info[777001] = AuctionForeverData.info[777001] or { 0, 1, 1 }""")
+ok(L('AF_NS.Core.Deposit({ id = 777001 }, 8, 3)') == 6000, 'deposit for 8 h comes from the game')
+ok(L('AF_NS.Core.Deposit({ id = 777002 }, 8, 3)') == 0, 'not a commodity: deposit not known, 0')
+X('C_AuctionHouse.CalculateCommodityDeposit = OldDep')
 # Stack check: an item whose stack size isn't loaded yet is judged by its type (gear doesn't stack), not hidden.
 X("""OldMax, OldInst = C_Item.GetItemMaxStackSizeByID, C_Item.GetItemInfoInstant
   C_Item.GetItemMaxStackSizeByID = function() return nil end""")

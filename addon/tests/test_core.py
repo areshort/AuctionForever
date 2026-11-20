@@ -46,19 +46,39 @@ ok(p == 999 and abs(f - 1.5) < 1e-9, f'2 h post price is the highest that fills 
 p8, f8 = L(f'{C}.PostPrice(MakeItem(), 20, 8)')
 ok(p8 == 1100, f'8 h: up to the ceiling: {p8}')
 ok(L(f'{C}.PostPrice(MakeItem({{hi = 900, med = 900}}), 20, 24)')[0] == 900, 'never above what buyers recently paid')
-# Duration: sellThrough 0.8 < 0.9 -> stays 2 h; with 0.95 -> 8 h (1100 >= 999 * 1.1)
-ok(L(f'{C}.ChooseDuration(MakeItem(), 20)')[0] == 2, 'not reliable enough for longer: 2 h')
-h, idx, price, fill = L(f'{C}.ChooseDuration(MakeItem({{sellThrough = 0.95}}), 20)')
-ok(h == 8 and idx == 2 and price == 1100, f'reliable seller, 10%+ more at 8 h: {h} h at {price}')
+# Duration by expected earnings: chance it sells x price after the cut, minus the deposit lost when it doesn't.
+# 2 h: 999, 8 h: 1100 (10.1% more) -> 8 h even at 80% sell-through (the old rule needed 90%).
+h, idx, price, fill = L(f'{C}.ChooseDuration(MakeItem(), 20)')
+ok(h == 8 and idx == 2 and price == 1100, f'10%+ more at 8 h, 80% sell: {h} h at {price}')
+# A big deposit for 8 h that's lost 20% of the time outweighs the gain: stays 2 h.
+lua.execute(f"{C}.Deposit = function(I, H, Q) return H == 2 and 100 or 20000 end")
+ok(L(f'{C}.ChooseDuration(MakeItem(), 20)')[0] == 2, 'deposit risk outweighs the higher price: 2 h')
+lua.execute(f"{C}.Deposit = nil")
+# Same price at every duration: shortest.
+ok(L(f'{C}.ChooseDuration(MakeItem({{ladder = {{ {{500, 10}} }}, hi = 600, med = 600}}), 5)')[0] == 2, 'no gain from longer: 2 h')
 # Quantity: 2 h at 999 -> room 40*2 - 40 below = 40
 ok(L(f'{C}.PostQuantity(MakeItem(), 100, 2, 999)') == 40, 'post only what sells in time')
 # Budget
 ok(L(f'{C}.Budget(100000)') == 50000, '10g -> 5g budget')
 ok(L(f'{C}.Budget(15000)') == 5000, '1.5g -> 0.5g (keep 1g)')
 ok(L(f'{C}.Budget(8000)') == 0, 'under 1g: nothing')
-# Flip: buy 10 at 5s, resell ~9s99c within 2 h -> profit ~ 10*999*0.95 - 5000 = 4490
-lua.execute('Flip = AuctionForever.Core.Flip(MakeItem(), 500000)')
-ok(L('Flip ~= nil and Flip.buyQty == 10 and Flip.buyUpTo == 500') and L('Flip.profit') >= 1000, f'cheap listing below a gap: flip {L("Flip and Flip.profit")}')
+# Flip options: you must be the cheapest after buying, reselling 1c under what's left.
+# Buy 10 at 5s -> resell 949: floor(949*10*0.95) - 5000 = 4015. Buy those + 30 at 9s 50c -> resell 999:
+# floor(999*40*0.95) - 33500 = 4462 (best).
+lua.execute(f'O = {C}.FlipOptions(MakeItem(), 500000); Flip = {C}.Flip(MakeItem(), 500000)')
+ok(L('O[1].buyQty == 10 and O[1].resell == 949 and O[1].profit == 4015'), f'first option: resell 1c under the next listing ({L("O[1].resell")})')
+ok(L('Flip.buyQty == 40 and Flip.buyUpTo == 950 and Flip.resell == 999 and Flip.profit == 4462'), f'best: buy both cheap levels, resell under 10s ({L("Flip.resell")}, {L("Flip.profit")})')
+# Only the 12 cheapest levels are kept: buying through all of them, with more listings above, isn't a flip
+# (seen with Minor Mana Potion: "resell at 6s 15c" after buying every known level).
+lua.execute(f"Trunc = {C}.FlipOptions(MakeItem({{ ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 300 }}), 500000)")
+ok(L('#Trunc') == 1 and L('Trunc[1].buyQty') == 10, f'more listings above the kept levels: never buys out the last known level ({L("#Trunc")} options)')
+lua.execute(f"All = {C}.FlipOptions(MakeItem({{ ladder = {{ {{500, 10}}, {{950, 30}} }}, qty = 40 }}), 500000)")
+ok(L('#All') == 2, 'every listing known: buying them all is allowed')
+# Medium Leather (real ladder): 20 cheap at 91c, then 207 at 98c. Reselling at 97c doesn't pay; buying the 98c ones
+# too is over budget, and a partly bought level leaves cheaper stock in front of you. No flip.
+lua.execute("""Leather = AuctionForever.Core.Flip(MakeItem({ low = 91, qty = 6204, med = 118, hi = 135, med24 = 118, medAll = 118,
+  perHour = 1826, medHour = 1826, ladder = { {91, 20}, {98, 207}, {99, 14}, {100, 986}, {101, 152}, {102, 437} } }), 14982)""")
+ok(L('Leather == nil'), 'Medium Leather case: buying 1% of the market and posting behind 2000 cheaper units is not a flip')
 # Same cheap listing, but a wall of stock right above it: no flip.
 lua.execute('Wall = AuctionForever.Core.Flip(MakeItem({ ladder = { {500, 10}, {510, 2000} }, qty = 900 }), 500000)')
 ok(L('Wall == nil'), 'cheap listing with lots of stock just above: skipped')
