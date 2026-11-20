@@ -420,9 +420,18 @@ function T.BuyClick()
 	local Budget = UI().FlipBudget()
 	local List = Scan.Listings[E.id] or {}
 	local Best, BestI
+	local Multi
 	for i, A in ipairs(List) do
 		local Unit = A.buyout / math.max(1, A.qty)
-		if Unit <= F.buyUpTo and A.buyout <= Budget and (not Best or Unit < Best.buyout / math.max(1, Best.qty)) then Best, BestI = A, i end
+		if Unit <= F.buyUpTo and A.buyout <= Budget and (not Best or Unit < Best.buyout / math.max(1, Best.qty)) then
+			-- An auction of several items: what PlaceBid takes for it (one item's price or the whole auction's) isn't
+			-- known on Forever, so AF doesn't bid on those; buy them in the Blizzard window.
+			if (A.qty or 1) > 1 then Multi = Multi or A else Best, BestI = A, i end
+		end
+	end
+	if not Best and Multi then
+		SayBuy(string.format("The cheapest listing is one auction of %d at %s each. AF can't buy multi-item auctions yet: buy it in the Blizzard window.", Multi.qty, Core.MoneyColor(math.floor(Multi.buyout / Multi.qty))))
+		return
 	end
 	if not Best then
 		SayBuy("No listing at or under " .. Core.MoneyColor(F.buyUpTo) .. " right now. Re-checking...")

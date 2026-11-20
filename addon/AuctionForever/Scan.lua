@@ -462,11 +462,14 @@ local function ReadItems(id, Key)
 	for j = 1, N do
 		local R = C_AuctionHouse.GetItemSearchResultInfo(Key, j)
 		if R and R.buyoutAmount and R.buyoutAmount > 0 and (R.quantity or 0) > 0 then
-			local P = math.floor(R.buyoutAmount / R.quantity)
+			-- Forever: buyoutAmount is the price of ONE item, also when an auction holds several (the Blizzard list shows
+			-- 34s96 for an auction of 12 patterns that vendor for 35s each). Dividing it by the quantity made those look
+			-- 12x cheaper.
+			local P = R.buyoutAmount
 			local Secs = R.timeLeftSeconds or BAND_SECS[R.timeLeft or 3]
 			Map[P] = (Map[P] or 0) + R.quantity
 			if Secs < 1800 then Exp[P] = (Exp[P] or 0) + R.quantity end
-			if R.auctionID then Rows[#Rows + 1] = { R.auctionID, R.quantity, P, Secs, R.buyoutAmount, R.containsOwnerItem or R.containsAccountItem } end
+			if R.auctionID then Rows[#Rows + 1] = { R.auctionID, R.quantity, P, Secs, P * R.quantity, R.containsOwnerItem or R.containsAccountItem } end
 		end
 	end
 	table.sort(Rows, function(a, b) return a[3] < b[3] end)
@@ -478,6 +481,13 @@ local function ReadItems(id, Key)
 	for _, R in ipairs(Rows) do if not R[6] then Buyable[#Buyable + 1] = { auctionID = R[1], qty = R[2], buyout = R[5] } end end
 	Scan.Listings[id] = Buyable
 	QuickRecord(id, Map, Exp, Auc, Cov, false)
+end
+-- Tests read one item's search results outside a quick scan.
+function Scan.ReadItemsForTest(id, Key)
+	local Old = Q
+	Q = Q or { skipped = 0, done = 0, measured = 0, withSales = 0, soon = 0 }
+	ReadItems(id, Key)
+	Q = Old
 end
 
 local function QuickFinish(Reason)

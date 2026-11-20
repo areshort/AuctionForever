@@ -458,6 +458,23 @@ if real:
     X('Click(AuctionForeverBuyPanel.Buy)')
     c = L('LastCall("PlaceBid")')
     ok(c is not None and c[2] == 77 and c[3] == 380, f'item flip: buys the cheapest listing within the max (auction {c and c[2]} for {c and c[3]})')
+    # Forever: an item search row's buyoutAmount is ONE item's price, also when the auction holds several.
+    X("""RealNISR, RealISRI, RealHFISR = C_AuctionHouse.GetNumItemSearchResults, C_AuctionHouse.GetItemSearchResultInfo, C_AuctionHouse.HasFullItemSearchResults
+      C_AuctionHouse.GetNumItemSearchResults = function() return 2 end
+      C_AuctionHouse.HasFullItemSearchResults = function() return true end
+      C_AuctionHouse.GetItemSearchResultInfo = function(K, j)
+        if j == 1 then return { auctionID = 501, quantity = 12, buyoutAmount = 3496, timeLeftSeconds = 86400 } end
+        return { auctionID = 502, quantity = 6, buyoutAmount = 3498, timeLeftSeconds = 86400 } end
+      AF_NS.Scan.ReadItemsForTest(15732, { itemID = 15732 })
+      C_AuctionHouse.GetNumItemSearchResults, C_AuctionHouse.GetItemSearchResultInfo, C_AuctionHouse.HasFullItemSearchResults = RealNISR, RealISRI, RealHFISR""")
+    fr = L('AuctionForeverDB.fresh.items[15732]')
+    lst = L('AF_NS.Scan.Listings[15732]')
+    ok(fr is not None and fr[1] == 3496 and lst[1].buyout == 3496 * 12 and lst[1].qty == 12,
+       f'item search: buyoutAmount is per item (12 at 34s96 = 34s96 each, not 2s91): low {fr and fr[1]}, listing total {lst and lst[1].buyout}')
+    # An auction of several items: AF doesn't bid on it (PlaceBid's amount for those isn't known on Forever).
+    X('Calls = {}; AF_NS.Scan.Listings[14047] = { { auctionID = 90, qty = 12, buyout = 12 * 300 } }; AF_NS.Trade.SelectBuy(2); Click(AuctionForeverBuyPanel.Buy)')
+    ok(L('LastCall("PlaceBid") == nil') and 'Blizzard window' in str(L('AuctionForeverBuyPanel.Status:GetText()')),
+       'multi-item auction: no bid, says to buy it in the Blizzard window: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     # the resale no longer works on current data (price fell, item not a flip any more): cancelled
     X('ResaleNil = true; Calls = {}; AF_NS.Trade.SelectBuy(1); Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", 26, 260); ResaleNil = nil')
     ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil') and 'resale' in str(L('AuctionForeverBuyPanel.Status:GetText()')).lower(),
