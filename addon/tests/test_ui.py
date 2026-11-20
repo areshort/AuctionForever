@@ -704,6 +704,9 @@ ok(L('AF_NS.Core.MoneyColor(5)') == '|cffeda55f5c|r' and L('AF_NS.Core.MoneyColo
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
 ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
+ok('+' in str(tl[2][1]) and ' each' in str(tl[2][1]), 'Rec Auction shows the profit per item over the vendor: ' + str(tl[2][1]))
+# 30c on the AH, 5c vendor: 30 x 0.95 = 28c after the cut - 5c = +23c
+ok(L('AF_NS.Core.MoneyColor(23)') in str(tl[2][1]), 'profit = AH price after the 5% cut - vendor price (30c -> +23c)')
 ok(len(tl) == 4 and 'Shift' in str(tl[3][0]), 'without Shift: just the three lines and a Shift hint')
 X('IsShiftKeyDown = function() return true end')
 tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]

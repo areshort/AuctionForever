@@ -1022,7 +1022,12 @@ function L.TooltipLines(id)
 	local Target = TargetPrice(I)
 	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" }
 	local R = Core.Recommend(I, V, Target)
-	Lines[#Lines + 1] = { "Rec", R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-" }
+	local RecText = R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-"
+	-- On the AH: what you make per item there after the 5% cut, over what the vendor pays.
+	if R == "Auction" and Target then
+		RecText = RecText .. "  +" .. Core.MoneyColor(math.max(0, math.floor(Target * (1 - Core.Cut)) - V)) .. " each"
+	end
+	Lines[#Lines + 1] = { "Rec", RecText }
 	if I and (I.mySold or I.myExpired) then
 		local Parts = {}
 		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.MoneyColor(I.mySoldValue)) end
