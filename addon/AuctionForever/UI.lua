@@ -22,14 +22,44 @@ end
 
 -- Item helpers ---------------------------------------------------------------------------------------------------
 local Pending = {}
+local function NameCache()
+	AuctionForeverDB = AuctionForeverDB or {}
+	AuctionForeverDB.names = AuctionForeverDB.names or {}
+	return AuctionForeverDB.names
+end
 local function ItemName(id)
 	local Name, _, Quality = C_Item.GetItemInfo(id)
-	if Name then return Name, Quality end
+	local Cache = NameCache()
+	if Name then
+		local C = Cache[id]
+		if not C or C[1] ~= Name or C[2] ~= Quality then Cache[id] = { Name, Quality } end
+		return Name, Quality
+	end
 	if not Pending[id] then
 		Pending[id] = true
 		if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
 	end
-	return "item " .. id, 1
+	local C = Cache[id]
+	if C then return C[1], C[2] end
+	return "|cff808080loading...|r", 1
+end
+-- Ask the server for names the lists will need, a few at a time, so they're ready when the window opens.
+function L.Preload(Ids)
+	local i = 0
+	local function Batch()
+		local Done = 0
+		while i < #Ids and Done < 20 do
+			i = i + 1
+			local id = Ids[i]
+			if not C_Item.GetItemInfo(id) and not Pending[id] then
+				Pending[id] = true
+				if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+				Done = Done + 1
+			end
+		end
+		if i < #Ids then C_Timer.After(0.2, Batch) end
+	end
+	Batch()
 end
 local function Icon(id)
 	local _, _, _, _, Tex = C_Item.GetItemInfoInstant(id)
@@ -87,6 +117,57 @@ function L.FlipRows()
 		end
 	end
 	table.sort(Out, function(a, b) return a.flip.profit > b.flip.profit end)
+	return Out
+end
+
+-- Why the Flip list is empty, in one line.
+function L.FlipEmptyReason()
+	if Core.Budget(GetMoney()) <= 0 then return "No flip budget: you need more than 1 gold." end
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" then return "No auction data yet: scan at the auction house." end
+	local N = {}
+	for id in pairs(D.items) do
+		local S = Core.Status(Core.Info(id))
+		N[S] = (N[S] or 0) + 1
+	end
+	if (N.good or 0) == 0 then
+		return string.format("No flips yet: no item has enough measured sales (%d warming up).\nScan at the auction house (AuctionForever tab), then again 15+ min later.", N["warming up"] or 0)
+	end
+	return string.format("%d steady sellers, but none has a listing cheap enough to\nflip for 10s+ profit right now. Quick Scan for fresh prices.", N.good)
+end
+
+-- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
+function L.QuickList()
+	local Out, Seen = {}, {}
+	local function Add(id, Cap, Count)
+		if Count[1] >= Cap or Seen[id] or #Out >= 45 then return end
+		Seen[id] = true; Out[#Out + 1] = id; Count[1] = Count[1] + 1
+	end
+	local C = { 0 }
+	for _, R in ipairs(L.FlipRows()) do Add(R.id, 15, C) end
+	C = { 0 }
+	local NumSlots = C_Container and C_Container.GetContainerNumSlots
+	if NumSlots then
+		for Bag = 0, 4 do
+			for Slot = 1, NumSlots(Bag) or 0 do
+				local Info = C_Container.GetContainerItemInfo(Bag, Slot)
+				if Info and Info.itemID and not Info.isBound and Core.Info(Info.itemID) then Add(Info.itemID, 15, C) end
+			end
+		end
+	end
+	C = { 0 }
+	for _, R in ipairs(L.FarmRows()) do if R.status == "good" then Add(R.id, 10, C) end end
+	C = { 0 }
+	local D = AuctionForeverData
+	if type(D) == "table" and type(D.items) == "table" then
+		local Warm = {}
+		for id in pairs(D.items) do
+			local I = Core.Info(id)
+			if Core.Status(I) == "warming up" and (I.qty or 0) > 0 and Stacks(id) then Warm[#Warm + 1] = { id, (I.qty or 0) * (Core.Market(I) or 0) } end
+		end
+		table.sort(Warm, function(x, y) return x[2] > y[2] end)
+		for _, W in ipairs(Warm) do Add(W[1], 10, C) end
+	end
 	return Out
 end
 
@@ -275,7 +356,7 @@ function L.Refresh()
 	end
 	Frame.Empty:SetShown(#Data == 0)
 	if #Data == 0 then
-		Frame.Empty:SetText(Tab == 2 and (Core.Budget(GetMoney()) <= 0 and "No flip budget: you need more than 1 gold." or "No flips pass the checks right now.") or "Nothing to show yet.")
+		Frame.Empty:SetText(Tab == 2 and L.FlipEmptyReason() or "Nothing to show yet.")
 	end
 end
 
@@ -447,34 +528,149 @@ function L.Toggle(TabIndex)
 	if Frame:IsShown() then L.Load() else Frame:Show() end
 end
 
--- Scan button on the auction house -------------------------------------------------------------------------------
-local ScanButton
-function L.CreateScanButton()
-	if ScanButton or not AuctionHouseFrame then return end
-	ScanButton = CreateFrame("Button", "AuctionForeverScanButton", AuctionHouseFrame, "UIPanelButtonTemplate")
-	ScanButton:SetSize(150, 22)
-	ScanButton:SetPoint("TOPRIGHT", AuctionHouseFrame, "TOPRIGHT", -30, -1)
-	ScanButton:SetText("AuctionForever Scan")
-	ScanButton:SetScript("OnClick", function() AF.Scan.Start(); L.ScanProgress() end)
-	ScanButton:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:AddLine("AuctionForever Scan")
-		GameTooltip:AddLine("Reads every listing: fresh prices now, and sales measured", 1, 1, 1)
-		GameTooltip:AddLine("against the cloud data or your last scan (15+ min apart).", 1, 1, 1)
-		GameTooltip:Show()
-	end)
-	ScanButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+-- AuctionForever tab in the auction house ----------------------------------------------------------------------
+-- Built without writing to Blizzard's tab list or display modes (that would taint the auction house and get
+-- purchases blocked): our own tab button, owned by our own frame, and a panel laid over the content area that hides
+-- whenever one of the other tabs is clicked.
+local AH = {}
+local function SelectedBlizzTab()
+	local i = AuctionHouseFrame.selectedTab
+	return i and AuctionHouseFrame.Tabs and AuctionHouseFrame.Tabs[i]
 end
-function L.ScanProgress()
-	if not ScanButton then return end
-	if AF.Scan.Busy() then
-		ScanButton:SetText(AF.Scan.Progress and string.format("Scanning %d%%", AF.Scan.Progress * 100) or "Waiting for server...")
-		ScanButton:Disable()
+local function TabRow()
+	-- Every visible tab-like button on the bottom row (Blizzard's and other add-ons'), ours excluded.
+	local Row, Buy = {}, AuctionHouseFrame.BuyTab
+	local Top = Buy and Buy:GetTop()
+	if not Top then return Row end
+	local function Walk(F, Depth)
+		for _, C in ipairs({ F:GetChildren() }) do
+			if C ~= AH.Tab and C ~= AH.Holder and C ~= AH.Panel then
+				if C:IsShown() and C:GetObjectType() == "Button" and C:GetTop()
+					and math.abs(C:GetTop() - Top) < 4 and (C:GetLeft() or 0) >= (Buy:GetLeft() or 0) - 1 then
+					Row[#Row + 1] = C
+				elseif Depth < 2 then Walk(C, Depth + 1) end
+			end
+		end
+	end
+	Walk(AuctionHouseFrame, 0)
+	return Row
+end
+local function PlaceTab()
+	local Buy = AuctionHouseFrame.BuyTab
+	if not (Buy and Buy:GetLeft()) then return end
+	local Right = Buy:GetRight()
+	for _, B in ipairs(TabRow()) do if (B:GetRight() or 0) > Right then Right = B:GetRight() end end
+	AH.Tab:ClearAllPoints()
+	AH.Tab:SetPoint("LEFT", Buy, "LEFT", Right - Buy:GetLeft() - 15, 0)
+end
+function L.ShowAHPanel()
+	AH.Panel:Show()
+	PanelTemplates_SelectTab(AH.Tab)
+	local Sel = SelectedBlizzTab()
+	if Sel then PanelTemplates_DeselectTab(Sel) end
+	L.RefreshAHPanel()
+end
+function L.HideAHPanel()
+	if not (AH.Panel and AH.Panel:IsShown()) then return end
+	AH.Panel:Hide()
+	PanelTemplates_DeselectTab(AH.Tab)
+	local Sel = SelectedBlizzTab()
+	if Sel then PanelTemplates_SelectTab(Sel) end
+end
+local function HookRowButtons()
+	for _, B in ipairs(TabRow()) do
+		if not AH.Hooked[B] then AH.Hooked[B] = true; B:HookScript("OnClick", function() L.HideAHPanel() end) end
 	end
 end
+function L.CreateAHTab()
+	if AH.Tab or not AuctionHouseFrame then return end
+	AH.Hooked = {}
+	AH.Holder = CreateFrame("Frame", nil, AuctionHouseFrame) -- owns the tab, so it isn't added to Blizzard's Tabs
+	AH.Holder:SetSize(1, 1)
+	AH.Holder:SetPoint("TOPLEFT")
+	AH.Tab = CreateFrame("Button", "AuctionForeverAHTab", AH.Holder, "PanelTabButtonTemplate")
+	AH.Tab:SetText("AuctionForever")
+	PanelTemplates_TabResize(AH.Tab, 20, nil, 70)
+	PanelTemplates_DeselectTab(AH.Tab)
+	AH.Tab:SetScript("OnClick", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_CHARACTER_INFO_TAB or 841); L.ShowAHPanel() end)
+	AH.Tab:SetPoint("TOPLEFT", AuctionHouseFrame, "BOTTOMRIGHT", -150, 2)
+
+	local P = CreateFrame("Frame", "AuctionForeverAHPanel", AuctionHouseFrame)
+	AH.Panel = P
+	P:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPLEFT", 4, -58)
+	P:SetPoint("BOTTOMRIGHT", AuctionHouseFrame, "BOTTOMRIGHT", -4, 28)
+	P:SetFrameLevel(AuctionHouseFrame:GetFrameLevel() + 60)
+	P:EnableMouse(true)
+	local Bg = P:CreateTexture(nil, "BACKGROUND")
+	Bg:SetAllPoints()
+	Bg:SetColorTexture(0.06, 0.06, 0.06, 1)
+	local Inset = CreateFrame("Frame", nil, P, "InsetFrameTemplate")
+	Inset:SetAllPoints()
+	P:Hide()
+
+	P.Title = P:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	P.Title:SetPoint("TOPLEFT", 20, -18)
+	P.Title:SetText("AuctionForever")
+	P.Data = P:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	P.Data:SetPoint("TOPLEFT", P.Title, "BOTTOMLEFT", 0, -10)
+	P.Data:SetJustifyH("LEFT")
+	local function Btn(Text, X, Y, W, OnClick, Tip)
+		local B = CreateFrame("Button", nil, P, "UIPanelButtonTemplate")
+		B:SetSize(W, 26); B:SetText(Text); B:SetPoint("TOPLEFT", X, Y); B:SetScript("OnClick", OnClick)
+		B:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(Text)
+			for _, Ln in ipairs(Tip) do GameTooltip:AddLine(Ln, 1, 1, 1, true) end
+			GameTooltip:Show()
+		end)
+		B:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		return B
+	end
+	P.Quick = Btn("Quick Scan", 20, -90, 140, function() AF.Scan.Quick(L.QuickList()); L.RefreshAHPanel() end,
+		{ "Looks up a short list of items one by one: flip candidates, sellable items in your bags, top farm reagents and fast sellers still warming up.",
+		  "Gives fresh prices, and measures sales for any item last looked at 15+ min ago." })
+	P.Full = Btn("Full Scan", 170, -90, 140, function() AF.Scan.Start(); L.RefreshAHPanel() end,
+		{ "Reads every listing in the auction house: fresh prices for everything, and sales measured for every item.",
+		  "The server may allow this only once every 15 min." })
+	P.Open = Btn("Open lists", 320, -90, 140, function() L.Toggle(1) end, { "Opens the AuctionForever window (Farm, Flip and Sessions)." })
+	P.QuickInfo = P:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	P.QuickInfo:SetPoint("TOPLEFT", 20, -124)
+	P.QuickInfo:SetJustifyH("LEFT")
+	P.Result = P:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	P.Result:SetPoint("TOPLEFT", 20, -150)
+	P.Result:SetWidth(740)
+	P.Result:SetJustifyH("LEFT")
+	P.Next = P:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	P.Next:SetPoint("BOTTOMLEFT", 20, 16)
+	P.Next:SetText("Coming next in this tab: the sell queue (prefilled price, amount and duration; Post / Skip) and Buy next for flips.")
+
+	AH.Holder:SetScript("OnShow", function() C_Timer.After(0, function() PlaceTab(); HookRowButtons() end) end)
+	AH.Holder:SetScript("OnHide", function() L.HideAHPanel() end)
+	hooksecurefunc(AuctionHouseFrame, "SetDisplayMode", function() L.HideAHPanel() end)
+	C_Timer.After(0, function() PlaceTab(); HookRowButtons() end)
+end
+function L.RefreshAHPanel()
+	if not (AH.Panel and AH.Panel:IsShown()) then return end
+	local P = AH.Panel
+	local Parts = {}
+	local Age, Watched = Core.DataAge(), Core.HoursWatched() or 0
+	Parts[#Parts + 1] = Age and string.format("Cloud data: %s old, %.1f h of sales measured.", Age < 1 and (math.floor(Age * 60) .. " min") or string.format("%.1f h", Age), Watched) or "Cloud data: none yet (start AuctionForever Sync, then /reload)."
+	local Fresh = AuctionForeverDB and AuctionForeverDB.fresh
+	if Fresh and Fresh.time then Parts[#Parts + 1] = string.format("Your last full scan: %d min ago.", math.floor((time() - Fresh.time) / 60)) end
+	P.Data:SetText(table.concat(Parts, "   "))
+	local Busy = AF.Scan.Busy()
+	P.Quick:SetEnabled(not Busy); P.Full:SetEnabled(not Busy)
+	if not Busy then P.QuickInfo:SetText(string.format("Quick Scan will look up %d items.", #L.QuickList())) end
+	P.Result:SetText(AF.Scan.LastResult or "No scan yet this session.")
+end
+function L.ScanProgress()
+	if not (AH.Panel and AH.Panel:IsShown()) then return end
+	local Pct = AF.Scan.Progress and string.format("%d%%", AF.Scan.Progress * 100) or "waiting for the server..."
+	AH.Panel.Quick:SetEnabled(false); AH.Panel.Full:SetEnabled(false)
+	AH.Panel.QuickInfo:SetText("Scanning: " .. Pct)
+end
 function L.ScanDone()
-	AF.Scan.Progress = nil
-	if ScanButton then ScanButton:SetText("AuctionForever Scan"); ScanButton:Enable() end
+	L.RefreshAHPanel()
 	if Frame and Frame:IsShown() then L.Load() end
 end
 
@@ -576,11 +772,18 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		local S = Session.Current()
 		if S then S.runningSince = nil end -- a clock never runs across logins
 		L.CreateMinimapButton()
+		C_Timer.After(5, function()
+			local Ids = {}
+			for _, R in ipairs(L.FarmRows()) do Ids[#Ids + 1] = R.id end
+			for _, R in ipairs(L.FlipRows()) do Ids[#Ids + 1] = R.id end
+			L.Preload(Ids)
+		end)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 		end
 	elseif Event == "AUCTION_HOUSE_SHOW" then
-		L.CreateScanButton()
+		L.CreateAHTab()
+		L.HideAHPanel()
 	elseif Event == "PLAYER_LOGOUT" then
 		Session.Pause()
 	elseif Event == "CHAT_MSG_LOOT" then
@@ -601,7 +804,7 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
-	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start(); L.ScanProgress() else L.Toggle(1) end
+	if Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick(L.QuickList()) else L.Toggle(1) end
 end
 
 AF.UI = L

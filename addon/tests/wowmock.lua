@@ -86,3 +86,42 @@ function GameTooltip:AddDoubleLine(a, b) table.insert(TipLines, a .. ": " .. b) 
 function print(...) LastPrint = table.concat({ tostring((...)) }, " ") end
 function Methods:Disable() self._disabled = true end
 function Methods:Enable() self._disabled = false end
+
+-- Auction house tab support: children, hooks, positions, tab visuals.
+local OrigCreate = CreateFrame
+function CreateFrame(kind, name, parent, template)
+	local f = OrigCreate(kind, name, parent, template)
+	f._hooks = {}
+	if parent then rawset(parent, "_children", rawget(parent, "_children") or {}); table.insert(rawget(parent, "_children"), f) end
+	return f
+end
+function Methods:GetChildren() return unpack(rawget(self, "_children") or {}) end
+function Methods:GetObjectType() return self._kind end
+function Methods:GetTop() return rawget(self, "_top") end
+function Methods:GetLeft() return rawget(self, "_left") end
+function Methods:GetRight() return rawget(self, "_right") end
+function Methods:GetFrameLevel() return 1 end
+function Methods:SetEnabled(v) self._disabled = not v end
+function Methods:HookScript(k, fn) self._hooks[k] = self._hooks[k] or {}; table.insert(self._hooks[k], fn) end
+function Methods:ClearAllPoints() self._points = {} end
+function Click(f, ...)
+	local s = f._scripts.OnClick
+	if s then s(f, ...) end
+	for _, h in ipairs((f._hooks and f._hooks.OnClick) or {}) do h(f, ...) end
+end
+function hooksecurefunc(t, name, fn)
+	local orig = t[name]
+	t[name] = function(...) local r = orig(...); fn(...); return r end
+end
+function PanelTemplates_SelectTab(t) t._selected = true end
+function PanelTemplates_DeselectTab(t) t._selected = false end
+function PlaySound() end
+SOUNDKIT = {}
+C_Container = {
+	GetContainerNumSlots = function(bag) return bag == 0 and 2 or 0 end,
+	GetContainerItemInfo = function(bag, slot)
+		if bag ~= 0 then return nil end
+		if slot == 1 then return { itemID = 2589, isBound = false } end
+		return { itemID = 999999, isBound = true }
+	end,
+}

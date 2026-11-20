@@ -43,11 +43,16 @@ function Core.MergeScan(I, DataTime)
 	if type(DB) ~= "table" then return I end
 	local id = I.id
 	local Fresh = DB.fresh
-	if type(Fresh) == "table" and Fresh.items and (Fresh.time or 0) > (DataTime or 0) then
+	if type(Fresh) == "table" and Fresh.items then
+		-- Each item carries the time it was last looked at (full or quick scan).
 		local F = Fresh.items[id]
-		if F then I.low, I.qty, I.ladder = F[1], F[2], F[3] or {}
-		else I.low, I.qty, I.ladder = nil, 0, {} end -- nothing listed right now
-		I.fromScan = true
+		if F and (F[4] or Fresh.time or 0) > (DataTime or 0) then
+			I.low, I.qty, I.ladder = F[1], F[2], F[3] or {}
+			I.fromScan, I.scanTime = true, F[4] or Fresh.time
+		elseif not F and (Fresh.time or 0) > (DataTime or 0) then
+			I.low, I.qty, I.ladder = nil, 0, {} -- a full scan newer than the cloud data saw nothing listed
+			I.fromScan, I.scanTime = true, Fresh.time
+		end
 	end
 	local Obs = DB.obs and DB.obs[id]
 	if type(Obs) == "table" and #Obs > 0 then
@@ -83,10 +88,11 @@ end
 -- bought (minus listings that were under 30 min from expiring), a level that partly dropped was bought up to there,
 -- and anything above the first untouched level is cancellations, not sales. New cheaper listings don't matter.
 -- Returns sold qty, sold value, number of levels that dropped, highest price that dropped.
-function Core.CompareLadders(Before, Fresh)
+function Core.CompareLadders(Before, Fresh, Cov)
 	local Sold, Value, Levels, Hi = 0, 0, 0, 0
 	for _, Step in ipairs(Before) do
 		local P, Q, Expiring = Step[1], Step[2], Step[3] or 0
+		if Cov and P > Cov then break end -- the fresh look didn't reach this price
 		local Left = Fresh[P] or 0
 		local Gone = Q - Left
 		if Gone <= 0 then break end
@@ -233,6 +239,33 @@ function Core.ValuePerDay(I)
 	local P = Core.Market(I)
 	if not P or not I.perHour then return 0 end
 	return P * I.perHour * 24
+end
+
+-- Exact comparison when both looks have listing IDs (quick scans): { [auctionID] = { qty, unit price, seconds left } }.
+-- A listing still there with less quantity was partly bought. A listing that's gone was bought unless it was due to
+-- expire, or (commodities) something cheaper from before is still there untouched, which means it was cancelled.
+-- Cov = highest price both looks covered (nil = everything). Returns sold qty, value, events, highest sold price.
+function Core.CompareAuctions(Before, After, GapSecs, Cov, Commodity)
+	local IntactMin
+	for Aid, B in pairs(Before) do
+		local A = After[Aid]
+		if A and A[1] == B[1] and (not IntactMin or B[2] < IntactMin) then IntactMin = B[2] end
+	end
+	local Sold, Value, Events, Hi = 0, 0, 0, 0
+	for Aid, B in pairs(Before) do
+		if not Cov or B[2] <= Cov then
+			local A, Bought = After[Aid], 0
+			if A then Bought = math.max(0, B[1] - A[1])
+			elseif B[3] and B[3] <= GapSecs + 60 then Bought = 0                 -- expired
+			elseif Commodity and IntactMin and B[2] > IntactMin then Bought = 0   -- cancelled
+			else Bought = B[1] end
+			if Bought > 0 then
+				Sold, Value, Events = Sold + Bought, Value + Bought * B[2], Events + 1
+				if B[2] > Hi then Hi = B[2] end
+			end
+		end
+	end
+	return Sold, Value, Events, Hi
 end
 
 -- What a looted item is worth right now if sold: its post price for that amount (after the cut), else vendor value.
