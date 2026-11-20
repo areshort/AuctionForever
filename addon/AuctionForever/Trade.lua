@@ -108,6 +108,42 @@ local function RowList(Parent, X, Y, Width, Count, Cols, OnPick)
 	end
 	return Rows
 end
+local Syncing -- set while a list moves its own bar (not a drag)
+-- A scroll bar beside a row list (shown only when the list is longer than the rows), plus "1-14 of 31" under it.
+local function ScrollBar(Parent, X, Y, OnScroll)
+	local S = CreateFrame("Slider", nil, Parent)
+	S:SetOrientation("VERTICAL")
+	S:SetSize(16, ROWS * ROW_H)
+	S:SetPoint("TOPLEFT", X, Y)
+	S.Bg = S:CreateTexture(nil, "BACKGROUND")
+	S.Bg:SetAllPoints()
+	S.Bg:SetColorTexture(0, 0, 0, 0.45)
+	S:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+	S:SetValueStep(1)
+	if S.SetObeyStepOnDrag then S:SetObeyStepOnDrag(true) end
+	S:SetMinMaxValues(0, 0)
+	S:SetValue(0)
+	S:SetScript("OnValueChanged", function(self, V)
+		if Syncing then return end
+		OnScroll(math.floor(V + 0.5))
+	end)
+	S.Count = Parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	S.Count:SetPoint("TOPRIGHT", S, "BOTTOMRIGHT", 0, -2)
+	return S
+end
+-- Bar range and position for a list of Total rows scrolled to Off; returns the offset kept inside the list.
+local function SyncBar(S, Off, Total)
+	local Max = math.max(0, Total - ROWS)
+	Off = math.max(0, math.min(Max, Off or 0))
+	Syncing = true
+	S:SetMinMaxValues(0, Max)
+	S:SetValue(Off)
+	Syncing = nil
+	S:SetShown(Max > 0)
+	S.Count:SetShown(Max > 0)
+	S.Count:SetText(string.format("%d-%d of %d", Off + 1, math.min(Total, Off + ROWS), Total))
+	return Off
+end
 local function Header(Parent, X, Y, Cols, Names)
 	local CX = X + 24
 	for c, W in ipairs(Cols) do
@@ -170,7 +206,8 @@ SORTS = {
 SORT_LABEL = { plan = "Sort: plan", gold = "Sort: gold needed", profit = "Sort: profit" }
 function T.DrawBuy()
 	if not BuyP then return end
-	local Off = Buy.offset or 0
+	local Off = SyncBar(BuyP.Bar, Buy.offset, #Buy.rows)
+	Buy.offset = Off
 	for i, R in ipairs(BuyP.Rows) do
 		local E = Buy.rows[i + Off]
 		R:SetShown(E ~= nil)
@@ -403,6 +440,7 @@ local function BuildBuy()
 		Buy.offset = math.max(0, math.min(math.max(0, #Buy.rows - ROWS), (Buy.offset or 0) - Delta * 3))
 		T.DrawBuy()
 	end)
+	P.Bar = ScrollBar(P, 678, -60, function(V) Buy.offset = V; T.DrawBuy() end)
 	P.Empty = Text(P, "GameFontDisable", 20, -66, 600) -- one line in the table, where the first row would be
 	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
@@ -535,7 +573,8 @@ end
 
 function T.DrawSell()
 	if not SellP then return end
-	local Off = Sell.offset or 0
+	local Off = SyncBar(SellP.Bar, Sell.offset, #Sell.queue)
+	Sell.offset = Off
 	for i, R in ipairs(SellP.QueueRows) do
 		local G = Sell.queue[i + Off]
 		R:SetShown(G ~= nil)
@@ -723,6 +762,7 @@ local function BuildSell()
 		Sell.offset = math.max(0, math.min(math.max(0, #Sell.queue - ROWS), (Sell.offset or 0) - Delta * 3))
 		T.DrawSell()
 	end)
+	P.Bar = ScrollBar(P, 248, -60, function(V) Sell.offset = V; T.DrawSell() end)
 	P.Empty = Text(P, "GameFontHighlight", 20, -64, 220)
 	P.Empty:SetText("Nothing in your bags sells here for more than the vendor pays.")
 	local X = 270

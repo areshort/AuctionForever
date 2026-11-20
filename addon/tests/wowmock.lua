@@ -123,7 +123,17 @@ function Methods:GetRight() return rawget(self, "_right") end
 function Methods:GetFrameLevel() local P = rawget(self, "_parent") return rawget(self, "_level") or (P and P:GetFrameLevel() + 1) or 1 end
 function Methods:SetEnabled(v) self._disabled = not v end
 function Methods:IsEnabled() return not rawget(self, "_disabled") end
-function Methods:SetValue(v) self._value = v end
+-- Like the game: a slider keeps its value inside its range and fires OnValueChanged when it changes.
+function Methods:SetMinMaxValues(a, b) self._min, self._max = a, b; local V = rawget(self, "_value"); if V then self:SetValue(V) end end
+function Methods:GetMinMaxValues() return rawget(self, "_min"), rawget(self, "_max") end
+function Methods:SetValue(v)
+	local Lo, Hi = rawget(self, "_min"), rawget(self, "_max")
+	if Lo and v < Lo then v = Lo end
+	if Hi and v > Hi then v = Hi end
+	local Old = rawget(self, "_value")
+	self._value = v
+	if Old ~= v and self._scripts.OnValueChanged then self._scripts.OnValueChanged(self, v, true) end
+end
 function Methods:GetValue() return self._value end
 function Methods:HookScript(k, fn) self._hooks[k] = self._hooks[k] or {}; table.insert(self._hooks[k], fn) end
 function Methods:ClearAllPoints() self._points = {} end

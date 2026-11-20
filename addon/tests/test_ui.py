@@ -908,6 +908,27 @@ X('AF_NS.Trade.DrawBuy()')
 bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
 ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
+# Scroll bars: shown when a list is longer than its 14 rows; dragging scrolls; "1-14 of N" under it.
+X('''SB = AF_NS.Trade.Rows(); SBn = #SB
+  for k = 1, 30 do SB[#SB + 1] = SB[((k - 1) % SBn) + 1] end
+  AF_NS.Trade.DrawBuy()''')
+BP = 'AuctionForeverBuyPanel'
+ok(L('SBn') > 0 and L(f'{BP}.Bar:IsShown()') and L(f'{BP}.Bar.Count:GetText()') == f"1-14 of {L('#SB')}", 'AF Buy: long list shows a scroll bar and 1-14 of N: ' + str(L(f'{BP}.Bar.Count:GetText()')))
+X(f'{BP}.Bar:SetValue(5)')
+ok(L(f'{BP}.Rows[1].id') == L('SB[6].id') and L(f'{BP}.Bar.Count:GetText()') == f"6-19 of {L('#SB')}", 'AF Buy: dragging the bar scrolls the list: ' + str(L(f'{BP}.Bar.Count:GetText()')))
+X(f'{BP}._scripts.OnMouseWheel({BP}, -1); AF_NS.Trade.DrawBuy()')
+ok(L(f'{BP}.Bar:GetValue()') == 8, 'AF Buy: the mouse wheel moves the bar too: ' + str(L(f'{BP}.Bar:GetValue()')))
+X('for k = #SB, SBn + 1, -1 do SB[k] = nil end; AF_NS.Trade.DrawBuy()')
+ok(not L(f'{BP}.Bar:IsShown()') and not L(f'{BP}.Bar.Count:IsShown()'), 'AF Buy: short list, no scroll bar')
+X('''SQ = AF_NS.Trade.SellQueue(); SQn = #SQ
+  local Src = SQn > 0 and SQ or AF_NS.Trade.BuildQueue()
+  for k = 1, 20 do SQ[#SQ + 1] = Src[((k - 1) % #Src) + 1] end
+  AF_NS.Trade.DrawSell()''')
+SP = 'AuctionForeverSellPanel'
+ok(L(f'{SP}.Bar:IsShown()') and L(f'{SP}.Bar.Count:GetText()') == f"1-14 of {L('#SQ')}", 'AF Sell: long list shows a scroll bar: ' + str(L(f'{SP}.Bar.Count:GetText()')))
+X(f'{SP}.Bar:SetValue(3)')
+ok(L(f'{SP}.QueueRows[1].id') == L('SQ[4].id'), 'AF Sell: dragging the bar scrolls the list')
+X('for k = #SQ, SQn + 1, -1 do SQ[k] = nil end; AF_NS.Trade.DrawSell()')
 # A listing under the vendor price (any item): an AF Buy row with "vendor it", no sales data needed.
 X('''local Row = {}
   for i, N in ipairs(AuctionForeverData.fields) do
