@@ -210,14 +210,32 @@ function T.DrawBuy()
 	BuyP.Results:SetText(R.sold > 0 and string.format("Your flips, last 7 days: %d sold, profit %s (plan expected %s)",
 		R.sold, Core.Money(R.profit), Core.Money(R.expected)) or "")
 	local P = UI().LastPlan
+	local Line = "Flip Budget: " .. Core.MoneyColor(UI().FlipBudget())
 	if P and P.count > 0 then
-		BuyP.Budget:SetText(string.format("Plan for your %s budget: %d items, cost %s, profit %s", Core.Money(P.budget), P.count, Core.Money(P.cost), Core.Money(P.profit)))
+		Line = Line .. string.format("     Plan: %d items, cost %s, profit %s", P.count, Core.Money(P.cost), Core.Money(P.profit))
+	end
+	BuyP.Budget:SetText(Line)
+	local Min = T.TargetGold()
+	if not Min then
+		BuyP.Target:SetText("Target Budget: |cff808080no targets yet at any gold|r")
+	elseif Min <= GetMoney() then
+		BuyP.Target:SetText("Target Budget: " .. Core.MoneyColor(Min) .. "  |cff1eff00reached|r")
 	else
-		BuyP.Budget:SetText("Flip budget: " .. Core.Money(UI().FlipBudget()))
+		BuyP.Target:SetText("Target Budget: " .. Core.MoneyColor(Min) .. "  |cff808080(gold you need for the first target)|r")
 	end
 end
 
 function T.Rows() return Buy.rows end
+-- The least gold that makes anything a target (the cheapest way in over all listed targets), rounded up to the
+-- silver; nil when nothing is a target at any gold.
+function T.TargetGold()
+	local Min
+	for _, E in ipairs(Buy.rows) do
+		local N = E.minGold or E.need
+		if N and (not Min or N < Min) then Min = N end
+	end
+	return Min and math.ceil(Min / 100) * 100
+end
 -- Put the loaded list in the chosen order (no new work: sorting only reorders what's loaded).
 local function SortRows()
 	local Id = Buy.rows[Buy.sel] and Buy.rows[Buy.sel].id
@@ -356,8 +374,9 @@ local function BuildBuy()
 		end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
-	P.Budget = Text(P, "GameFontHighlightSmall", 300, -12)
-	P.Results = Text(P, "GameFontHighlightSmall", 300, -26)
+	P.Budget = Text(P, "GameFontHighlightSmall", 300, -6)
+	P.Target = Text(P, "GameFontHighlightSmall", 300, -19)
+	P.Results = Text(P, "GameFontHighlightSmall", 300, -32)
 	Header(P, 14, -44, BUY_COLS, { "Item", "Buy", "Resell at", "Profit", "Status" })
 	P.Rows = RowList(P, 14, -60, 660, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end)
 	P:EnableMouseWheel(true)

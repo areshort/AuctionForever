@@ -852,6 +852,12 @@ X('AF_NS.Trade.SetBuySort("profit")')
 pr = [L(f'AF_NS.Trade.Rows()[{i}].best.profit') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
 ok(pr == sorted(pr, reverse=True), f'sort by profit: highest first {pr}')
 X('AF_NS.Trade.SetBuySort("plan")')
+tg = L('AF_NS.Trade.TargetGold()')
+mins = [L(f'AF_NS.Trade.Rows()[{i}].minGold') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+ok(tg is not None and tg == -(-min(m for m in mins if m is not None) // 100) * 100, f'target budget = least gold any target needs, rounded up to the silver: {tg}')
+X('AF_NS.Trade.DrawBuy()')
+bt, tt = str(L('AuctionForeverBuyPanel.Budget:GetText()')), str(L('AuctionForeverBuyPanel.Target:GetText()'))
+ok(bt.startswith('Flip Budget: |cff') and 'Target Budget: |cff' in tt, f'header rows: colored Flip Budget, then Target Budget ({bt!r} / {tt!r})')
 ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
 # Buying uses the budget for this visit: after spending 12s, the budget drops by 12s (not to half of the new gold).
 X('Gold = Gold - 1200')

@@ -211,6 +211,8 @@ function L.FlipTargets()
 	local function Consider(R, O)
 		local Need = Core.GoldFor(O.cost)
 		if not R.start or Need < R.need then R.start, R.need = O, Need end
+		-- Gold for the cheapest way in by the gold rule (need is lowered to your gold when you can buy it anyway).
+		if not R.minGold or Need < R.minGold then R.minGold = Need end
 		if not R.best or O.profit > R.best.profit then R.best, R.bestNeed = O, Need end
 	end
 	for _, Cd in ipairs(Cands) do
