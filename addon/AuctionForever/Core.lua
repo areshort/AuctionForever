@@ -18,7 +18,7 @@ Core.MinSellThrough = 0.6       -- share of ended listings that sold
 Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn this much more than a shorter one
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
-Core.MinFlipProfit = 1000       -- 10 silver: the most a flip must earn (see MinFlipProfitFor)
+Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
 Core.FlipMaxHours = 4           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 Core.UndercutHaircut = 0.9      -- flips plan their profit at this share of the resale price (expect an undercut or two)
@@ -505,7 +505,7 @@ end
 -- The least expected profit a flip must make: 4% of the flip budget, between 2s and 10s, so a small budget still
 -- gets small, safe flips.
 function Core.MinFlipProfitFor(Budget)
-	return math.max(200, math.min(Core.MinFlipProfit, math.floor(0.04 * (Budget or 0))))
+	return Core.MinFlipProfit -- the same at any budget (MinFlipReturn guards against bad estimates)
 end
 
 -- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer), and

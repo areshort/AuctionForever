@@ -114,8 +114,8 @@ ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big'))
 # Too little history: needs 4 h of data before it's a flip target (selling is unaffected).
 ok(L(f'#{C}.FlipOptions(MakeItem({{ hoursSeen = 3 }}), 500000)') == 0 and L(f'{C}.FlipStatus(MakeItem({{ hoursSeen = 3 }}))') == 'warming up'
    and L(f'{C}.Status(MakeItem({{ hoursSeen = 3 }}))') == 'good', 'under 4 h of data: no flip (still fine to sell)')
-# Minimum profit grows with the budget: 4% of it, between 2s and 10s.
-ok(L(f'{C}.MinFlipProfitFor(4848)') == 200 and L(f'{C}.MinFlipProfitFor(15000)') == 600 and L(f'{C}.MinFlipProfitFor(100000)') == 1000,
+# Minimum profit: a fixed 5s at any budget.
+ok(L(f'{C}.MinFlipProfitFor(4848)') == 500 and L(f'{C}.MinFlipProfitFor(15000)') == 500 and L(f'{C}.MinFlipProfitFor(100000)') == 500,
    f"minimum flip profit: {L(f'{C}.MinFlipProfitFor(4848)')}, {L(f'{C}.MinFlipProfitFor(15000)')}, {L(f'{C}.MinFlipProfitFor(100000)')}")
 lua.execute(f"Small = {C}.FlipOptions(MakeItem({{ sellThrough = 1, ladder = {{ {{500, 1}}, {{1000, 100}} }}, qty = 101 }}), 600, 300)")
 ok(L('#Small') == 1 and L('Small[1].profit') == 354, f"a 3s 54c flip counts when your minimum is 3s ({L('#Small')}, {L('Small[1] and Small[1].profit')})")
