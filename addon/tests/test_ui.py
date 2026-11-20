@@ -499,8 +499,9 @@ if real:
       ItemLocation = { CreateFromBagAndSlot = function(self, b, s) return { bag = b, slot = s, itemID = Bag[s] and Bag[s].itemID } end }
       RealGI = C_Item.GetItemInfo
       -- 14047's vendor price pinned low: with the real data file its shipped vendor price (4s) is above the 4s fresh
-      -- listing set up for AF Buy, which (rightly) made it a vendor item and dropped it from the queue.
-      C_Item.GetItemInfo = function(id) local r = { RealGI(id) }; if id == 10620 then r[11] = 100000000 elseif id == 14047 then r[11] = 10 end return unpack(r, 1, 11) end
+      -- listing set up for AF Buy, which (rightly) made it a vendor item and dropped it from the queue. Linen (2589)
+      -- the same: on a day its market is only a few times its vendor price, Rec is Vendor.
+      C_Item.GetItemInfo = function(id) local r = { RealGI(id) }; if id == 10620 then r[11] = 100000000 elseif id == 14047 then r[11] = 10 elseif id == 2589 then r[11] = 3 end return unpack(r, 1, 11) end
       LookupSpy = {}
       Click(AuctionForeverSellTab)""")
     ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
@@ -945,29 +946,45 @@ pr = [L(f'AF_NS.Trade.Rows()[{i}].best.profit') for i in range(1, int(L('#AF_NS.
 ok(pr == sorted(pr, reverse=True), f'sort by profit: highest first {pr}')
 # AF Buy column headers sort: highest first, again lowest first, a third time back to the plan's order.
 X('AF_NS.Trade.SetBuySort("plan")')
-def buyheads(): return [L(f'AuctionForeverBuyPanel.Headers[{i}].Label:GetText()') for i in range(1, 6)]
+def buyheads(): return [L(f'AuctionForeverBuyPanel.Headers[{i}].Label:GetText()') for i in range(1, 8) if L(f'rawget(AuctionForeverBuyPanel.Headers, {i})')]
 def buyrows(): return [L(f'AF_NS.Trade.Rows()[{i}]') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
-ok(L('rawget(AuctionForeverBuyPanel, "Sort") == nil') and buyheads() == ['Item', 'Buy', 'Resell at', 'Profit', 'Status'],
+ok(L('rawget(AuctionForeverBuyPanel, "Sort") == nil') and buyheads() == ['Item', 'Tier', 'Buy', 'Resell at', 'Profit', 'Status'],
    f'AF Buy: no sort button, plain headers in plan order: {buyheads()}')
-X('AF_NS.Trade.DrawBuy(); Click(AuctionForeverBuyPanel.Headers[4])')
+X('AF_NS.Trade.DrawBuy(); Click(AuctionForeverBuyPanel.Headers[5])')
 pr = [(r.best or r.flip).profit for r in buyrows()]
-ok(pr == sorted(pr, reverse=True) and buyheads()[3] == 'Profit v' and L('(AF_NS.Trade.BuySort())') == 'profit', f'click Profit: highest first, marked {pr}')
-X('Click(AuctionForeverBuyPanel.Headers[4])')
+ok(pr == sorted(pr, reverse=True) and buyheads()[4] == 'Profit v' and L('(AF_NS.Trade.BuySort())') == 'profit', f'click Profit: highest first, marked {pr}')
+X('Click(AuctionForeverBuyPanel.Headers[5])')
 pr = [(r.best or r.flip).profit for r in buyrows()]
-ok(pr == sorted(pr) and buyheads()[3] == 'Profit ^', 'click Profit again: lowest first')
-X('Click(AuctionForeverBuyPanel.Headers[4])')
-ok(L('(AF_NS.Trade.BuySort())') == 'plan' and L('AF_NS.Trade.Rows()[1].plan') == True and buyheads()[3] == 'Profit', 'third click: back to the plan order')
-X('Click(AuctionForeverBuyPanel.Headers[2])')
+ok(pr == sorted(pr) and buyheads()[4] == 'Profit ^', 'click Profit again: lowest first')
+X('Click(AuctionForeverBuyPanel.Headers[5])')
+ok(L('(AF_NS.Trade.BuySort())') == 'plan' and L('AF_NS.Trade.Rows()[1].plan') == True and buyheads()[4] == 'Profit', 'third click: back to the plan order')
+X('Click(AuctionForeverBuyPanel.Headers[3])')
 co = [r.flip.cost for r in buyrows()]
-ok(co == sorted(co, reverse=True) and buyheads()[1] == 'Buy v', f'click Buy: by cost {co}')
+ok(co == sorted(co, reverse=True) and buyheads()[2] == 'Buy v', f'click Buy: by cost {co}')
+X('Click(AuctionForeverBuyPanel.Headers[2])')
+rt = [L(f'AF_NS.Trade.Return(AF_NS.Trade.Rows()[{i}].flip)') or -1 for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
+ok(rt == sorted(rt, reverse=True) and buyheads()[1] == 'Tier v', f'click Tier: by expected return {rt}')
+X('Click(AuctionForeverBuyPanel.Headers[2]); Click(AuctionForeverBuyPanel.Headers[2])')
+ok(L('(AF_NS.Trade.BuySort())') == 'plan', 'Tier: third click back to the plan order')
 X('Click(AuctionForeverBuyPanel.Headers[1])')
 nm = [str(L(f'AF_NS.UI.SortName({r.id})')) for r in buyrows()]
 ok(nm == sorted(nm, reverse=True) and buyheads()[0] == 'Item v', 'click Item: by name')
-X('Click(AuctionForeverBuyPanel.Headers[5])')
+X('Click(AuctionForeverBuyPanel.Headers[6])')
 nd = [r.need or 0 for r in buyrows()]
-ok(nd == sorted(nd, reverse=True) and buyheads()[4] == 'Status v', 'click Status: by gold needed')
-X('AF_NS.Trade.DrawBuy(); AuctionForeverBuyPanel:GetScript("OnMouseWheel")(AuctionForeverBuyPanel, -1); Click(AuctionForeverBuyPanel.Headers[3])')
+ok(nd == sorted(nd, reverse=True) and buyheads()[5] == 'Status v', 'click Status: by gold needed')
+X('AF_NS.Trade.DrawBuy(); AuctionForeverBuyPanel:GetScript("OnMouseWheel")(AuctionForeverBuyPanel, -1); Click(AuctionForeverBuyPanel.Headers[4])')
 ok(L('AuctionForeverBuyPanel.Bar:GetValue()') == 0, 'a re-sort scrolls back to the top')
+# Tier bands on expected return (profit / cost): 35% = S, 34.9% = A, 25% = A, 24.9% = B, 15% = B, 10% = C, 9.9% = D;
+# vendor buys graded the same way; no profit or no cost = D.
+bands = [L(f'(AF_NS.Trade.Tier({{ cost = 1000, profit = {p} }}))') for p in (350, 349, 250, 249, 150, 149, 100, 99, 0, -50)]
+ok(bands == ['S', 'A', 'A', 'B', 'B', 'C', 'C', 'D', 'D', 'D'], f'AF Buy tier bands: {bands}')
+ok(L('(AF_NS.Trade.Tier({ cost = 1000, profit = 400, vendor = true }))') == 'S' and L('(AF_NS.Trade.Tier({ cost = 0, profit = 5 }))') == 'D'
+   and L('(AF_NS.Trade.Tier(nil))') == 'D', 'vendor buys graded on profit / cost; no cost = D')
+ok(L('AF_NS.Trade.TierLine({ cost = 1000, profit = 280 })') == '|cff1eff00Tier A|r: 28% expected return', 'tier line: "Tier A: 28% expected return"')
+X('AF_NS.Trade.SetBuySort("plan"); AF_NS.Trade.SelectBuy(1)')
+det = str(L('AuctionForeverBuyPanel.Detail:GetText()'))
+tc = str(L('AuctionForeverBuyPanel.Rows[1].Cells[2]:GetText()'))
+ok('expected return' in det.split(chr(10))[0] and tc.endswith('|r') and tc[10:11] in 'SABCD', f'AF Buy row shows its tier ({tc}) and the detail line says why: {det.split(chr(10))[0]}')
 X('AF_NS.Trade.SetBuySort("plan")')
 tg = L('AF_NS.Trade.TargetGold()')
 mins = [L(f'AF_NS.Trade.Rows()[{i}].minGold') for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
@@ -981,7 +998,7 @@ ok(dp is not None and dp[1] == 'BOTTOMLEFT' and L('AuctionForeverBuyPanel.Detail
    'AF Buy detail text sits on top of the buttons (long text grows upward)')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
-cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[2]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))
+cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[3]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[5]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))
       for i in range(1, min(14, int(L('#AF_NS.Trade.Rows()'))) + 1)]
 coin = str(L('AF_NS.Core.MoneyColor(1)')).split('1c')[0]
 ok(len(cr) > 0 and all(coin in str(b) and coin in str(p) for b, p, _ in cr), f'AF Buy amounts in coin colors ({cr[0][0]!r} / {cr[0][1]!r})')
@@ -1140,13 +1157,13 @@ X("""SavedData, SavedDB, SavedVer = AuctionForeverData, AuctionForeverDB, AF_NS.
 gr = L('GatherRows')
 gids = [gr[i].id for i in range(1, len(gr) + 1)]
 ok(880100 not in gids and 2589 in gids and 2996 in gids and 118 in gids and len(gids) == 24, f'Gather: every item class except gear ({len(gids)} rows)')
-vals = [gr[i].value for i in range(1, len(gr) + 1)]
-ok(vals == sorted(vals, reverse=True), 'Gather: best gold a day first')
+vals = [gr[i].expected for i in range(1, len(gr) + 1)]
+ok(vals == sorted(vals, reverse=True), 'Gather: best expected each first')
 ok(L('ComputeInfoCalls') == 0, f'working out both lists asks the game for no item info (no server flood): {L("ComputeInfoCalls")} calls')
 r = [gr[i] for i in range(1, len(gr) + 1) if gr[i].id == 2589][0]
-# Linen: 100c x 0.97 x 0.95 = 92.15, minus the deposit lost on unsold posts (2 h: 10c x 3/24 x 2 = 2c -> 1c minimum... see
-# EstimatedDeposit) x 0.1/0.9; share = 40 / (40 + 40) = 0.5 -> 480 a day.
-ok(abs(r.perDay - 480) < 0.01 and 90 < r.net < 92.2, f'Gather row: net each after cut and deposits, your share of sales ({r.net:.2f}, {r.perDay:.0f}/day)')
+# Linen: AF Sell's price for one (cheapest listing 100c, nothing cheaper) after the cut; 90% sell rate; the market's
+# 40 an hour = 960 a day.
+ok(abs(r.salesDay - 960) < 0.01 and r.rate == 0.9 and r.net > 0 and r.expected < r.net, f'Gather row: net each, sell rate, expected each, market sales ({r.net:.2f}, {r.expected:.2f}, {r.salesDay:.0f}/day)')
 cr = L('CraftRows')
 cids = [(cr[i].id, cr[i].spell) for i in range(1, len(cr) + 1)]
 ok((2996, 2963) in cids and (118, 1244431) in cids, f'Craft: recipes for items in the data (all professions while unknown): {cids}')
@@ -1154,51 +1171,63 @@ ok(L('AF_NS.UI.ProfessionsKnown') is False and not L('AF_NS.UI.CraftFiltered'), 
 
 # The window: Gather view, columns, scroll bar, controls, honest per-day label.
 X('AF_NS.UI.FarmView = "gather"; AF_NS.UI.Toggle(1); if not AuctionForeverFrame:IsShown() then AF_NS.UI.Toggle(1) end')
-def heads(): return [L(f'AuctionForeverFrame.Headers[{i}].Label:GetText()') for i in range(1, 7)]
+def heads(): return [L(f'AuctionForeverFrame.Headers[{i}].Label:GetText()') for i in range(1, 9)]
 def shown(field):
     rows = L('AF_NS.UI.ShownRows()')
     return [rows[i][field] for i in range(1, len(rows) + 1)]
-ok(heads() == ['Item', 'Gold each', 'Sells/day*', 'Gold/day* v', 'Your gold/hr', 'Status'], f'Gather columns, sorted by gold a day (marked): {heads()}')
-ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'market room' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
-   'per-day numbers labelled as market room: ' + str(L('AuctionForeverFrame.FarmBar.Note:GetText()')))
+ok(heads() == ['Item', 'Tier', 'Net each', 'Sell rate', 'Expected each v', 'Sales/day', 'Your gold/hr', 'Status'], f'Gather columns, sorted by expected each (marked): {heads()}')
+ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'sell rate' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')) and 'market room' not in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
+   'note explains expected: ' + str(L('AuctionForeverFrame.FarmBar.Note:GetText()')))
+# Tiers in the list: 24 rows -> S = 3 (top 10%), A = 5, B = 7, C = 5, D = 4, in expected order.
+tiers = [L(f'AF_NS.UI.ShownRows()[{i}].tier') for i in range(1, 25)]
+ok(tiers == ['S'] * 3 + ['A'] * 5 + ['B'] * 7 + ['C'] * 5 + ['D'] * 4, f'tiers by percentile of expected each: {"".join(tiers)}')
+ok(L('AuctionForeverFrame.List') and L('(function() for _, f in ipairs(AllFramesForTest) do if f._text == "|cffa335eeS|r" then return true end end end)()'),
+   'tier S shown in purple')
 ok(L('AuctionForeverFrame.Bar:IsShown()') and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24', 'scroll bar with "1-14 of 24"')
 ok(not L('AuctionForeverFrame.FarmBar.Gather:IsEnabled()') and L('AuctionForeverFrame.FarmBar.Craft:IsEnabled()') and not L('AuctionForeverFrame.FarmBar.Prof:IsShown()'),
    'Gather selected: its button greyed, no professions button')
 X('AuctionForeverFrame.List:GetScript("OnMouseWheel")(AuctionForeverFrame.List, -1)')
 ok(L('AuctionForeverFrame.Bar.Count:GetText()') == '4-17 of 24', 'mouse wheel scrolls and moves the bar: ' + str(L('AuctionForeverFrame.Bar.Count:GetText()')))
-v = shown('value')
-ok(v == sorted(v, reverse=True), 'default order: gold a day (gold each x sells a day), highest first')
+v = shown('expected')
+ok(v == sorted(v, reverse=True), 'default order: expected each (net each x sell rate - deposit lost), highest first')
 ok(L('rawget(AuctionForeverFrame.FarmBar, "Sort") == nil'), 'no sort button: the column headers sort')
 # Click a header: that column, highest first, back to the top; again: lowest first.
-X('Click(AuctionForeverFrame.Headers[2])')
-n = shown('net')
-ok(n == sorted(n, reverse=True) and heads()[1] == 'Gold each v' and heads()[3] == 'Gold/day*' and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24',
-   f'header click: gold each, highest first, marked, scrolled to the top ({heads()[1]})')
-X('Click(AuctionForeverFrame.Headers[2])')
-n = shown('net')
-ok(n == sorted(n) and heads()[1] == 'Gold each ^', 'same header again: lowest first')
 X('Click(AuctionForeverFrame.Headers[3])')
-pdv = shown('perDay')
-ok(pdv == sorted(pdv, reverse=True) and heads()[2] == 'Sells/day* v', 'sell rate column sorts (your share a day)')
+n = shown('net')
+ok(n == sorted(n, reverse=True) and heads()[2] == 'Net each v' and heads()[4] == 'Expected each' and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24',
+   f'header click: net each, highest first, marked, scrolled to the top ({heads()[2]})')
+X('Click(AuctionForeverFrame.Headers[3])')
+n = shown('net')
+ok(n == sorted(n) and heads()[2] == 'Net each ^', 'same header again: lowest first')
+X('Click(AuctionForeverFrame.Headers[6])')
+sd = shown('salesDay')
+ok(sd == sorted(sd, reverse=True) and heads()[5] == 'Sales/day v', 'market sales a day column sorts')
+X('Click(AuctionForeverFrame.Headers[2])')
+sc = shown('score')
+ok(sc == sorted(sc, reverse=True) and heads()[1] == 'Tier v' and L('AF_NS.UI.ShownRows()[1].tier') == 'S', 'Tier column sorts by the score (expected)')
+X('Click(AuctionForeverFrame.Headers[2])')
+ok(L('AF_NS.UI.ShownRows()[1].tier') == 'D' and heads()[1] == 'Tier ^', 'Tier again: lowest first')
 X('Click(AuctionForeverFrame.Headers[1])')
 names = [str(L(f'AF_NS.UI.SortName({i})')) for i in shown('id')]
 ok(names == sorted(names, reverse=True), 'item name column sorts (by saved/shipped names, no server calls)')
 ok(2589 in [L(f'AF_NS.UI.QuickList()')[i] for i in range(1, len(L('AF_NS.UI.QuickList()')) + 1)], 'the quick scan list is not affected by the shown order')
 X('Click(AuctionForeverFrame.FarmBar.Craft); Click(AuctionForeverFrame.FarmBar.Gather)')
 ok(heads()[0] == 'Item v', 'the sort is remembered per list for the session')
-X('Click(AuctionForeverFrame.Headers[4])')
-ok(heads()[3] == 'Gold/day* v', 'back to gold a day')
+X('Click(AuctionForeverFrame.Headers[5])')
+ok(heads()[4] == 'Expected each v', 'back to expected each')
 
 # Craft view.
 X('Click(AuctionForeverFrame.FarmBar.Craft)')
-ok(heads() == ['Item', 'Profession', 'Profit/craft', 'Crafts/day*', 'Gold/day* v', 'Added/day*'], f'Craft columns, sorted by gold a day: {heads()}')
-X('Click(AuctionForeverFrame.Headers[6])')
-ad = shown('addedPerDay')
-ok(heads()[5] == 'Added/day* v' and ad == sorted(ad, reverse=True), 'craft header click: value added a day, highest first')
-X('Click(AuctionForeverFrame.Headers[3])')
+ok(heads() == ['Item', 'Tier', 'Profession', 'Profit/craft', 'Sell rate', 'Expected/craft v', 'Sales/day', 'Added each'],
+   f'Craft columns, sorted by expected a craft: {heads()}')
+ok(all(L(f'AF_NS.UI.ShownRows()[{i}].tier') in ('S', 'A', 'B', 'C', 'D') for i in range(1, int(L('#AF_NS.UI.ShownRows()')) + 1)), 'craft rows have tiers')
+X('Click(AuctionForeverFrame.Headers[8])')
+ad = [x for x in shown('added')]
+ok(heads()[7] == 'Added each v' and ad == sorted(ad, reverse=True), 'craft header click: value added, highest first')
+X('Click(AuctionForeverFrame.Headers[4])')
 pc = [x for x in shown('profit') if x is not None]
-ok(heads()[2] == 'Profit/craft v' and pc == sorted(pc, reverse=True), 'craft header click: profit a craft')
-X('Click(AuctionForeverFrame.Headers[5])')
+ok(heads()[3] == 'Profit/craft v' and pc == sorted(pc, reverse=True), 'craft header click: profit a craft')
+X('Click(AuctionForeverFrame.Headers[6])')
 ok(L('AuctionForeverFrame.FarmBar.Prof:IsShown()') and 'not known' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
    'professions unknown: says all are shown')
 X('''Tip = { lines = {} }
@@ -1206,8 +1235,19 @@ X('''Tip = { lines = {} }
   for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
 tip = [str(v) for v in L('Tip.lines').values()]
 ok(any('First Aid' in t for t in tip) and any('yellow 55' in t for t in tip) and any('(vendor)' in t for t in tip)
-   and any('(AH)' in t for t in tip) and any('market room' in t for t in tip) and all(all(ord(c) < 128 for c in t) for t in tip),
-   f'craft tooltip: profession, ranks, reagents with source, market room note (ASCII): {tip}')
+   and any('(AH)' in t for t in tip) and any('Sell rate 90%' in t for t in tip) and any('Tier ' in t and 'by expected earnings (price x sell rate); sells 120/day' in t for t in tip)
+   and all(all(ord(c) < 128 for c in t) for t in tip),
+   f'craft tooltip: profession, ranks, reagents with source, sell rate, tier line (ASCII): {tip}')
+# Tier boundaries on hand-made scores: 10 rows -> S = top 10% (1), A = 10-30% (2), B = 30-60% (3), C = 60-80% (2), D = 2.
+X('''TR = {} for k = 1, 10 do TR[k] = { id = k, s = 11 - k } end
+  AF_NS.UI.MarkTiers(TR, function(R) return R.s end)''')
+ok([L(f'TR[{k}].tier') for k in range(1, 11)] == ['S', 'A', 'A', 'B', 'B', 'B', 'C', 'C', 'D', 'D'], 'tier boundaries: 10 / 30 / 60 / 80 percent')
+X('''TR = { { id = 1, s = 50 }, { id = 2, s = 50 }, { id = 3, s = 0 }, { id = 4, s = -5 }, { id = 5 } }
+  AF_NS.UI.MarkTiers(TR, function(R) return R.s end)''')
+ok([L(f'TR[{k}].tier') for k in range(1, 6)] == ['S', 'S', 'D', 'D', 'D'], 'equal scores share a tier; expected 0 or less (or none) is always D')
+rates = [L(f'AF_NS.UI.RateText({r})') for r in ('0.95', '0.7', '0.69', '0.4', '0.39', '0.2', '0.19', 'nil')]
+ok(rates == ['|cff1eff0095%|r', '|cff1eff0070%|r', '|cffffd10069%|r', '|cffffd10040%|r', '|cffff404039%|r', '|cffff404020%|r', '|cff9d9d9d19%|r', '|cff9d9d9d?|r'],
+   f'sell rate colors: green 70+, yellow 40+, red 20+, gray below, "?" unknown (no purple): {rates}')
 # Your professions from the game: Tailoring known (rank 75), First Aid known through its second skill line.
 X('''C_SkillInfo = { GetSkillLineInfoByID = function(id)
     if id == 197 then return { skillID = 197, rank = 75 } end

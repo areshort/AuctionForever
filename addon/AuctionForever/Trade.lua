@@ -16,7 +16,7 @@ local ITEM = Status and Status.Item or 1
 local BuyP, SellP           -- panels
 local Buy = { rows = {}, sel = 1, sort = "plan", asc = false }
 local SORTS
-local BUY_KEYS = { "name", "cost", "resell", "profit", "gold" } -- one per AF Buy column
+local BUY_KEYS = { "name", "tier", "cost", "resell", "profit", "gold" } -- one per AF Buy column
 local Sell = { queue = {}, idx = 1 }
 
 -- Helpers -----------------------------------------------------------------------------------------------------
@@ -183,7 +183,7 @@ local function RecordBuy(id, Qty, Total, Resell)
 end
 
 -- AF Buy ------------------------------------------------------------------------------------------------------
-local BUY_COLS = { 200, 150, 90, 90, 80 }
+local BUY_COLS = { 170, 32, 150, 90, 90, 80 }
 
 local function SayBuy(Msg) if BuyP then BuyP.Status:SetText(Msg or "") end end
 local function ResetPurchase(Cancel)
@@ -211,14 +211,34 @@ end
 local function GoldText(N) return Core.MoneyColor(math.ceil(N / 100) * 100) end
 -- Sort keys (plan: FlipRows order - the plan in buying order, then what fits now, then by gold needed). Each gives
 -- the value a column shows; the list sorts highest first, or lowest first when Buy.asc.
+-- Tier of a flip by its expected return (expected profit / cost; the profit already counts the sell chance, unsold
+-- units and lost deposits; vendor buys the same way): S 35%+, A 25%+, B 15%+, C 10%+, D below (or no profit).
+T.BUY_TIERS = { { "S", 0.35, "|cffa335ee" }, { "A", 0.25, "|cff1eff00" }, { "B", 0.15, "|cffffd100" }, { "C", 0.10, "|cffff4040" } }
+function T.Return(F)
+	if not (F and F.cost and F.cost > 0 and F.profit) then return nil end
+	return F.profit / F.cost
+end
+function T.Tier(F)
+	local R = T.Return(F)
+	if R and F.profit > 0 then
+		for _, B in ipairs(T.BUY_TIERS) do if R >= B[2] - 1e-9 then return B[1], B[3], R end end
+	end
+	return "D", "|cff9d9d9d", R
+end
+local function TierLine(F)
+	local Tier, Color, R = T.Tier(F)
+	return string.format("%sTier %s|r: %d%% expected return", Color, Tier, math.floor((R or 0) * 100 + 0.5))
+end
+T.TierLine = TierLine
 SORTS = {
+	tier = function(E) return T.Return(Shown(E)) end,
 	name = function(E) return UI().SortName(E.id) end,
 	cost = function(E) return Shown(E).cost end,
 	resell = function(E) return Shown(E).resell end,
 	profit = function(E) return (E.best or E.flip).profit end,
 	gold = function(E) return E.need or 0 end,
 }
-local BUY_NAMES = { "Item", "Buy", "Resell at", "Profit", "Status" }
+local BUY_NAMES = { "Item", "Tier", "Buy", "Resell at", "Profit", "Status" }
 function T.DrawBuy()
 	if not BuyP then return end
 	local Off = SyncBar(BuyP.Bar, Buy.offset, #Buy.rows)
@@ -232,15 +252,17 @@ function T.DrawBuy()
 			local Need = ShownNeed(E)
 			R.Icon:SetTexture(UI().Icon(E.id))
 			R.Cells[1]:SetText(NameText(E.id))
-			R.Cells[2]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
-			R.Cells[3]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
-			R.Cells[4]:SetText(Core.MoneyColor(F.profit))
+			local Tier, TColor = T.Tier(F)
+			R.Cells[2]:SetText(TColor .. Tier .. "|r")
+			R.Cells[3]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
+			R.Cells[4]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
+			R.Cells[5]:SetText(Core.MoneyColor(F.profit))
 			local Status
 			if Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
 			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
 			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
-			R.Cells[5]:SetText(Status)
+			R.Cells[6]:SetText(Status)
 			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ItemName(E.id) .. "|r") end -- not affordable yet: name greyed
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
@@ -258,12 +280,12 @@ function T.DrawBuy()
 	if E then
 		local F = Shown(E)
 		if F.vendor then
-			BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
-				NameText(E.id), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyColor(F.profit),
+			BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
+				NameText(E.id), TierLine(F), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyColor(F.profit),
 				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.MoneyColor(Core.MinKeep) .. " always kept).") or ""))
 		else
-		BuyP.Detail:SetText(string.format("%s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
-			NameText(E.id), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyColor(F.profit),
+		BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
+			NameText(E.id), TierLine(F), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyColor(F.profit),
 			F.slow and ("\n" .. "|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r") or "",
 			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.MoneyColor(Core.MinKeep) .. "; one item may use only part of it).") or ""))
 		end

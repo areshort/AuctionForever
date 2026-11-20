@@ -143,23 +143,31 @@ def near(a, b, tol=0.01):
     return a is not None and abs(a - b) <= tol
 
 
-# Raw item: price = min(med24, medAll) x 0.97 = 970; net = 970 x 0.95 - deposit 20 x (1 - 0.5) / 0.5 = 901.5
-# share = 10 / (10 + 10) = 0.5; 10/h x 24 x 0.5 = 120 a day; value = 108180.
+# Raw item: post price = min(med24, medAll) x 0.97 = 970 for 2 h (steady seller); net when sold = 970 x 0.95 = 921.5.
+# Sell rate 50%, deposit 20: expected = 0.5 x 921.5 - 0.5 x 20 = 450.75. Market sales = 10/h x 24 = 240 a day.
 X('MakeItem(1, { dep = 20 })')
 R = L(f'{F}.Raw(1, Env())')
-ok(near(R.net, 901.5) and near(R.share, 0.5) and near(R.perDay, 120) and near(R.value, 108180) and R.excluded is None,
-   f'raw farm: net {R.net}, share {R.share}, {R.perDay}/day, value {R.value} (want 901.5, 0.5, 120, 108180)')
-ok(near(R.price, 1000), 'raw farm: price shows the market (lower median) before the undercut haircut')
+ok(near(R.net, 921.5) and near(R.expected, 450.75) and R.rate == 0.5 and near(R.salesDay, 240) and R.excluded is None and R.hours == 2,
+   f'raw farm: net {R.net}, expected {R.expected}, rate {R.rate}, sales {R.salesDay}/day (want 921.5, 450.75, 0.5, 240)')
+ok(near(R.price, 970), 'raw farm: price = the post price (fallback: market x 0.97)')
 X('MakeItem(2, {})')
 R = L(f'{F}.Raw(2, Env())')
-ok(near(R.net, 970 * 0.95) and 'deposit not known (counted as 0)' in [R.notes[i] for i in range(1, len(R.notes) + 1)],
+ok(near(R.expected, 0.5 * 921.5) and 'deposit not known (counted as 0)' in [R.notes[i] for i in range(1, len(R.notes) + 1)],
    'deposit unknown: counted as 0 and said so')
-ok(near(L(f'{F}.Share(MakeItem(3, {{ newHour = 0 }}))'), 0.75), 'nobody else listing: share capped at 75%')
-ok(near(L(f'{F}.Share(MakeItem(3, {{ newHour = 1000 }}))'), 0.10), 'crowded market: share floor 10%')
-ok(near(L(f'(function() local I = MakeItem(3) I.newHour = nil return {F}.Share(I) end)()'), 0.5),
-   'competition not measured: share 50%')
-X('MakeItem(4, { status = "flooded" })')
-ok(near(L(f'{F}.Raw(4, Env()).perDay'), 60), 'flooded: sales a day halved')
+R = L(f'(function() local I = MakeItem(3) I.sellThrough = nil return {F}.Raw(3, Env()) end)()')
+ok(R.rate is None and R.chance == 0.5 and near(R.expected, 0.5 * 921.5) and any('not measured' in R.notes[i] for i in range(1, len(R.notes) + 1)),
+   'sell rate not measured: shown as unknown, counted as 50%, said so')
+# WorthIt rule: a high price that rarely sells ranks below a lower price that always sells.
+X('''MakeItem(10, { med = 100000, med24 = 100000, medAll = 100000, sellThrough = 0.02, dep = 3000 })
+  MakeItem(11, { med = 3000, med24 = 3000, medAll = 3000, sellThrough = 1 })''')
+In, Out = L(f'{F}.RawFarms({{10, 11}}, Env())')
+ok(In[1].id == 11 and In[2].id == 10 and In[2].net > In[1].net,
+   f'rarely sells: ranked below a cheaper item that always sells ({In[1].expected:.0f} vs {In[2].expected:.0f})')
+# AF's own post price and duration when given (the UI passes AF Sell's suggestion); the deposit is for that duration.
+X('''Asked = {}
+  E5 = Env({ postPrice = function(I, S) return 500, 8 end, deposit = function(I, H, Q) Asked[#Asked + 1] = H return 10 end })''')
+R = L(f'{F}.Raw(1, E5)')
+ok(R.price == 500 and R.hours == 8 and L('Asked[1]') == 8 and near(R.expected, 0.5 * 475 - 0.5 * 10), 'post price and duration from Env.postPrice')
 X('MakeItem(5, { status = "warming up" })')
 R = L(f'{F}.Raw(5, Env())')
 ok(R.excluded and 'warming up' in R.excluded, 'warming up: excluded with the reason')
@@ -168,63 +176,48 @@ ok(R.excluded == 'no auction data', 'no data: excluded')
 X('MakeItem(6, { perHour = 0 })')
 ok(L(f'{F}.Raw(6, Env()).excluded') == 'no sales', 'no sales: excluded')
 X('MakeItem(7, { dep = 100000 })')
-ok(L(f'{F}.Raw(7, Env()).excluded') is not None, 'deposits lost bigger than the price: excluded')
-# Your gather rate caps the day: 2/h x 2 h = 4 units; gold an hour = net x 2.
-R = L(f'{F}.Raw(1, Env({{ rate = function() return 2 end, farmHours = 2 }}))')
-ok(near(R.perDay, 4) and near(R.value, 4 * 901.5) and near(R.goldPerHour, 2 * 901.5), 'known gather rate caps units a day; gold per hour')
-X('MakeItem(8, { med = 5000, med24 = 5000, medAll = 5000, dep = 20 })')
-X('MakeItem(9, { med = 100, med24 = 100, medAll = 100, perHour = 100, newHour = 0 })')
-In, Out = L(f'{F}.RawFarms({{1, 5, 8, 9, 999}}, Env())')
-ok(len(In) == 3 and In[1].id == 8 and In[2].id == 9 and In[3].id == 1 and len(Out) == 2,
-   'RawFarms: ranked by gold a day, excluded ones listed apart')
-
-# Crafts. Product 100: 5000 each, 1/h, newHour 1 -> 12 a day; net 5000 x 0.97 x 0.95 = 4607.5.
-# Recipe: 2 x reagent 200 (AH) + 1 x 300 (vendor, 100c). A day's mats = 24 x 200 from the ladder: 10 at 1000 + 14 at
-# 1500 = 31000 -> 1291.67 each; cost 2683.33; profit 1924.17 a craft, 23090 a day.
-# Reagent 200 sold instead: 1200 x 0.97 x 0.95 = 1105.8 each -> mats 2211.6; added 2295.9; self 4507.5.
-X('''MakeItem(100, { med = 5000, med24 = 5000, medAll = 5000, perHour = 1, newHour = 1, sellThrough = 1 })
-MakeItem(200, { med = 1200, med24 = 1200, medAll = 1200, hi = 1300, ladder = { {1000, 10}, {1500, 100} } })
-Rec = { 5001, 171, 50, 1, { 200, 2, 300, 1 }, 0, 60, 80 }
-E1 = Env({ vendor = { [300] = 100 }, recipes = { [100] = { Rec } } })''')
-R = L(f'{F}.Craft(100, Rec, E1)')
-ok(near(R.net, 4607.5) and near(R.crafts, 12), f'craft: product nets {R.net}, {R.crafts} crafts a day (want 4607.5, 12)')
-ok(near(R.cost, 2683.333, 0.01) and near(R.profit, 1924.167, 0.01) and near(R.profitPerDay, 23090, 0.1),
-   f'buy mats: cost {R.cost}, profit {R.profit}, a day {R.profitPerDay} (want 2683.33, 1924.17, 23090)')
-ok(near(R.matsValue, 2211.6) and near(R.added, 2295.9) and near(R.self, 4507.5) and near(R.addedPerDay, 2295.9 * 12),
-   f'gather yourself: mats worth {R.matsValue}, added {R.added}, self {R.self} (want 2211.6, 2295.9, 4507.5)')
-ok(R.reagents[2].source == 'vendor' and R.reagents[1].source == 'ah' and R.skillName == 'Alchemy', 'reagent sources and profession name')
-# Cooldown: 2 days -> half a craft a day.
-R = L(f'{F}.Craft(100, {{ 5002, 171, 50, 1, {{ 200, 2 }}, 0, 60, 80, 172800, 310 }}, E1)')
-ok(near(R.crafts, 0.5) and near(R.profitPerDay, R.profit * 0.5) and any('cooldown 48 h' in R.notes[i] for i in range(1, len(R.notes) + 1)),
-   'cooldown caps crafts a day and is noted')
-# Few mats on the AH: only 4 of reagent 201 listed (2 a craft) -> 2 crafts a day for buy mats.
-X('MakeItem(201, { med = 100, med24 = 100, medAll = 100, hi = 100, ladder = { {100, 4} } })')
-R = L(f'{F}.Craft(100, {{ 5003, 171, 50, 1, {{ 201, 2 }}, 0, 60, 80 }}, E1)')
-ok(near(R.buyCrafts, 2) and near(R.crafts, 12), 'mats listed on the AH cap buy-mats crafts (not the gather-yourself ones)')
-# A reagent nobody sells: buy mats excluded with the reason; value added counts it at 0 and says so.
-R = L(f'{F}.Craft(100, {{ 5004, 171, 50, 1, {{ 200, 1, 777, 1 }}, 0, 60, 80 }}, E1)')
-ok(R.buyExcluded == 'no price for reagent 777' and R.profit is None and near(R.added, 4607.5 - 1105.8)
-   and any('777' in R.notes[i] for i in range(1, len(R.notes) + 1)), 'unpriced reagent: buy mats excluded, value added counts it at 0')
-# Mats dearer than the product.
-R = L(f'{F}.Craft(100, {{ 5005, 171, 50, 1, {{ 200, 5 }}, 0, 60, 80 }}, E1)')
-ok(R.buyExcluded == 'mats cost more than the product nets', 'losing craft: excluded from buy mats')
-X('MakeItem(101, { status = "warming up" })')
-R = L(f'{F}.Craft(101, Rec, E1)')
-ok(R.excluded and R.excluded.startswith('product: warming up'), 'product warming up: craft excluded with the reason')
-# Deposit duration follows the status: 2 h posts for steady sellers, 24 h for the rest (like Core.Recommend).
+ok('expected loss' in str(L(f'{F}.Raw(7, Env()).excluded')), 'deposits lost bigger than the sales: excluded')
+# Deposit duration of the fallback post price follows the status: 2 h for steady sellers, 24 h for the rest.
 X('''HoursAsked = {}
   E3 = Env({ deposit = function(I, H, Q) HoursAsked[#HoursAsked + 1] = H return 0 end })
   MakeItem(300, {}); MakeItem(301, { status = "slow" })
   AF_NS.Farm.Raw(300, E3); AF_NS.Farm.Raw(301, E3)''')
 ok(list(L('HoursAsked').values()) == [2, 24], f'deposit for 2 h posts on steady sellers, 24 h otherwise: {list(L("HoursAsked").values())}')
-# A mat that nets less on the AH than a vendor pays (big deposits lost): valued at the vendor price; a mat with no AH
+
+# Crafts. Product 100 posts at 5000 x 0.97 = 4850, nets 4607.5 when sold, always sells (rate 1), no deposit data.
+# Recipe: 2 x reagent 200 (AH ladder: 2 at 1000) + 1 x 300 (vendor, 100c): cost 2100; profit = expected = 2507.5.
+# Reagent 200 posted instead: 1200 x 0.97 x 0.95 = 1105.8, rate 50% -> 552.9 each; mats 1105.8; added 3401.7; self 4507.5.
+X('''MakeItem(100, { med = 5000, med24 = 5000, medAll = 5000, perHour = 1, newHour = 1, sellThrough = 1 })
+MakeItem(200, { med = 1200, med24 = 1200, medAll = 1200, hi = 1300, ladder = { {1000, 10}, {1500, 100} } })
+Rec = { 5001, 171, 50, 1, { 200, 2, 300, 1 }, 0, 60, 80 }
+E1 = Env({ vendor = { [300] = 100 }, recipes = { [100] = { Rec } } })''')
+R = L(f'{F}.Craft(100, Rec, E1)')
+ok(near(R.net, 4607.5) and near(R.sale, 4607.5) and R.rate == 1 and near(R.salesDay, 24), f'craft: product nets {R.net}, sells 24 a day')
+ok(near(R.cost, 2100) and near(R.profit, 2507.5) and near(R.expected, 2507.5), f'buy mats: cost {R.cost}, profit {R.profit}, expected {R.expected}')
+ok(near(R.matsValue, 1105.8) and near(R.added, 3401.7) and near(R.self, 4507.5),
+   f'gather yourself: mats worth {R.matsValue} (sell-rate weighted), added {R.added}, self {R.self} (want 1105.8, 3401.7, 4507.5)')
+ok(R.reagents[2].source == 'vendor' and R.reagents[1].source == 'ah' and R.skillName == 'Alchemy', 'reagent sources and profession name')
+# A product that sells half the time, 100c deposit: sale = 0.5 x 4607.5 - 0.5 x 100 = 2253.75; expected 153.75.
+X('MakeItem(103, { med = 5000, med24 = 5000, medAll = 5000, perHour = 1, sellThrough = 0.5, dep = 100 })')
+R = L(f'{F}.Craft(103, Rec, E1)')
+ok(near(R.profit, 2507.5) and near(R.sale, 2253.75) and near(R.expected, 153.75), f'expected/craft weighted by the product sell rate ({R.expected})')
+R = L(f'{F}.Craft(100, {{ 5002, 171, 50, 1, {{ 200, 2 }}, 0, 60, 80, 172800, 310 }}, E1)')
+ok(any('cooldown 48 h' in R.notes[i] for i in range(1, len(R.notes) + 1)), 'cooldown noted')
+R = L(f'{F}.Craft(100, {{ 5004, 171, 50, 1, {{ 200, 1, 777, 1 }}, 0, 60, 80 }}, E1)')
+ok(R.buyExcluded == 'no price for reagent 777' and R.profit is None and near(R.added, 4607.5 - 552.9)
+   and any('777' in R.notes[i] for i in range(1, len(R.notes) + 1)), 'unpriced reagent: buy mats excluded, value added counts it at 0')
+R = L(f'{F}.Craft(100, {{ 5005, 171, 50, 1, {{ 200, 5 }}, 0, 60, 80 }}, E1)')
+ok(R.buyExcluded == 'expected loss buying the mats', 'losing craft: excluded from buy mats')
+X('MakeItem(101, { status = "warming up" })')
+R = L(f'{F}.Craft(101, Rec, E1)')
+ok(R.excluded and R.excluded.startswith('product: warming up'), 'product warming up: craft excluded with the reason')
+# A mat that earns less posted than a vendor pays (big deposits lost): valued at the vendor price; a mat with no AH
 # data but a vendor price: the vendor price (not 0).
 X('''MakeItem(400, { med = 1000, med24 = 1000, medAll = 1000, sellThrough = 0.1, dep = 3000 })
   E4 = Env({ vendor = {}, vendorSell = function(id) if id == 400 then return 250 elseif id == 401 then return 40 end end })''')
 R = L(f'{F}.Craft(100, {{ 5007, 171, 50, 1, {{ 400, 1, 401, 2 }}, 0, 60, 80 }}, E4)')
 ok(near(R.matsValue, 250 + 80) and R.reagents[1].sell == 250 and R.reagents[2].sell == 40 and R.buyExcluded,
-   f'mats sold instead: the better of AH net and vendor price ({R.matsValue}); unlisted mat priced at the vendor')
-# A product a vendor pays more for than the AH nets: valued at the vendor price, and said so.
+   f'mats sold instead: the better of expected and vendor price ({R.matsValue}); unlisted mat priced at the vendor')
 X('MakeItem(402, { med = 100, med24 = 100, medAll = 100, perHour = 1, newHour = 1, sellThrough = 1 })')
 R = L(f'{F}.Craft(402, {{ 5008, 171, 50, 1, {{ 200, 1 }}, 0, 60, 80 }}, Env({{ vendorSell = function(id) return id == 402 and 5000 or nil end }}))')
 ok(R.net == 5000 and any('vendor' in R.notes[i] for i in range(1, len(R.notes) + 1)), 'product: vendor price used when it beats the AH, noted')
@@ -233,8 +226,8 @@ X('''E2 = Env({ vendor = { [300] = 100 }, recipes = { [100] = { Rec, { 5005, 171
   [101] = { Rec }, [102] = { { 5006, 164, 1, 1, { 200, 1 }, 0, 1, 2 } } } })
 MakeItem(102, { med = 3000, med24 = 3000, medAll = 3000, perHour = 1, newHour = 1, sellThrough = 1 })''')
 Buy, Added, All = L(f'{F}.Crafts(E2)')
-ok(len(All) == 4 and len(Buy) == 2 and Buy[1].spell == 5001 and Buy[2].spell == 5006, 'Crafts: buy-mats ranked by profit a day, losers left out')
-ok(len(Added) == 2 and Added[1].addedPerDay >= Added[2].addedPerDay, 'Crafts: value-added ranking')
+ok(len(All) == 4 and len(Buy) == 2 and Buy[1].spell == 5001 and Buy[2].spell == 5006, 'Crafts: buy-mats ranked by expected a craft, losers left out')
+ok(len(Added) >= 2 and Added[1].added >= Added[2].added, 'Crafts: value-added ranking')
 Buy, Added, All = L(f'{F}.Crafts(E2, function(R) return R.skill == 164 end)')
 ok(len(All) == 1 and All[1].spell == 5006, 'Crafts: filter (e.g. your professions)')
 
@@ -244,7 +237,7 @@ X('''AuctionForeverData = { time = os.time(), hours = 24, fields = { "low", "qty
   "medHour", "hoursSeen", "hoursWithSales", "sales", "sellThrough", "qtyDayAgo", "newHour", "lows", "lowHi24", "ladder" },
   items = { [2589] = { 90, 100, 100, 110, 100, 100, 20, 20, 24, 24, 400, 0.9, 100, 10, nil, nil, { {90, 100} } } } }''')
 R = L(f'{F}.Raw(2589)')
-ok(R.status == 'good' and R.excluded is None and near(R.perDay, 20 * 24 * (20 / 30)), f'uses Core.Info/Core.Status by default (status {R.status})')
+ok(R.status == 'good' and R.excluded is None and near(R.salesDay, 480) and R.rate == 0.9, f'uses Core.Info/Core.Status by default (status {R.status})')
 Buy, Added, All = L(f'{F}.Crafts()')
 ok(len(All) > 1000 and len(Buy) == 0, 'Crafts() over the shipped AF_Recipes runs (no product data here, so nothing ranks)')
 

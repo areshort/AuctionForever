@@ -1,17 +1,17 @@
--- AuctionForever farm and craft values: what you would actually net per day from farming an item and selling it,
--- and what each craft in AF_Recipes (Recipes.lua) earns when you buy the mats or gather them yourself.
+-- AuctionForever farm and craft values: what one item (or one craft) is expected to earn when you post it, weighted
+-- by how often it actually sells. A high price that rarely sells isn't worth farming: expected = what you get when it
+-- sells x the sell rate (sold / (sold + expired)) - the deposit lost when it doesn't.
 -- Pure Lua (no game calls) so it can be tested offline. All money is in copper.
 --
 -- Every function takes an Env table so the numbers can come from anywhere:
---   Env.info(id)          -> item numbers like Core.Info (med, med24, medAll, low, qty, perHour, newHour, sellThrough,
---                            ladder, ...) or nil when the item has no auction data. Default: AF.Core.Info.
+--   Env.info(id)          -> item numbers like Core.Info (med, med24, medAll, low, perHour, sellThrough, ladder, ...) or
+--                            nil when the item has no auction data. Default: AF.Core.Info.
 --   Env.status(I)         -> "good", "early", "slow", "flooded", "falling", "warming up", "no data". Default: AF.Core.Status.
+--   Env.postPrice(I, S)   -> the price and duration (hours) AF would post one at. Default: Farm.PostPrice.
 --   Env.deposit(I, H, Q)  -> deposit in copper for Q units posted for H hours, or nil when not known. Default: AF.Core.Deposit.
 --   Env.vendor            -> { [item] = vendor price per unit } for reagents vendors sell. Default: AF_RecipeVendor.
 --   Env.vendorSell(id)    -> what a vendor pays for one (copper), or nil when not known. Used when that beats the AH.
 --   Env.recipes           -> AF_Recipes.  Env.skills -> AF_RecipeSkills.
---   Env.rate(id)          -> units an hour YOU gather of an item (e.g. from AF Sessions), or nil when not known.
---   Env.farmHours         -> hours a day you farm (with rate: caps the units a day at what you can gather). Default 2.
 local _, AF = ...
 AF = AF or AuctionForever or {}
 
@@ -19,23 +19,13 @@ local Farm = {}
 AF.Farm = Farm
 
 Farm.Cut = 0.05          -- auction house cut
-Farm.Haircut = 0.97      -- sale price planned 3% under the market price (being undercut now and then)
--- Your share of an item's sales when you farm it and keep posting. Buyers take the cheapest listing first and sellers
--- keep undercutting each other, so the sales go roughly to whoever keeps stock at the front, in proportion to how much
--- each side brings. The others bring newHour units an hour, the buyers take perHour; when you bring at least what the
--- market takes, your part is about perHour / (perHour + newHour). newHour counts every new listing, reposts of
--- expired or undercut stock too, so it overstates competition; MinShare keeps a crowded market from going to zero
--- (you still sell whenever you're the cheapest), MaxShare keeps it cautious (Core.PlanRateShare) when nobody competes.
-Farm.MinShare = 0.10
-Farm.MaxShare = 0.75
-Farm.UnknownShare = 0.50 -- new listings not measured yet
-Farm.FloodPenalty = 0.5  -- flooded (more listed than a day of sales): you also have the stock in front to clear
--- Duration used for the deposit lost on posts that don't sell: 2 h for steady sellers (AF Sell posts those short),
--- 24 h for the rest (like Core.Recommend).
+Farm.Haircut = 0.97      -- fallback post price: 3% under the market price (being undercut now and then)
+-- Fallback duration for the deposit lost on posts that don't sell: 2 h for steady sellers, 24 h for the rest.
 Farm.SteadyHours = 2
 Farm.PostHours = 24
+-- Sell rate used when it isn't measured yet (no posts seen ending): a cautious coin flip, shown as "?".
+Farm.UnknownRate = 0.5
 Farm.MinChance = 0.05
-Farm.FarmHours = 2       -- hours a day of farming assumed when your gather rate is known
 
 local function Default(Env)
 	Env = Env or {}
@@ -43,19 +33,18 @@ local function Default(Env)
 	return {
 		info = Env.info or (Core and Core.Info) or function() return nil end,
 		status = Env.status or (Core and Core.Status) or Farm.Status,
+		postPrice = Env.postPrice or Farm.PostPrice,
 		deposit = Env.deposit or (Core and Core.Deposit),
 		vendor = Env.vendor or AF_RecipeVendor or {},
 		recipes = Env.recipes or AF_Recipes or {},
 		skills = Env.skills or AF_RecipeSkills or {},
-		rate = Env.rate,
 		vendorSell = Env.vendorSell,
-		farmHours = Env.farmHours or Farm.FarmHours,
 		cache = {},
 	}
 end
 Farm.Env = Default
 
--- Fallback status when Core isn't loaded (tests): enough sales and not flooded/falling.
+-- Fallback status when Core isn't loaded (tests): sells, not flooded or falling.
 function Farm.Status(I)
 	if not I then return "no data" end
 	if (I.perHour or 0) <= 0 then return "slow" end
@@ -64,75 +53,69 @@ function Farm.Status(I)
 	return "good"
 end
 
--- Share of the item's sales you can expect (see Farm.MinShare above).
-function Farm.Share(I)
-	local P, N = I.perHour or 0, I.newHour
-	if P <= 0 then return 0 end
-	if not N then return Farm.UnknownShare end
-	return math.max(Farm.MinShare, math.min(Farm.MaxShare, P / (P + N)))
-end
-
--- Price a unit sells for: the lower of the last-day and the longer median sold (so a falling price counts at its new
--- level), else the cheapest listing; planned at Haircut.
+-- Market price planned for a sale: the lower of the last-day and the longer median sold (a falling price counts at
+-- its new level), else the cheapest listing; at Haircut.
 function Farm.SalePrice(I)
 	local A, B = I.med24 or I.med, I.medAll or I.med
 	local P = (A and B) and math.min(A, B) or A or B or I.low
 	if not P then return nil end
 	return P * Farm.Haircut
 end
-
--- What one sold unit nets you: sale price after the AH cut, minus the deposits lost on posts that don't sell (with a
--- sell-through of 60%, every sold unit carries 0.4/0.6 of a lost deposit). S = the item's status (picks the post
--- duration). Returns net, deposit known (bool).
-function Farm.NetUnit(I, E, S)
-	local P = Farm.SalePrice(I)
-	if not P then return nil end
-	local Ch = math.max(Farm.MinChance, math.min(1, I.sellThrough or 1))
-	local H = (S == "good" or S == "early") and Farm.SteadyHours or Farm.PostHours
-	local Dep = E and E.deposit and E.deposit(I, H, 1)
-	local Known = type(Dep) == "number"
-	return P * (1 - Farm.Cut) - (Known and Dep or 0) * (1 - Ch) / Ch, Known
+-- Fallback post price and duration (the UI passes AF Sell's own suggestion).
+function Farm.PostPrice(I, S)
+	return Farm.SalePrice(I), (S == "good" or S == "early") and Farm.SteadyHours or Farm.PostHours
 end
 
--- Units a day you can expect to sell: the market's sales x your share (halved when flooded).
-function Farm.SalesPerDay(I, S)
-	local U = (I.perHour or 0) * 24 * Farm.Share(I)
-	if S == "flooded" then U = U * Farm.FloodPenalty end
-	return U
+-- Sell rate: measured sell-through, or nil when not known. Chance: the rate used (UnknownRate when not known).
+function Farm.SellRate(I)
+	local R = I and I.sellThrough
+	if type(R) ~= "number" then return nil, Farm.UnknownRate end
+	return R, math.max(Farm.MinChance, math.min(1, R))
+end
+
+-- Expected result of posting Qty units: chance x (price after the cut) - (1 - chance) x the deposit lost.
+-- Returns expected, net when sold (after the cut), chance, rate (nil = not measured), hours, price, deposit known.
+function Farm.Expected(I, S, E, Qty)
+	Qty = Qty or 1
+	local P, H = E.postPrice(I, S)
+	if not P then return nil end
+	local Rate, Ch = Farm.SellRate(I)
+	local Dep = E.deposit and E.deposit(I, H, Qty)
+	local Known = type(Dep) == "number"
+	local Net = P * (1 - Farm.Cut) * Qty
+	return Ch * Net - (1 - Ch) * (Known and Dep or 0), Net, Ch, Rate, H, P, Known
 end
 
 local EXCLUDE = { ["no data"] = "no auction data", ["warming up"] = "warming up: too few sales seen yet" }
+local function StatusNotes(Row, S, I, Prefix)
+	Prefix = Prefix or ""
+	if S == "flooded" then Row.notes[#Row.notes + 1] = Prefix .. "flooded: more listed than a day of sales" end
+	if S == "falling" then Row.notes[#Row.notes + 1] = Prefix .. "price falling" end
+	if S == "slow" then Row.notes[#Row.notes + 1] = Prefix .. "slow: sells in bursts" end
+	if S == "early" then Row.notes[#Row.notes + 1] = Prefix .. "early: few hours of sales" end
+	if not Farm.SellRate(I) then
+		Row.notes[#Row.notes + 1] = string.format("%ssell rate not measured yet: counted as %d%%", Prefix, Farm.UnknownRate * 100)
+	end
+end
 
--- One item's farm value. Row: id, status, price (market), net (per unit after cut and deposits), share, perDay (units
--- you can sell a day), value (copper a day), crafted (it has a recipe), notes, excluded (reason, nil when it ranks).
--- Without your gather rate, value is what the market lets you sell a day (the most farming it can pay for); with
--- Env.rate it is capped at what you gather in Env.farmHours, and goldPerHour = net x your rate (capped by sales).
+-- One item. Row: id, status, price (AF's post price), hours, net (per unit sold, after the cut), rate (sell-through,
+-- nil = not measured), chance (rate used), expected (per unit posted), salesDay (market units sold a day), crafted
+-- (it has a recipe), notes, excluded (reason, nil when it ranks).
 function Farm.Raw(id, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	local I = E.info(id)
 	local S = E.status(I)
 	local Row = { id = id, status = S, notes = {} }
 	if not I or EXCLUDE[S] then Row.excluded = EXCLUDE[S] or "no auction data" return Row end
-	local Net, DepKnown = Farm.NetUnit(I, E, S)
-	if not Net then Row.excluded = "no price" return Row end
-	Row.price, Row.net, Row.share = Farm.SalePrice(I) / Farm.Haircut, Net, Farm.Share(I)
-	Row.perDay = Farm.SalesPerDay(I, S)
+	local Exp, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, 1)
+	if not Exp then Row.excluded = "no price" return Row end
+	Row.expected, Row.net, Row.chance, Row.rate, Row.hours, Row.price = Exp, Net, Ch, Rate, H, P
+	Row.salesDay = (I.perHour or 0) * 24
 	Row.crafted = E.recipes[id] ~= nil
-	if Row.perDay <= 0 then Row.value = 0 Row.excluded = "no sales" return Row end
-	local Rate = E.rate and E.rate(id)
-	if Rate and Rate > 0 then
-		Row.rate = Rate
-		Row.goldPerHour = math.max(0, Net) * math.min(Rate, Row.perDay / 24)
-		Row.perDay = math.min(Row.perDay, Rate * E.farmHours)
-	end
-	Row.value = math.max(0, Net) * Row.perDay
-	if Net <= 0 then Row.excluded = "deposits lost cost more than it sells for" return Row end
+	if Row.salesDay <= 0 then Row.excluded = "no sales" return Row end
+	if Exp <= 0 then Row.excluded = "expected loss: deposits lost outweigh the sales" return Row end
 	if not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
-	if S == "flooded" then Row.notes[#Row.notes + 1] = "flooded: sales halved" end
-	if S == "falling" then Row.notes[#Row.notes + 1] = "price falling: last-day price used" end
-	if S == "slow" then Row.notes[#Row.notes + 1] = "slow: sells in bursts" end
-	if S == "early" then Row.notes[#Row.notes + 1] = "early: few hours of sales" end
-	if not I.newHour then Row.notes[#Row.notes + 1] = "competition not measured (share 50%)" end
+	StatusNotes(Row, S, I)
 	return Row
 end
 
@@ -150,12 +133,12 @@ local function Split(Rows, Key)
 end
 Farm.Rank = Split
 
--- Farm values for a list of item IDs: ranked rows (best gold a day first), then the excluded ones with reasons.
+-- Farm values for a list of item IDs: ranked rows (best expected each first), then the excluded ones with reasons.
 function Farm.RawFarms(Ids, Env)
 	local E = Default(Env)
 	local Rows = {}
 	for _, id in ipairs(Ids) do Rows[#Rows + 1] = Farm.Raw(id, E) end
-	return Split(Rows, "value")
+	return Split(Rows, "expected")
 end
 
 -- Buying Qty units from the cheapest listings up (the ladder). Returns total cost, units the ladder covers.
@@ -170,7 +153,7 @@ function Farm.BuyCost(I, Qty)
 end
 
 -- What a reagent costs per unit when buying Qty: the vendor price for vendor goods, else the ladder; units the
--- ladder doesn't cover are priced at the market (median) price. Returns price each, source, units available (AH).
+-- ladder doesn't cover are priced at the upper sold price. Returns price each, source, units listed (AH).
 function Farm.ReagentPrice(id, Qty, E)
 	local V = E.vendor[id]
 	if V then return V, "vendor", math.huge end
@@ -189,26 +172,26 @@ function Farm.ReagentPrice(id, Qty, E)
 	return Cost / Qty, "ah", Got
 end
 
--- What a reagent would net you if you sold it instead of crafting: the AH net or the vendor price, whichever is more
--- (nil when neither is known). Items with a high vendor price can net less than nothing on the AH (deposits lost).
+-- What a reagent would earn if you posted it instead of crafting (expected, sell-rate weighted) or vendored it,
+-- whichever is more; nil when neither is known.
 local function ReagentSellValue(id, E)
 	if E.vendor[id] then return nil end
 	local I = E.info(id)
 	local S = E.status(I)
-	local Net = (I and S ~= "no data") and Farm.NetUnit(I, E, S) or nil
+	local Exp = (I and S ~= "no data") and Farm.Expected(I, S, E, 1) or nil
 	local V = E.vendorSell and E.vendorSell(id)
-	if V and V > 0 and (not Net or V > Net) then return V end
-	return Net
+	if V and V > 0 and (not Exp or V > Exp) then return V end
+	return Exp
 end
 
 -- One recipe. Recipe = { spell, skillLine, skillReq, makes, {reagent, count, ...}, teachItem, yellow, grey
 -- [, cooldownSeconds, cooldownCategory] }.
--- A day of crafts = what the product's sales take (your share) / makes, capped by the cooldown (per character).
--- Buy mats: profit = what the products net - the mats bought (AH ladder for a day's crafts, vendor price for vendor
--- goods); crafts a day further capped by the mats listed on the AH.
--- Gather mats yourself: added = what the products net - what those mats would net if sold - vendor goods bought,
--- i.e. what crafting adds over selling the mats; self = what the products net - vendor goods (all you get when the
--- mats cost you nothing). Unpriced mats: buy mats is excluded; added counts them at 0 and says so.
+--   sale     = what posting the products is expected to earn (sell-rate weighted, deposit lost when unsold)
+--   profit   = products' price after the cut - mats bought (not weighted: if it sells)
+--   expected = sale - mats bought (AH ladder, vendor price for vendor goods): the buy-mats ranking
+--   added    = sale - what the mats would earn posted or vendored themselves - vendor goods: what crafting adds over
+--              selling mats you gathered; self = sale - vendor goods (mats cost you nothing)
+-- Unpriced mats: buy mats is excluded; added counts them at 0 and says so.
 function Farm.Craft(Product, Recipe, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	local Row = { id = Product, spell = Recipe[1], skill = Recipe[2], skillName = E.skills[Recipe[2]], req = Recipe[3],
@@ -218,64 +201,56 @@ function Farm.Craft(Product, Recipe, Env)
 	local S = E.status(I)
 	Row.status = S
 	if not I or EXCLUDE[S] then Row.excluded = "product: " .. (EXCLUDE[S] or "no auction data") return Row end
-	local Net, DepKnown = Farm.NetUnit(I, E, S)
-	if not Net then Row.excluded = "product: no price" return Row end
-	Row.net, Row.price = Net, Farm.SalePrice(I) / Farm.Haircut
+	local Sale, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, Row.makes)
+	if not Sale then Row.excluded = "product: no price" return Row end
+	Row.price, Row.hours, Row.rate, Row.chance = P, H, Rate, Ch
+	Row.net = Net / Row.makes
 	local VS = E.vendorSell and E.vendorSell(Product)
-	if VS and VS > Net then
-		Row.net, Net = VS, VS
-		Row.notes[#Row.notes + 1] = "the product sells better to a vendor than on the AH"
+	if VS and VS * Row.makes > Sale then
+		Sale, Net, Row.net = VS * Row.makes, VS * Row.makes, VS
+		Row.notes[#Row.notes + 1] = "the product earns more at a vendor than posted on the AH"
 	end
-	Row.crafts = Farm.SalesPerDay(I, S) / Row.makes
-	if Row.crafts <= 0 then Row.excluded = "product: no sales" return Row end
-	if Row.cooldown and Row.cooldown > 0 and 86400 / Row.cooldown < Row.crafts then
-		Row.crafts = 86400 / Row.cooldown
+	Row.sale = Sale
+	Row.salesDay = (I.perHour or 0) * 24
+	if Row.salesDay <= 0 then Row.excluded = "product: no sales" return Row end
+	if Row.cooldown and Row.cooldown > 0 then
 		local T = Row.cooldown >= 3600 and string.format("%.0f h", Row.cooldown / 3600)
 			or string.format("%.0f min", Row.cooldown / 60)
 		Row.notes[#Row.notes + 1] = "cooldown " .. T .. (Row.cdCategory and " (shared with others in its group)" or "")
 	end
-	local Gross = Net * Row.makes
 	local Regs = Recipe[5]
 	local Cost, Mats, Vend, Missing, Unsold = 0, 0, 0, nil, nil
-	local Cap = Row.crafts
 	for i = 1, #Regs - 1, 2 do
 		local R, N = Regs[i], Regs[i + 1]
-		local Each, Src, Avail = Farm.ReagentPrice(R, N * math.max(1, Row.crafts), E)
+		local Each, Src = Farm.ReagentPrice(R, N, E)
 		local SellV = ReagentSellValue(R, E)
 		Row.reagents[#Row.reagents + 1] = { id = R, n = N, each = Each, source = Src, sell = SellV }
 		if Each then Cost = Cost + Each * N else Missing = Missing or R end
 		if Src == "vendor" then Vend = Vend + Each * N
 		elseif SellV then Mats = Mats + SellV * N
 		else Unsold = Unsold or R end
-		if Src == "ah" then Cap = math.min(Cap, Avail / N) end
 	end
 	Row.vendorCost = Vend
 	Row.matsValue = Mats
-	Row.added = Gross - Mats - Vend
-	Row.addedPerDay = Row.added * Row.crafts
-	Row.self = Gross - Vend
-	Row.selfPerDay = Row.self * Row.crafts
+	Row.added = Sale - Mats - Vend
+	Row.self = Sale - Vend
 	if Unsold then Row.notes[#Row.notes + 1] = "a mat has no AH price (counted as 0 in value added): " .. Unsold end
 	if Missing then
 		Row.buyExcluded = "no price for reagent " .. Missing
 	else
 		Row.cost = Cost
-		Row.profit = Gross - Cost
-		Row.buyCrafts = Cap
-		Row.profitPerDay = Row.profit * Cap
-		if Cap < Row.crafts then Row.notes[#Row.notes + 1] = "mats on the AH limit crafts" end
-		if Row.profit <= 0 then Row.buyExcluded = "mats cost more than the product nets" end
+		Row.profit = Net - Cost
+		Row.expected = Sale - Cost
+		if Row.expected <= 0 then Row.buyExcluded = "expected loss buying the mats" end
 	end
 	if not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
-	if S == "flooded" then Row.notes[#Row.notes + 1] = "product flooded: sales halved" end
-	if S == "falling" then Row.notes[#Row.notes + 1] = "product price falling: last-day price used" end
-	if S == "slow" then Row.notes[#Row.notes + 1] = "product slow: sells in bursts" end
+	StatusNotes(Row, S, I, "product ")
 	return Row
 end
 
--- Every recipe in Env.recipes whose product has auction data. Returns buy-mats ranking (profit a day), value-added
--- ranking (added a day), and every row (with .excluded / .buyExcluded reasons). Filter(row) -> false drops a recipe
--- (e.g. only professions you have).
+-- Every recipe in Env.recipes whose product has auction data. Returns the buy-mats ranking (expected a craft), the
+-- value-added ranking (added a craft), and every row (with .excluded / .buyExcluded reasons). Filter(row) -> false
+-- drops a recipe (e.g. only professions you have).
 function Farm.Crafts(Env, Filter)
 	local E = Default(Env)
 	local All = {}
@@ -292,7 +267,7 @@ function Farm.Crafts(Env, Filter)
 			if R.added > 0 then Added[#Added + 1] = R end
 		end
 	end
-	Buy = (Split(Buy, "profitPerDay"))
-	Added = (Split(Added, "addedPerDay"))
+	Buy = (Split(Buy, "expected"))
+	Added = (Split(Added, "added"))
 	return Buy, Added, All
 end
