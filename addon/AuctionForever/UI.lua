@@ -619,10 +619,11 @@ function L.FlipTargets()
 			if V > 0 and Low < V then
 				local I = Info[id] or Core.Info(id)
 				Info[id] = I
-				local All = I and Core.VendorDeal(I.ladder, V)
+				local Item = not Flippable(id) -- (not a commodity: one purchase per auction)
+				local All = I and Core.VendorDeal(I.ladder, V, nil, Item)
 				if All then
 					VendorAll[#VendorAll + 1] = { id, All }
-					local O = All.cost <= Budget and All or Core.VendorDeal(I.ladder, V, Budget)
+					local O = All.cost <= Budget and All or Core.VendorDeal(I.ladder, V, Budget, Item)
 					if O then
 						if not CandOf[id] then CandOf[id] = { id = id, options = {} }; Cands[#Cands + 1] = CandOf[id] end
 						table.insert(CandOf[id].options, O)

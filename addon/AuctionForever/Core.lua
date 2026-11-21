@@ -23,9 +23,13 @@ Core.MinVendorProfit = 200      -- 2 silver: listings under the vendor price mus
                                 -- (a sure profit: no AH cut, no deposit, no waiting)
 -- A flip that needs this many units or more bought (to clear the cheap listings under its resale price) isn't a
 -- flip at all: not cut down to fewer units, since reposting above a wall of cheap listings left behind won't sell
--- (Mild Spices: 5,088 at 3-4c to make +1g 31s). 99 units is fine, 100 is not. Vendor buys the same (buying hundreds
--- to vendor them is the same chore). Craft plans don't clear a wall: not limited by this.
+-- (Mild Spices: 5,088 at 3-4c to make +1g 31s). 99 units is fine, 100 is not. Craft plans and vendor buys don't
+-- clear a wall: not limited by this.
 Core.MaxBuyUnits = 100
+-- Vendor buys count purchases, not units: commodities are one purchase for any quantity (200 Silk Cloth under the
+-- vendor price: one click), so any size is fine. Item auctions are one purchase each, and the price ladder doesn't
+-- say how units are grouped into auctions, so each unit counts as one: at most this many.
+Core.MaxVendorPurchases = 3
 Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 -- Flips plan their profit at this share of the resale price. Flips are commodities only, and commodity buyers fill
@@ -595,7 +599,8 @@ end
 
 -- Buy to sell to a vendor: every listing priced under the vendor price (cheapest first), within Cap. A sure profit
 -- (vendors pay a fixed price, no AH cut, no deposit), so no sales data is needed. nil under MinVendorProfit.
-function Core.VendorDeal(Ladder, Vendor, Cap)
+-- Item = item auctions (one purchase each, at most MaxVendorPurchases); nil = a commodity (one purchase).
+function Core.VendorDeal(Ladder, Vendor, Cap, Item)
 	if not Vendor or Vendor <= 0 or type(Ladder) ~= "table" then return nil end
 	Cap = Cap or math.huge
 	local Qty, Cost, Profit, Top = 0, 0, 0, nil
@@ -608,8 +613,10 @@ function Core.VendorDeal(Ladder, Vendor, Cap)
 		Qty, Cost, Profit, Top = Qty + Take, Cost + Take * P, Profit + Take * (Vendor - P), P
 		if Take < Q then break end
 	end
-	if Qty == 0 or Qty >= Core.MaxBuyUnits or Profit < Core.MinVendorProfit then return nil end
-	return { vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
+	if Qty == 0 or Profit < Core.MinVendorProfit then return nil end
+	local Purchases = Item and Qty or 1
+	if Purchases > Core.MaxVendorPurchases then return nil end
+	return { purchases = Purchases, vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 
 -- Least return on the cost a flip needs: MinFlipReturnSlow for "slow" sellers, MinFlipReturn otherwise. Speed is an

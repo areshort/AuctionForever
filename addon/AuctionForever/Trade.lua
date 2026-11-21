@@ -304,8 +304,9 @@ function T.DrawBuy()
 		if F.craft then
 			BuyP.Detail:SetText(T.CraftDetail(E))
 		elseif F.vendor then
-			BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
-				NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyDelta(F.profit),
+			local N = F.purchases or 1
+			BuyP.Detail:SetText(string.format("%s   %s\nBuy %d in %d purchase%s at up to %s each (about %s), sell to a vendor for %s each: %s, no AH cut.%s",
+				NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, N, N == 1 and "" or "s", Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyDelta(F.profit),
 				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.MoneyColor(Core.MinKeep) .. " always kept).") or ""))
 		else
 		BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",

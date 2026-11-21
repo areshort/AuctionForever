@@ -310,7 +310,12 @@ n100, _ = wall(100)
 ok(n99 >= 1 and q99 == 99 and n100 == 0, f"threshold: 99 units is a flip, 100 is not ({n99}, {n100})")
 ok(L(f'(({C}.NearMiss(MakeItem({{ perHour = 2000, medHour = 2000, sellThrough = 1, qty = 5100, qtyDayAgo = 5100, ladder = {{ {{880, 5000}}, {{1000, 100}} }} }}))))') is None,
    'near misses: the same wall rule (5,000 at 8s 80c before a 10s resale)')
-ok(L(f'{C}.VendorDeal({{ {{1, 150}} }}, 10) == nil') and L(f'{C}.VendorDeal({{ {{1, 40}} }}, 10) ~= nil'), 'vendor buys: 150 units under the vendor price is too many, 40 is fine')
+# Vendor buys count purchases: a commodity is one purchase at any size; item auctions one each, at most 3.
+ok(L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10) ~= nil') and L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10).purchases') == 1 and L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10).buyQty') == 200,
+   'commodity vendor buy of 200 units: allowed, one purchase')
+ok(L(f'{C}.VendorDeal({{ {{100, 75}} }}, 200, nil, true) == nil'), 'item vendor buy needing 75 auctions: not a target')
+ok(L(f'{C}.VendorDeal({{ {{100, 2}} }}, 200, nil, true) ~= nil') and L(f'{C}.VendorDeal({{ {{100, 2}} }}, 200, nil, true).purchases') == 2,
+   'item vendor buy of 2 auctions: allowed (2 purchases)')
 # FlipNeed: the return by speed (an item or its FlipStatus); unknown speed is held to the slow sellers' return.
 ok(L(f'{C}.FlipNeed(10000, 200, "good")') == 1000 and L(f'{C}.FlipNeed(10000, 200, "slow")') == 2000
    and L(f'{C}.FlipNeed(10000, 200)') == 2000 and L(f'{C}.FlipNeed(1000, 500, "good")') == 500,

@@ -1283,8 +1283,10 @@ X('''local Row = {}
   for i, E in ipairs(AF_NS.Trade.Rows()) do if E.id == 990001 then VRow, VIdx = E, i end end''')
 ok(L('VRow and VRow.flip.vendor and VRow.flip.profit == 1500 and VRow.flip.buyQty == 3'), f"listings under the vendor price are a buy target: 3 at 5s, vendor 10s -> 15s ({L('VRow and VRow.flip.profit')})")
 X('AF_NS.Trade.SelectBuy(VIdx); AF_NS.Trade.DrawBuy()')
-cells = L('(function() local t = {} for _, f in ipairs(AllFramesForTest) do if f._kind == "FontString" and type(f._text) == "string" and (f._text:find("vendor it") or f._text:find("sell them to a vendor")) then t[#t+1] = f._text end end return #t end)()')
-ok(cells >= 2, f'row says "vendor it" and the detail says to sell to a vendor ({cells})')
+cells = L('(function() local t = {} for _, f in ipairs(AllFramesForTest) do if f._kind == "FontString" and type(f._text) == "string" and (f._text:find("vendor it") or f._text:find("Buy 3 in 1 purchase at up to", 1, true) and f._text:find("sell to a vendor", 1, true)) then t[#t+1] = f._text end end return #t end)()')
+ok(cells >= 2, f'row says "vendor it" and the detail says "Buy 3 in 1 purchase ..., sell to a vendor" ({cells})')
+vd = str(L('AuctionForeverBuyPanel.Detail:GetText()'))
+ok('Buy 3 in 1 purchase at up to' in vd and 'sell to a vendor for' in vd, 'vendor buy detail: "Buy 3 in 1 purchase ..., sell to a vendor": ' + vd.replace(chr(10), ' | '))
 if L('LastCall') is not None:
     X('AF_NS.Scan.Kind[990001] = "commodity"; Calls = {}; AF_NS.Trade.SelectBuy(VIdx); AF_NS.Trade.BuyClick(); FireEvent("COMMODITY_PRICE_UPDATED", 500, 1500)')
     ok('Confirm' in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'vendor buy at the planned price: asks to confirm (no sales data needed)')
