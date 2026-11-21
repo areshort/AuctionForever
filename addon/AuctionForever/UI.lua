@@ -124,6 +124,25 @@ local function Vendor(id)
 	local I = Shipped(id)
 	return I and I[1] or 0
 end
+-- A suffix version's name ending ("of the Whale"), from its market key; nil for a plain item.
+function L.SuffixName(Key)
+	local _, Bon = Core.SplitKey(Key)
+	if not Bon then return nil end
+	local Parts = {}
+	for B in Bon:gmatch("[^:]+") do
+		local N = AF_Suffix and AF_Suffix[tonumber(B)]
+		if N then Parts[#Parts + 1] = N end
+	end
+	return #Parts > 0 and table.concat(Parts, " ") or "(other version)"
+end
+-- An item's name for a market key: a suffix version gets its suffix ("Wolf Rider's Belt of the Whale").
+function L.KeyName(Key)
+	local id = Core.SplitKey(Key)
+	local Name, Quality = ItemName(id)
+	local Suf = L.SuffixName(Key)
+	if Suf and type(Name) == "string" and not Name:find(Suf, 1, true) then Name = Name .. " " .. Suf end
+	return Name, Quality
+end
 L.ItemName, L.Icon, L.Vendor, L.Stacks = function(id) return ItemName(id) end, function(id) return Icon(id) end, function(id) return Vendor(id) end, function(id) return Stacks(id) end
 L.Kind, L.Flippable = function(id) return Kind(id) end, function(id) return Flippable(id) end
 
@@ -297,9 +316,11 @@ local function RawAll()
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
 	local Key = DataKey()
 	if not (RawCache and RawCache.key == Key) then
-		local Ids = {}
-		for id in pairs(D.items) do Ids[#Ids + 1] = id end
+		local Ids, Keys = {}, {}
+		for _, K in ipairs(Core.AllKeys()) do if type(K) == "number" then Ids[#Ids + 1] = K else Keys[#Keys + 1] = K end end
 		table.sort(Ids)
+		table.sort(Keys)
+		for _, K in ipairs(Keys) do Ids[#Ids + 1] = K end -- (suffix versions: each its own row)
 		local Rows = Farm.RawFarms(Ids, FarmEnv())
 		local NoGear = {}
 		for _, R in ipairs(Rows) do
@@ -1170,7 +1191,7 @@ function L.Refresh()
 		local E = Data[i + Offset]
 		R:SetShown(E ~= nil)
 		if E then
-			local Name, Quality = ItemName(E.id)
+			local Name, Quality = L.KeyName(E.key or E.id)
 			local Color = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[Quality or 1]
 			R.Icon:SetTexture(Icon(E.id))
 			R.id = E.id
@@ -1778,9 +1799,10 @@ end
 L.TargetPrice = TargetPrice
 
 -- Count (Shift held, a stack of more than one): Vendor, AH and Profit for the whole stack, labeled "(x20)", or
--- "(x20 in bags)" when the count is what you carry (InBags).
-function L.TooltipLines(id, Count, InBags)
-	local I = Core.Info(id)
+-- "(x20 in bags)" when the count is what you carry (InBags). Key: the hovered item's market (a suffix version's own,
+-- see Core.LinkKey); a version with no data shows no AH value, never another version's.
+function L.TooltipLines(id, Count, InBags, Key)
+	local I = Core.Info(Key or id)
 	local V = Vendor(id)
 	if not I and V <= 0 then return nil end
 	local Target = TargetPrice(I)
@@ -1831,8 +1853,8 @@ function L.TooltipCount(Tip, id)
 	return nil
 end
 -- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
-function L.BagAdvice(id)
-	local I = Core.Info(id)
+function L.BagAdvice(id, Key)
+	local I = Core.Info(Key or id)
 	local V = Vendor(id)
 	if not I and V <= 0 then return nil, V end
 	return Core.Recommend(I, V, TargetPrice(I)), V
@@ -1869,7 +1891,10 @@ local function OnTooltip(Tip, TData)
 	if Tip ~= GameTooltip and Tip ~= ItemRefTooltip then return end
 	local id = TData and TData.id
 	if not id then return end
-	local Lines = L.TooltipLines(id, L.TooltipCount(Tip, id))
+	local Link = TData.hyperlink
+	if not Link and Tip.GetItem then local Ok, _, L2 = pcall(Tip.GetItem, Tip); Link = Ok and L2 or nil end
+	local N, InBags = L.TooltipCount(Tip, id)
+	local Lines = L.TooltipLines(id, N, InBags, Core.LinkKey(Link, id))
 	if not Lines then return end
 	WatchShift(Tip, id)
 	Tip:AddLine(" ")

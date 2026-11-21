@@ -56,8 +56,10 @@ function T.OnScanDone()
 	end)
 end
 -- Short: the list-row form of the name (see UI.ShortName); the detail lines keep the full name.
+-- id: an item ID or a market key (a suffix version's name gets its suffix).
 local function NameText(id, Short)
-	local Name, Quality = UI().ItemName(id)
+	local Name, Quality = UI().KeyName(id)
+	id = Core.SplitKey(id)
 	local Color = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[Quality or 1]
 	return (Color and Color.hex or "|cffffffff") .. (Short and UI().ShortName(Name) or Name) .. "|r" .. (Short and UI().CraftedMark(id) or "")
 end
@@ -778,8 +780,9 @@ function T.BuildQueue()
 			local Info = C_Container.GetContainerItemInfo(Bag, Slot)
 			local id = Info and Info.itemID
 			if id and not Info.isBound then
-				local G = Groups[id]
-				if not G then G = { id = id, count = 0, locs = {} }; Groups[id] = G; Order[#Order + 1] = G end
+				local K = Core.LinkKey(Info.hyperlink, id) -- (suffix versions apart: each its own market)
+				local G = Groups[K]
+				if not G then G = { id = id, key = K, count = 0, locs = {} }; Groups[K] = G; Order[#Order + 1] = G end
 				G.count = G.count + (Info.stackCount or 1)
 				G.locs[#G.locs + 1] = { Bag, Slot }
 			end
@@ -787,7 +790,7 @@ function T.BuildQueue()
 	end
 	local Q = {}
 	for _, G in ipairs(Order) do
-		local I = Core.Info(G.id)
+		local I = Core.Info(G.key or G.id)
 		G.vendor = UI().Vendor(G.id)
 		-- Same advice as the item tooltip's Rec line: only what's worth selling on the auction house.
 		if I and Core.Recommend(I, G.vendor, UI().TargetPrice(I)) == "Auction" then
@@ -872,7 +875,7 @@ function T.DrawSell()
 		R.id = G and G.id
 		if G then
 			R.Icon:SetTexture(UI().Icon(G.id))
-			R.Cells[1]:SetText(NameText(G.id, true))
+			R.Cells[1]:SetText(NameText(G.key or G.id, true))
 			R.Cells[2]:SetText("x" .. G.count)
 			R.Sel:SetShown(i + Off == Sell.idx)
 		end
@@ -887,7 +890,7 @@ function T.DrawSell()
 		return
 	end
 	local I = G.info
-	SellP.Name:SetText(NameText(G.id))
+	SellP.Name:SetText(NameText(G.key or G.id))
 	local Line = string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
 		G.count, Core.MoneyColor(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
 	if G.cost then
@@ -934,7 +937,7 @@ function T.SelectSell(i)
 	FillFields()
 	local G = T.SelectedSell()
 	-- The one live check: the item you're about to post, if your data on it is over 2 min old.
-	if G and IsStale(G.id) then
+	if G and IsStale(G.key or G.id) then
 		local Id = G.id
 		SaySell("Checking the current price...")
 		Recheck({ Id }, function()

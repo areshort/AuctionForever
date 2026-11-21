@@ -15,8 +15,9 @@ import base64, gzip, json, math, os, statistics, sys, time, urllib.request, urll
 REGION = 'us'
 RULESET = 1          # the API returns the same houses for every ruleset
 HOUSE = 110          # PvP Alliance, matched against the user's in-game listings 2026-11-19
-FMT = 2          # data format; 2 = only compared hours count as hours of sales
-HISTV = 2        # history version; 2 = cancels aren't sales. Older history (counted the old way) is dropped once.
+FMT = 3          # data format; 2 = only compared hours count as hours of sales; 3 = random-suffix gear in its own table
+HISTV = 3        # history version; 2 = cancels aren't sales; 3 = random-suffix versions kept apart. Older history
+                 # (counted the old way) is dropped once.
 HOURS_KEPT = 72
 DAYS_KEPT = 14
 BUCKET_ORDER = {'SHORT': 0, 'MEDIUM': 1, 'LONG': 2, 'VERY_LONG': 3}
@@ -80,7 +81,7 @@ def update_names(state, mk, names_fn):
     """Add name, vendor price and quality for listed items that don't have them yet. Returns how many were added."""
     names = state.setdefault('names', {})
     details = state.setdefault('details', {})
-    missing = sorted({str(i) for i in mk} - set(details), key=int)[:NAMES_PER_RUN]
+    missing = sorted({str(key_parts(i)[0]) for i in mk} - set(details), key=int)[:NAMES_PER_RUN]
     if not missing or not names_fn:
         return 0
     got = names_fn([int(k) for k in missing])
@@ -100,8 +101,27 @@ def fetch():
 
 
 # --- turning a snapshot into listings -------------------------------------------------------------------------
+# Random-suffix gear ("of the Bear", "of the Whale"...): Forever's auctions carry the suffix as the item's bonus list
+# (item.bonus_lists, one id such as 12719 = "of the Whale" in ItemBonus / ItemNameDescription; no "rand" field).
+# Each version is its own market, so a suffixed item is keyed "itemID:bonus" (a string); items without a bonus list
+# keep the plain item ID (an int).
+def item_key(it):
+    """The market key of an auction's item: its ID, or "ID:bonus" for a random-suffix version."""
+    b = it.get('bonus_lists') or []
+    return f"{it['id']}:{':'.join(str(x) for x in sorted(b))}" if b else it['id']
+
+
+def key_parts(k):
+    """(item ID, bonus or None) from a key (int, "123" or "123:12719")."""
+    s = str(k)
+    if ':' in s:
+        a, b = s.split(':', 1)
+        return int(a), b
+    return int(s), None
+
+
 def listings(items, goods):
-    """id -> [itemID, unit price (copper), quantity, bucket, kind] ; kind 'c' commodity, 'i' item."""
+    """id -> [item key, unit price (copper), quantity, bucket, kind] ; kind 'c' commodity, 'i' item."""
     out = {}
     for a in goods:
         out[str(a['id'])] = [a['item']['id'], a['unit_price'], a['quantity'], BUCKET_ORDER.get(a['time_left'], 3), 'c']
@@ -109,7 +129,7 @@ def listings(items, goods):
         if not a.get('buyout'):
             continue  # bid-only: no price a buyer can just pay
         q = max(1, a['quantity'])
-        out[str(a['id'])] = [a['item']['id'], a['buyout'] // q, q, BUCKET_ORDER.get(a['time_left'], 3), 'i']
+        out[str(a['id'])] = [item_key(a['item']), a['buyout'] // q, q, BUCKET_ORDER.get(a['time_left'], 3), 'i']
     return out
 
 
@@ -279,7 +299,7 @@ def item_numbers(k, state, mk, now_ts):
     sales = len(sp)
     med_hour = statistics.median(sold_by_hour) if sold_by_hour else 0
     hours_with_sales = sum(1 for s in sold_by_hour if s > 0)
-    m = mk.get(int(k))
+    m = mk.get(int(k)) if ':' not in k else mk.get(k)
     # trend: last 24 h median sold vs the whole window
     last24 = [(p, q) for t, p, q in sp if now_ts - t <= 86400]
     med24 = wmedian(last24) if last24 else None
@@ -329,33 +349,54 @@ def lua(v):
     raise TypeError(type(v))
 
 
+SFX_CHUNK = 400  # suffix items per chunk of the data file (see write_lua)
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
           'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24']
 
 
 def write_lua(path, state, mk, now_ts):
     keys = set(state['hourly']) | {str(i) for i in mk}
-    parts, names, info = [], [], []
+    parts, names, info, sfx = [], [], [], {}
     have = state.get('names', {})
     det = state.get('details', {})
     # Commodities come from Blizzard's separate commodities list (stackable goods sold by quantity).
     goods = {str(v[0]) for v in (state.get('listings') or {}).values() if v[4] == 'c'}
-    for k in sorted(keys, key=int):
+    ids = set()
+
+    def order(k):
+        i, b = key_parts(k)
+        return (i, b or '')
+    for k in sorted(keys, key=order):
         n = item_numbers(k, state, mk, now_ts)
         if not n['low'] and not n['sales']:
             continue
         row = [n[f] for f in FIELDS] + [n['ladder'][:12]]
-        parts.append(f'[{k}]={lua(row)}')
-        if have.get(k):
-            names.append(f'[{k}]={lua(have[k])}')
-        d = det.get(k) or [None, None]
-        info.append(f'[{k}]={lua([d[0], d[1], 1 if k in goods else 0])}')
+        i, b = key_parts(k)
+        if b is None:
+            parts.append(f'[{i}]={lua(row)}')
+        else:
+            sfx.setdefault(i, []).append(f'[{lua(int(b) if b.isdigit() else b)}]={lua(row)}')
+        if i in ids:
+            continue
+        ids.add(i)
+        if have.get(str(i)):
+            names.append(f'[{i}]={lua(have[str(i)])}')
+        d = det.get(str(i)) or [None, None]
+        info.append(f'[{i}]={lua([d[0], d[1], 1 if str(i) in goods else 0])}')
+    # The suffix rows are added after the main table, in chunks each inside its own function: Lua limits the
+    # constants one function may hold (65,536 in LuaJIT), and one big table literal would pass it.
+    sfx_rows = [f'S[{i}]={{' + ','.join(r) + '}' for i, r in sorted(sfx.items())]
+    chunks = [sfx_rows[i:i + SFX_CHUNK] for i in range(0, len(sfx_rows), SFX_CHUNK)]
+    sfx_code = ''.join(';(function() local S = AuctionForeverData.sfx\n' + '\n'.join(c) + '\nend)()\n' for c in chunks)
     body = (f'-- Written by the AuctionForever collector. Do not edit.\n'
             f'AuctionForeverData = {{v=1,house={HOUSE},time={int(now_ts)},hours={round(sum(c[1] for c in state.get("compared", [])), 1)},\n'
             f'fields={lua(FIELDS + ["ladder"])},\nitems={{\n' + ',\n'.join(parts) + '\n},\n'
             'names={\n' + ',\n'.join(names) + '\n},\n'
             '-- [itemID] = {vendor price, quality, commodity (1) or not (0)}\n'
-            'info={\n' + ',\n'.join(info) + '\n}}\n')
+            'info={\n' + ',\n'.join(info) + '\n},\n'
+            '-- Random-suffix gear: sfx[itemID] = { [bonus list] = row like items }. Each suffix is its own market; items{}\n'
+            '-- has only the listings without a suffix. Filled below, in chunks.\n'
+            'sfx={}}\n' + sfx_code)
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         f.write(body)
@@ -415,7 +456,12 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
         hours_for_rate = None
     else:
         hours_for_rate = hours
-    ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
+    if hours_for_rate and reset:
+        # After a history reset the previous item auctions may be keyed the old way (suffix versions under the plain
+        # ID): only commodities are compared this once, or every suffixed listing would look sold and posted again.
+        ev = compare({k: v for k, v in prev.items() if v[4] == 'c'}, {k: v for k, v in now.items() if v[4] == 'c'}, hours_for_rate)
+    else:
+        ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
     mk = market(now)
     added = update_names(state, mk, names_fn)
     span = hours_for_rate or 0

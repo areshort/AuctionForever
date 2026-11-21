@@ -49,19 +49,80 @@ Core.MinWindows = 2             -- separate windows with sales before an item is
 Core.PlanRateShare = 0.75       -- flips plan resales at this share of the measured sales speed (the low end)
 Core.MinKeep = 5000             -- the flip budget is all your gold except this (50 silver)
 
--- One item's numbers from the data file, as a table with named fields. nil when the item isn't in the data.
-function Core.Info(id)
+-- Market keys. Random-suffix gear ("of the Bear", "of the Whale"...) is a market per version: its key is
+-- "itemID:bonus" (the item's bonus list, as in its link and in the cloud data's sfx table); other items' key is the
+-- plain item ID. An item link with an old-style random suffix (and no bonus list) gets "itemID:r<suffix>", which has
+-- no data (no AH value rather than another version's).
+function Core.LinkKey(Link, id)
+	if type(Link) ~= "string" then return id end
+	local Body = Link:match("item:([%-%d:]*)")
+	if not Body then return id end
+	local F = {}
+	for V in (Body .. ":"):gmatch("([^:]*):") do F[#F + 1] = V end
+	local ID = tonumber(F[1]) or id
+	local NB = tonumber(F[13] or "")
+	local Bon = {}
+	for k = 1, NB or 0 do
+		local B = tonumber(F[13 + k] or "")
+		if B then Bon[#Bon + 1] = B end
+	end
+	if #Bon > 0 then
+		table.sort(Bon)
+		return ID .. ":" .. table.concat(Bon, ":")
+	end
+	local Suf = tonumber(F[7] or "")
+	if Suf and Suf ~= 0 then return ID .. ":r" .. Suf end
+	return ID
+end
+-- (item ID, bonus part or nil) of a key.
+function Core.SplitKey(Key)
+	if type(Key) ~= "string" then return Key, nil end
+	local id, Rest = Key:match("^(%d+):(.+)$")
+	if id then return tonumber(id), Rest end
+	return tonumber(Key), nil
+end
+-- The data row of a key: items[id], or sfx[id][bonus] for a suffix version.
+function Core.Row(Key)
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return nil end
-	local Row = D.items[id]
+	local id, Bon = Core.SplitKey(Key)
+	if not id then return nil end
+	if not Bon then return D.items[id] end
+	local S = type(D.sfx) == "table" and D.sfx[id]
+	if type(S) ~= "table" then return nil end
+	return S[tonumber(Bon) or Bon]
+end
+-- Does the item come in suffix versions in the data (then its plain entry is only the listings without one)?
+function Core.HasSuffixes(id)
+	local D = AuctionForeverData
+	return type(D) == "table" and type(D.sfx) == "table" and D.sfx[id] ~= nil
+end
+-- Every market key in the data (plain IDs, then the suffix versions).
+function Core.AllKeys()
+	local D, Out = AuctionForeverData, {}
+	if type(D) ~= "table" or type(D.items) ~= "table" then return Out end
+	for id in pairs(D.items) do Out[#Out + 1] = id end
+	for id, S in pairs(type(D.sfx) == "table" and D.sfx or {}) do
+		for B in pairs(S) do Out[#Out + 1] = id .. ":" .. B end
+	end
+	return Out
+end
+
+-- One item's numbers from the data file, as a table with named fields. nil when the item isn't in the data.
+-- Key: an item ID or a suffix version's key (see Core.LinkKey).
+function Core.Info(Key)
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" then return nil end
+	local Row = Core.Row(Key)
 	if type(Row) ~= "table" then return nil end
-	local I = { id = id }
+	local id = Core.SplitKey(Key)
+	local I = { id = id, key = Key }
 	for i, Name in ipairs(D.fields) do I[Name] = Row[i] end
 	I.ladder = I.ladder or {}
 	I.soldQty = (I.perHour or 0) * (I.hoursSeen or 0)
 	I = Core.MergeScan(I, D.time)
 	-- Your own listings aren't stock in front of you (known once the game has shown your auctions).
-	local Mine = Core.MyListings and Core.MyListings[id]
+	local Mine = Core.MyListings and Key == id and Core.MyListings[id] -- (your listings aren't split by suffix)
 	if Mine then
 		local Listed = 0
 		for _, Q in pairs(Mine) do Listed = Listed + Q end
@@ -131,10 +192,11 @@ function Core.MergeScan(I, DataTime)
 	local DB = AuctionForeverDB
 	if type(DB) ~= "table" then return I end
 	local id = I.id
+	local Key = I.key or id -- scans keep suffix versions apart too
 	local Fresh = DB.fresh
 	if type(Fresh) == "table" and Fresh.items then
 		-- Each item carries the time it was last looked at (full or quick scan).
-		local F = Fresh.items[id]
+		local F = Fresh.items[Key]
 		if F and (F[4] or Fresh.time or 0) > (DataTime or 0) then
 			I.low, I.qty, I.ladder = F[1], F[2], F[3] or {}
 			I.fromScan, I.scanTime = true, F[4] or Fresh.time
@@ -176,7 +238,7 @@ function Core.MergeScan(I, DataTime)
 	for _ = 1, math.floor(CloudH + 0.5) do Rates[#Rates + 1] = I.medHour or I.perHour or 0 end
 	local CloudN = #Rates
 	local Windows = math.floor((I.hoursWithSales or 0) + 0.5)
-	local Obs = DB.obs and DB.obs[id]
+	local Obs = DB.obs and DB.obs[Key]
 	if type(Obs) ~= "table" then Obs = {} end
 	-- Each observation: { time, gap hours, sold qty, sold value, events, highest sold price, stock before, new listed }
 	for _, O in ipairs(Obs) do Rates[#Rates + 1] = O[3] / O[2] end

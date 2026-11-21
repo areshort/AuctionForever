@@ -87,16 +87,19 @@ local function ToLadder(L, E)
 	return Out
 end
 
+-- (id: an item ID or a suffix version's key, see Core.LinkKey)
 local function CloudQty(id)
 	local D = AuctionForeverData
-	if type(D) ~= "table" or not D.items or not D.items[id] then return nil end
-	for i, Name in ipairs(D.fields) do if Name == "qty" then return D.items[id][i] end end
+	local Row = AF.Core.Row(id)
+	if not Row then return nil end
+	for i, Name in ipairs(D.fields) do if Name == "qty" then return Row[i] end end
 end
 
 local function CloudLadder(id)
 	local D = AuctionForeverData
-	if type(D) ~= "table" or not D.items or not D.items[id] then return nil end
-	for i, Name in ipairs(D.fields) do if Name == "ladder" then return D.items[id][i] or {} end end
+	local Row = AF.Core.Row(id)
+	if not Row then return nil end
+	for i, Name in ipairs(D.fields) do if Name == "ladder" then return Row[i] or {} end end
 	return {}
 end
 
@@ -240,10 +243,15 @@ function Scan.FinishFull(L, E, Now)
 	local S = DB()
 	local D = AuctionForeverData
 	local Mine, Theirs = 0, 0
-	for _ in pairs(L) do Mine = Mine + 1 end
-	local Ref = (type(D) == "table" and D.items) or nil
+	local Ref = nil
+	if type(D) == "table" and D.items then Ref = {}; for _, K in ipairs(AF.Core.AllKeys()) do Ref[K] = true end end
 	if not Ref then Ref = {}; for id, F in pairs(S.fresh.items) do if F[2] and F[2] > 0 then Ref[id] = true end end end
-	for _ in pairs(Ref) do Theirs = Theirs + 1 end
+	-- (counted by item ID: a scan that can't tell suffix versions apart still sees every item)
+	local IdsMine, IdsTheirs = {}, {}
+	for K in pairs(L) do IdsMine[(AF.Core.SplitKey(K))] = true end
+	for K in pairs(Ref) do IdsTheirs[(AF.Core.SplitKey(K))] = true end
+	for _ in pairs(IdsMine) do Mine = Mine + 1 end
+	for _ in pairs(IdsTheirs) do Theirs = Theirs + 1 end
 	-- A scan that saw far fewer items than expected is incomplete: keep its prices, don't measure sales from it.
 	if Theirs > 0 and Mine < 0.7 * Theirs then
 		for id, Map in pairs(L) do
@@ -255,10 +263,14 @@ function Scan.FinishFull(L, E, Now)
 		return 0, 0, true, 0
 	end
 	-- Everything the scan saw, plus items it should have seen: those are gone (bought, expired or cancelled).
+	-- Suffix versions the scan didn't see are gone only if the scan could tell versions apart (it saw at least one);
+	-- a scan that read every version under the plain ID would otherwise make them all look sold out.
+	local Versions = false
+	for K in pairs(L) do if type(K) == "string" then Versions = true break end end
 	local Check = {}
 	for id in pairs(L) do Check[id] = true end
-	for id in pairs(Ref) do Check[id] = true end
-	for id in pairs(S.base) do Check[id] = true end
+	for id in pairs(Ref) do if Versions or type(id) ~= "string" then Check[id] = true end end
+	for id in pairs(S.base) do if Versions or type(id) ~= "string" or L[id] then Check[id] = true end end
 	local Measured, WithSales, Soon = 0, 0, 0
 	for id in pairs(Check) do
 		local Map = L[id]
@@ -286,6 +298,7 @@ local function FullStep(_, Elapsed)
 		if not ItemID then Skipped = Skipped + 1 end
 		if ItemID and Buyout and Buyout > 0 and Cnt and Cnt > 0 then
 			local P = math.floor(Buyout / Cnt)
+			ItemID = Scan.ReplicateKey(i, ItemID)
 			local M = Levels[ItemID]
 			if not M then M = {}; Levels[ItemID] = M end
 			M[P] = (M[P] or 0) + Cnt
@@ -327,6 +340,18 @@ local function FullStep(_, Elapsed)
 end
 
 function Scan.Busy() return Mode ~= nil end
+-- A full scan row's market key: random-suffix gear (not commodities) by its link's suffix (bonus list).
+function Scan.ReplicateKey(i, ItemID)
+	local D = AuctionForeverData
+	local Info = type(D) == "table" and type(D.info) == "table" and D.info[ItemID]
+	if Info and Info[3] == 1 then return ItemID end -- a commodity: never a suffix
+	local AH = rawget(_G, "C_AuctionHouse")
+	local GetLink = AH and AH.GetReplicateItemLink
+	if not GetLink then return ItemID end
+	local Ok, Link = pcall(GetLink, i)
+	if not Ok then return ItemID end
+	return AF.Core.LinkKey(Link, ItemID)
+end
 
 local function Commas(N)
 	local S = tostring(math.floor(N))
@@ -475,9 +500,15 @@ local function ReadItems(id, Key)
 	local N = C_AuctionHouse.GetNumItemSearchResults(Key) or 0
 	local Full = C_AuctionHouse.HasFullItemSearchResults(Key)
 	local Map, Exp, Auc, Rows = {}, {}, {}, {}
+	local Versions = {} -- [market key] = { Map, Exp } per suffix version (from each result's link)
 	for j = 1, N do
 		local R = C_AuctionHouse.GetItemSearchResultInfo(Key, j)
 		if R and R.buyoutAmount and R.buyoutAmount > 0 and (R.quantity or 0) > 0 then
+			local VK = AF.Core.LinkKey(R.itemLink, id)
+			local V = Versions[VK]
+			if not V then V = { {}, {} }; Versions[VK] = V end
+			V[1][R.buyoutAmount] = (V[1][R.buyoutAmount] or 0) + R.quantity
+			if (R.timeLeftSeconds or BAND_SECS[R.timeLeft or 3]) < 1800 then V[2][R.buyoutAmount] = (V[2][R.buyoutAmount] or 0) + R.quantity end
 			-- Forever: buyoutAmount is the price of ONE item, also when an auction holds several (the Blizzard list shows
 			-- 34s96 for an auction of 12 patterns that vendor for 35s each). Dividing it by the quantity made those look
 			-- 12x cheaper.
@@ -496,6 +527,11 @@ local function ReadItems(id, Key)
 	local Buyable = {}
 	for _, R in ipairs(Rows) do if not R[6] then Buyable[#Buyable + 1] = { auctionID = R[1], qty = R[2], buyout = R[5] } end end
 	Scan.Listings[id] = Buyable
+	if next(Versions) and (next(Versions, next(Versions)) or next(Versions) ~= id) then
+		-- Suffix versions: each its own market (prices only; the whole list's auctions stay with the plain ID).
+		for K, V in pairs(Versions) do QuickRecord(K, V[1], V[2], nil, Cov, false) end
+		return
+	end
 	QuickRecord(id, Map, Exp, Auc, Cov, false)
 end
 -- Tests read one item's search results outside a quick scan.
@@ -627,6 +663,8 @@ function Scan.ApplyBrowse(Items, Now, Complete)
 	local S = DB()
 	local D = AuctionForeverData
 	for id, A in pairs(Items) do
+		-- (one total for all of an item's suffix versions: can't be split, so not used for them)
+		if AF.Core.HasSuffixes(id) then A = { nil, 0, skip = true } end
 		local Min, Qty = A[1], A[2]
 		local F = S.fresh.items[id]
 		local Prev
@@ -634,7 +672,7 @@ function Scan.ApplyBrowse(Items, Now, Complete)
 		local Kept = {}
 		for _, Step in ipairs(Prev or {}) do if Min and Step[1] >= Min and #Kept < LADDER then Kept[#Kept + 1] = Step end end
 		if Min and (not Kept[1] or Kept[1][1] > Min) then table.insert(Kept, 1, { Min, 1, 0 }); if #Kept > LADDER then Kept[#Kept] = nil end end
-		S.fresh.items[id] = { Min, Qty, Kept, Now }
+		if not A.skip then S.fresh.items[id] = { Min, Qty, Kept, Now } end
 	end
 	if Complete then
 		local Expected = BrowseItemCount()

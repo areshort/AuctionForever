@@ -138,11 +138,14 @@ end
 -- One item. Row: id, status, price (AF's post price), hours, net (per unit sold, after the cut), rate (sell-through,
 -- nil = not measured), chance (rate used), expected (per unit posted), salesDay (market units sold a day), crafted
 -- (it has a recipe), notes, excluded (reason, nil when it ranks).
+-- id: an item ID, or a suffix version's market key ("itemID:bonus"; the row's id is then the item ID, .key the key).
 function Farm.Raw(id, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	local I = E.info(id)
 	local S = E.status(I)
-	local Row = { id = id, status = S, notes = {} }
+	local Key = type(id) == "string" and id or nil
+	if Key then id = tonumber(Key:match("^(%d+)")) end
+	local Row = { id = id, key = Key, status = S, notes = {} }
 	if not I or EXCLUDE[S] then Row.excluded = EXCLUDE[S] or "no auction data" return Row end
 	local Exp, Net, Ch, Rate, H, P, DepKnown, Capped = Farm.Expected(I, S, E, 1)
 	if not Exp then Row.excluded = "no price" return Row end
@@ -166,7 +169,8 @@ local function Split(Rows, Key)
 	table.sort(In, function(a, b)
 		local x, y = a[Key] or -math.huge, b[Key] or -math.huge
 		if x ~= y then return x > y end
-		return (a.spell or a.id) < (b.spell or b.id)
+		if (a.spell or a.id) ~= (b.spell or b.id) then return (a.spell or a.id) < (b.spell or b.id) end
+		return tostring(a.key or "") < tostring(b.key or "")
 	end)
 	return In, Out
 end

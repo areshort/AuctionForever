@@ -92,20 +92,21 @@ local function ItemID(Link, ID)
 end
 
 -- "Auction", "Vendor" or "" (no icon). Bound: soulbound.
-local function Decide(ID, Bound)
+-- MKey: the item's market (a suffix version's own, from its link; see Core.LinkKey).
+local function Decide(ID, Bound, MKey)
 	if Bound or KeepList()[ID] then return "" end
 	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(ID)
 	if ClassID == QUEST_CLASS then return "" end
-	return AF.UI.BagAdvice(ID) or ""
+	return AF.UI.BagAdvice(ID, MKey) or ""
 end
 
 local TimerResetsAt, Left = 0, 0
 local Warned = false
 -- The item's advice, cached; nil when this frame's time is used up (asked again on a later frame).
-local function Status(ID, Bound)
+local function Status(ID, Bound, MKey)
 	local V = AF.Scan and AF.Scan.Version or 0
 	if V ~= Version then Version = V; Known = {} end -- new auction data: work everything out again
-	local Key = ID .. (Bound and "#b" or "")
+	local Key = tostring(MKey or ID) .. (Bound and "#b" or "")
 	if Known[Key] ~= nil then return Known[Key] end
 	local Start = GetTimePreciseSec()
 	if Start >= TimerResetsAt then
@@ -114,7 +115,7 @@ local function Status(ID, Bound)
 	elseif Left <= 0 then
 		return nil
 	end
-	local Ok, Where = pcall(Decide, ID, Bound)
+	local Ok, Where = pcall(Decide, ID, Bound, MKey)
 	Left = Left - (GetTimePreciseSec() - Start)
 	if not Ok then
 		if not Warned then Warned = true; Say("bag icon error: " .. tostring(Where)) end
@@ -131,7 +132,7 @@ local Tries = 0
 local function OnUpdate(self)
 	Tries = Tries + 1
 	for Key, Args in pairs(Pending) do
-		if Status(Args[1], Args[2]) ~= nil then Pending[Key] = nil end
+		if Status(Args[1], Args[2], Args[3]) ~= nil then Pending[Key] = nil end
 	end
 	if next(Pending) == nil or Tries > 600 then
 		Pending = {}
@@ -139,8 +140,8 @@ local function OnUpdate(self)
 		Refresh()
 	end
 end
-local function Later(ID, Bound)
-	Pending[ID .. (Bound and "#b" or "")] = { ID, Bound }
+local function Later(ID, Bound, MKey)
+	Pending[tostring(MKey or ID) .. (Bound and "#b" or "")] = { ID, Bound, MKey }
 	Tries = 0
 	Retry:SetScript("OnUpdate", OnUpdate)
 end
@@ -171,8 +172,9 @@ function B.UpdateIcon(Icon, Details, Only)
 	local ID = Details and ItemID(Details.itemLink, Details.itemID)
 	if not ID then return false end
 	local Bound = Details.isBound == true
-	local Where = Status(ID, Bound)
-	if Where == nil then Later(ID, Bound) return false end
+	local MKey = AF.Core.LinkKey(Details.itemLink, ID)
+	local Where = Status(ID, Bound, MKey)
+	if Where == nil then Later(ID, Bound, MKey) return false end
 	if Only and Where ~= Only then return false end
 	if Details.quality == POOR then return false end -- grey items: left to the junk sellers (Leatrix, RXP)
 	if Where == "Auction" then
@@ -200,8 +202,9 @@ function B.IsJunk(BagID, SlotID, ID, Link)
 	end
 	local Quality = select(3, C_Item.GetItemInfo(Link))
 	if Quality == POOR then return false end -- grey items: left to the junk sellers (Leatrix, RXP)
-	local Where = Status(ID, Bound)
-	if Where == nil then Later(ID, Bound) return false end
+	local MKey = AF.Core.LinkKey(Link, ID)
+	local Where = Status(ID, Bound, MKey)
+	if Where == nil then Later(ID, Bound, MKey) return false end
 	return Where == "Vendor"
 end
 

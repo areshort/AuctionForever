@@ -147,5 +147,48 @@ try:
     ok(r1 is True and r2 is False and 'AuctionForeverData' in open(out5, encoding='utf-8').read(), 'history reset with an unchanged snapshot: file rewritten, no crash')
 except Exception as e:
     ok(False, f'history reset with an unchanged snapshot crashed: {e!r}')
+# ---- Random-suffix gear: each version (bonus list) is its own market.
+def sgear(i, item, buyout, tl, bonus=None):
+    it = {'id': item, 'context': 1}
+    if bonus:
+        it['bonus_lists'] = [bonus]
+        it['modifiers'] = [{'type': 28, 'value': 5239}]
+    return {'id': i, 'item': it, 'buyout': buyout, 'quantity': 1, 'time_left': tl}
+
+
+ls = C.listings([sgear(70, 10113, 9000, 'LONG', 12719), sgear(71, 10113, 3000, 'LONG', 12722), sgear(72, 10113, 5000, 'LONG'),
+                 sgear(73, 10113, 9500, 'VERY_LONG', 12719)], [])
+mk = C.market(ls)
+ok(set(mk) == {'10113:12719', '10113:12722', 10113} and mk['10113:12719']['low'] == 9000 and mk['10113:12722']['low'] == 3000
+   and mk[10113]['low'] == 5000 and mk['10113:12719']['qty'] == 2,
+   f'suffix versions keyed apart ("of the Whale" 12719, "of the Bear" 12722), no suffix keeps the plain ID: {sorted(map(str, mk))}')
+ok(C.key_parts('10113:12719') == (10113, '12719') and C.key_parts(10113) == (10113, None) and C.key_parts('17') == (17, None), 'key parts')
+# The cheap Bear version still up doesn't make the Whale version's sale a cancel.
+ev = C.compare(ls, {k: v for k, v in ls.items() if k != '70'}, 1.0)
+ok(ev.get('10113:12719', {}).get('sold') == [(9000, 1)] and not ev.get('10113:12719', {}).get('cancel'),
+   f"a Whale sold while a cheaper Bear is listed: a sale of the Whale ({ev.get('10113:12719')})")
+# Full run: the data file has the suffix rows in sfx{} (plain items stay in items{}), names / info once per ID.
+d4 = tempfile.mkdtemp()
+st6, out6 = os.path.join(d4, 's.gz'), os.path.join(d4, 'o.lua')
+items1 = [sgear(70, 10113, 9000, 'LONG', 12719), sgear(71, 10113, 3000, 'LONG', 12722), sgear(72, 10113, 5000, 'LONG')]
+C.run(st6, out6, items1, [], now_ts=2_000_000, names_fn=lambda ids: {i: ['Wolf Rider\'s Belt', 2700, 2] for i in ids})
+txt = open(out6, encoding='utf-8').read()
+import re
+ok(re.search(r'S\[10113\]=\{\[12719\]=\{9000,', txt) is not None and ',[12722]={3000,' in txt and 'sfx={}}' in txt and re.search(r'\nitems=\{\n\[10113\]=\{5000,', txt) is not None
+   and txt.count("[10113]=\"Wolf Rider's Belt\"") == 1 and txt.count('[10113]={2700,2,0}') == 1,
+   'data file: items{} has the plain listing, sfx{10113}{12719 / 12722} the suffix versions; name and info once')
+ok(C.load_state(st6)['names'] == {'10113': "Wolf Rider's Belt"}, 'names looked up by item ID (not per suffix)')
+# An older state (format 2) kept suffix versions under the plain ID: history dropped once, and its item auctions
+# aren't compared with the new keys (no fake sales); commodities still are.
+d5 = tempfile.mkdtemp()
+st7, out7 = os.path.join(d5, 's.gz'), os.path.join(d5, 'o.lua')
+old_ls = {'70': [10113, 9000, 1, 2, 'i'], '71': [10113, 3000, 1, 2, 'i'], '20': [17, 100, 50, 2, 'c']}
+C.save_state(st7, {'histv': 2, 'fmt': 2, 'hourly': {'10113': [[1, 3000, 2, 5, 500, 0, 1.0, 0]]}, 'soldprices': {'10113': [[1, 3000, 5]]},
+                   'daily': {}, 'compared': [[1, 1.0]], 'listings': old_ls, 'time': 2_000_000, 'timed': True})
+C.run(st7, out7, items1, [good(20, 17, 100, 30, 'LONG')], now_ts=2_003_600, names_fn=lambda ids: {})
+s7 = C.load_state(st7)
+ok(s7['histv'] == C.HISTV and '10113' not in s7['soldprices'] and not any(k.startswith('10113') for k in s7['soldprices'])
+   and s7['soldprices'].get('17', [[0, 0, 0]])[-1][1:] == [100, 20],
+   f"format change: old suffix-mixed history dropped, item auctions not compared once, commodities still compared ({sorted(s7['soldprices'])})")
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

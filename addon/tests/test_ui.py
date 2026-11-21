@@ -2159,6 +2159,93 @@ src = open(os.path.join(ADDON, 'Brief.lua'), encoding='utf-8').read() if os.path
 ok('SendChatMessage' not in src and 'DEFAULT_CHAT_FRAME' in src, 'the brief only prints to your own chat frame')
 X("""AF_NS.UI.FlipTargets, AF_NS.UI.CraftTargets, AF_NS.UI.GatherRows, AF_NS.Farm.ClassOf, C_SkillInfo = BriefSaved.FT, BriefSaved.CT, BriefSaved.GR, BriefSaved.CO, BriefSaved.SI
   AuctionForeverDB.briefSeen, AuctionForeverDB.briefOff, AF_NS.UI.LastPlan = BriefSaved.seen, BriefSaved.off, BriefSaved.plan; DEFAULT_CHAT_FRAME = nil""")
+# ---- Random-suffix gear: each version (bonus list) is its own market ------------------------------------------
+X("""SfxSaved = { sfx = AuctionForeverData.sfx, info = AuctionForeverData.info[990201], fresh = AuctionForeverDB.fresh, CC = C_Container.GetContainerItemInfo,
+    NS = C_Container.GetContainerNumSlots }
+  local Idx = {}
+  for i, N in ipairs(AuctionForeverData.fields) do Idx[N] = i end
+  local function Row(Price, Qty)
+    local R = {}
+    for i, V in pairs(AuctionForeverData.items[2589]) do R[i] = type(V) == "table" and {} or V end
+    for _, N in ipairs({ "low", "med", "hi", "med24", "medAll" }) do R[Idx[N]] = Price end
+    R[Idx.qty] = Qty; R[Idx.ladder] = { { Price, Qty } }; R[Idx.lows] = { Price, Price, Price }; R[Idx.lowHi24] = Price
+    return R
+  end
+  AuctionForeverData.sfx = { [990201] = { [12719] = Row(90000, 3), [12722] = Row(30000, 4) } }
+  AuctionForeverData.info[990201] = { 2700, 2, 0 }
+  AuctionForeverDB.fresh = nil
+  AF_NS.Scan.Version = (AF_NS.Scan.Version or 0) + 1
+  WhaleLink = "|cff1eff00|Hitem:990201::::::::25::::1:12719:::|h[Wolf Rider's Belt of the Whale]|h|r"
+  BearLink = "|cff1eff00|Hitem:990201::::::::25::::1:12722:::|h[Wolf Rider's Belt of the Bear]|h|r"
+  OtherLink = "|cff1eff00|Hitem:990201::::::::25::::1:12800:::|h[Wolf Rider's Belt of the Monkey]|h|r" """)
+keys = [L(f'AF_NS.Core.LinkKey({x}, 990201)') for x in ('WhaleLink', 'BearLink', '"|cffffffff|Hitem:2589::::::::25::::::|h[Linen Cloth]|h|r"', '"|Hitem:990201:0:0:0:0:0:-14:0|h"', 'nil')]
+ok(keys == ['990201:12719', '990201:12722', 2589, '990201:r-14', 990201], f'market key from an item link: the suffix bonus list, else the item ID: {keys}')
+wi, bi = L('AF_NS.Core.Info("990201:12719")'), L('AF_NS.Core.Info("990201:12722")')
+ok(wi.med == 90000 and bi.med == 30000 and wi.id == 990201 and L('AF_NS.Core.Info(990201)') is None and L('AF_NS.Core.Info("990201:12800")') is None,
+   'Whale and Bear versions have their own markets; no plain entry and no data for an unseen version (not borrowed from another)')
+ok(str(L('(AF_NS.UI.KeyName("990201:12719"))')) == 'Item 990201 of the Whale' and str(L('(AF_NS.UI.KeyName(990201))')) == 'Item 990201',
+   'names: the suffix version gets its suffix (from Forever\'s ItemBonus / ItemNameDescription)')
+
+
+def tt(link):
+    X(f'TipLines = {{}}; TooltipPostCalls[1](GameTooltip, {{ id = 990201, hyperlink = {link} }})')
+    return [plain(x).rstrip() for x in L('TipLines').values()]
+
+
+tw, tb, to = tt('WhaleLink'), tt('BearLink'), tt('OtherLink')
+ah = lambda key: plain(L(f'AF_NS.Core.MoneyColor(AF_NS.UI.TargetPrice(AF_NS.Core.Info("{key}")))'))
+ok(f'AH: {ah("990201:12719")}' in tw and f'AH: {ah("990201:12722")}' in tb and 'AH: no data' in to and ah("990201:12719") != ah("990201:12722"),
+   f'tooltip: the hovered version\'s AH price (Whale {tw[3:5]}, Bear {tb[3:5]}), an unseen version "no data" ({to[3:5]})')
+ba = [L(f'(AF_NS.UI.BagAdvice(990201, {k}))') for k in ('"990201:12719"', '"990201:12800"')]
+ok(ba[0] == 'Auction' and ba[1] != 'Auction', f"bag advice by the bag item's own version (Whale sells on the AH; an unseen version has no AH value): {ba}")
+# AF Sell: a Whale and a Bear in the bags are two entries, each priced from its own version.
+X("""C_Container.GetContainerNumSlots = function(b) return b == 0 and 2 or 0 end
+  C_Container.GetContainerItemInfo = function(b, sl)
+    if b ~= 0 then return nil end
+    if sl == 1 then return { itemID = 990201, stackCount = 1, hyperlink = WhaleLink, isBound = false } end
+    return { itemID = 990201, stackCount = 1, hyperlink = BearLink, isBound = false } end
+  SQ = AF_NS.Trade.BuildQueue()""")
+sq = sorted((str(L(f'SQ[{i}].key')), L(f'SQ[{i}].price')) for i in range(1, L('#SQ') + 1))
+ok(len(sq) == 2 and sq[0][0] == '990201:12719' and sq[1][0] == '990201:12722' and sq[0][1] > 2 * sq[1][1],
+   f'AF Sell: suffix versions are separate entries, each priced from its own market: {sq}')
+# Farm Drop view: each version its own row, named with its suffix.
+X('AF_NS.Scan.Version = AF_NS.Scan.Version + 1; DR = AF_NS.UI.DropRows()')
+dr = [str(L(f'DR[{i}].key')) for i in range(1, L('#DR') + 1) if L(f'DR[{i}].id') == 990201]
+ok(sorted(dr) == ['990201:12719', '990201:12722'], f'Farm Drop: one row per suffix version: {dr}')
+# Scans: a full scan row keyed by its link's version; an item lookup splits the results by version.
+X("""C_AuctionHouse.GetReplicateItemLink = function(i) return i == 1 and WhaleLink or BearLink end
+  RK = { AF_NS.Scan.ReplicateKey(1, 990201), AF_NS.Scan.ReplicateKey(2, 990201), AF_NS.Scan.ReplicateKey(3, 2589) }
+  C_AuctionHouse.GetReplicateItemLink = nil""")
+ok([L('RK[1]'), L('RK[2]'), L('RK[3]')] == ['990201:12719', '990201:12722', 2589],
+   'full scan: item auctions keyed by their version')
+X("""RealNISR, RealISRI, RealHFISR = C_AuctionHouse.GetNumItemSearchResults, C_AuctionHouse.GetItemSearchResultInfo, C_AuctionHouse.HasFullItemSearchResults
+  C_AuctionHouse.GetNumItemSearchResults = function() return 3 end
+  C_AuctionHouse.HasFullItemSearchResults = function() return true end
+  C_AuctionHouse.GetItemSearchResultInfo = function(K, j)
+    if j == 1 then return { auctionID = 601, quantity = 1, buyoutAmount = 85000, timeLeftSeconds = 86400, itemLink = WhaleLink } end
+    if j == 2 then return { auctionID = 602, quantity = 1, buyoutAmount = 28000, timeLeftSeconds = 86400, itemLink = BearLink } end
+    return { auctionID = 603, quantity = 1, buyoutAmount = 29000, timeLeftSeconds = 86400, itemLink = BearLink } end
+  AF_NS.Scan.ReadItemsForTest(990201, { itemID = 990201 })
+  C_AuctionHouse.GetNumItemSearchResults, C_AuctionHouse.GetItemSearchResultInfo, C_AuctionHouse.HasFullItemSearchResults = RealNISR, RealISRI, RealHFISR""")
+fw, fb = L('AuctionForeverDB.fresh.items["990201:12719"]'), L('AuctionForeverDB.fresh.items["990201:12722"]')
+ok(fw is not None and fb is not None and fw[1] == 85000 and fw[2] == 1 and fb[1] == 28000 and fb[2] == 2 and L('AuctionForeverDB.fresh.items[990201]') is None
+   and L('AF_NS.Core.Info("990201:12722").low') == 28000,
+   f'item lookup: each version gets its own fresh prices (Whale {fw and fw[1]}, Bear {fb and fb[1]} x{fb and fb[2]}), none under the plain ID')
+X("""AF_NS.Scan.ApplyBrowse({ [990201] = { 100, 9 } }, time(), false)""")
+ok(L('AuctionForeverDB.fresh.items[990201]') is None and L('AuctionForeverDB.fresh.items["990201:12719"][1]') == 85000,
+   'quick price browse (one total for all versions): not used for suffix items')
+# A full scan that can't tell versions apart (every row under the plain ID) doesn't make the versions look sold out.
+X("""SfxObs = AuctionForeverDB.obs; AuctionForeverDB.obs = {}
+  local L0 = {}
+  for id in pairs(AuctionForeverData.items) do L0[id] = { [100] = 1 } end
+  L0[990201] = { [50000] = 2 }
+  SfxFull = { AF_NS.Scan.FinishFull(L0, {}, time() + 7200) }
+  SfxGone = 0; for K, O in pairs(AuctionForeverDB.obs) do if type(K) == "string" then SfxGone = SfxGone + 1 end end
+  AuctionForeverDB.obs = SfxObs""")
+ok(L('SfxFull[3]') is False and L('SfxGone') == 0, f"full scan without versions: suffix versions not counted as gone ({L('SfxGone')} measured)")
+X("""AuctionForeverData.sfx, AuctionForeverData.info[990201], AuctionForeverDB.fresh = SfxSaved.sfx, SfxSaved.info, SfxSaved.fresh
+  C_Container.GetContainerItemInfo, C_Container.GetContainerNumSlots = SfxSaved.CC, SfxSaved.NS
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)
