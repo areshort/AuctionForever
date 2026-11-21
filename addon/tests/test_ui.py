@@ -319,6 +319,10 @@ if real:
       C_AuctionHouse.RequestMoreBrowseResults = function() Page = Page + 1 end
       Looked = {}
       C_AuctionHouse.SendSearchQuery = function(k) Looked[#Looked + 1] = k.itemID; LastQuery = k.itemID end
+      -- 12 near misses (one of them also a busy item): the 10 closest are looked up first
+      RealNear = AF_NS.UI.NearMisses
+      NearIds = { AF_NS.Scan.BusyIds(20)[3], 990011, 990012, 990013, 990014, 990015, 990016, 990017, 990018, 990019, 990020, 990021 }
+      AF_NS.UI.NearMisses = function() local t = {} for i, id in ipairs(NearIds) do t[i] = { id = id, gap = i / 100 } end return t end
       time = function() return AuctionForeverData.time + 5600 end
       Click(AuctionForeverAHPanel.Quick); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2])""")
     ok(L('AF_NS.Scan.Busy()'), 'quick scan keeps going after the browse: checking busy items')
@@ -326,7 +330,11 @@ if real:
     bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
     ok('busy' in bt and L('AuctionForeverAHPanel.Bar:GetValue()') >= 0.8, 'one bar: phase 2 continues past 80%: ' + bt)
     X('PumpQuick()')
-    ok(not L('AF_NS.Scan.Busy()') and L('#Looked') == len(busy), f"looked up {L('#Looked')} busy items")
+    looked = [L(f'Looked[{i}]') for i in range(1, int(L('#Looked')) + 1)]
+    near10 = [L(f'NearIds[{i}]') for i in range(1, 11)]
+    ok(not L('AF_NS.Scan.Busy()') and looked[:10] == near10 and len(looked) == len(busy) + 9 and len(set(looked)) == len(looked),
+       f"looked up the 10 closest near misses first, then the busy items, none twice ({len(looked)} = {len(busy)} busy + 9 new)")
+    X('AF_NS.UI.NearMisses = RealNear')
     lp = str(L('LastPrint'))
     ok('Quick scan: prices and stock for' in lp and 'busy items' in lp.lower(), 'one chat line for both phases: ' + lp)
     ok(L('QLogCalls') == 2, f"quick scan with busy-item lookups: logged once more, not once per lookup ({L('QLogCalls')})")

@@ -664,10 +664,28 @@ function Scan.BusyIds(N)
 	return Out
 end
 
+-- Phase 2's lookup list: the near-miss flips first (steady sellers that came close to being flips: the likeliest new
+-- ones, and a browse only gives their lowest price), at most NEAR of them, then the busiest items. An error working
+-- out the near misses must never break the scan.
+Scan.NEAR = 10
+function Scan.PhaseTwoIds()
+	local Out, Seen = {}, {}
+	local Ok, Near = pcall(function() return AF.UI and AF.UI.NearMisses and AF.UI.NearMisses() end)
+	if Ok and type(Near) == "table" then
+		for i = 1, math.min(Scan.NEAR, #Near) do
+			local id = Near[i].id
+			if id and not Seen[id] then Seen[id] = true; Out[#Out + 1] = id end
+		end
+	end
+	for _, id in ipairs(Scan.BusyIds(BUSY)) do if not Seen[id] then Seen[id] = true; Out[#Out + 1] = id end end
+	return Out
+end
+
 local function BrowseFinish(Reason)
 	local St = BQ_STATE
 	local Complete = not Reason and C_AuctionHouse.HasFullBrowseResults()
 	Scan.ApplyBrowse(St.items, time(), Complete)
+	Scan.Version = Scan.Version + 1 -- (the near misses below are worked out from the browse just applied)
 	local Took = GetTime() - St.started
 	local Done = St.onDone
 	BQ_STATE, Mode, Scan.Progress = nil, nil, nil
@@ -677,7 +695,7 @@ local function BrowseFinish(Reason)
 		Scan.LastResult = string.format("Quick scan: prices and stock for %d items in %.0f s.%s", St.n, Took, Reason and (" Stopped early: " .. Reason .. ".") or "")
 	end
 	-- Phase 2: exact lookups of the busiest items, so a quick scan minutes after a full scan measures their sales.
-	local Busy = (not Reason) and Scan.BusyIds(BUSY) or {}
+	local Busy = (not Reason) and Scan.PhaseTwoIds() or {}
 	local First = Scan.LastResult
 	if #Busy > 0 and Scan.Lookup(Busy, true, function()
 		local R = Scan.LastSummary or {}
