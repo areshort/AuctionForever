@@ -49,6 +49,7 @@ def _get(path, tok, tries=3):
             time.sleep(10 * (i + 1))
 
 
+UNKNOWN_RETRY_HOURS, UNKNOWN_RETRY_PER_RUN = 24, 400  # items the API didn't know: asked again daily
 NAMES_PER_RUN = 4000  # items looked up per run at most (the first run fills most; the rest follow next run)
 QUALITY = {'POOR': 0, 'COMMON': 1, 'UNCOMMON': 2, 'RARE': 3, 'EPIC': 4, 'LEGENDARY': 5, 'ARTIFACT': 6, 'HEIRLOOM': 7}
 
@@ -77,20 +78,28 @@ def fetch_names(ids, tok=None):
         return {i: n for i, n in pool.map(one, ids) if n is not None}
 
 
-def update_names(state, mk, names_fn):
-    """Add name, vendor price and quality for listed items that don't have them yet. Returns how many were added."""
+def update_names(state, mk, names_fn, now_ts=None):
+    """Add name, vendor price and quality for listed items that don't have them yet. Returns how many were added.
+
+    Items the game data API doesn't know (404: about 3,000 listed items, mostly old-world gear, which Forever's
+    client tables (ItemSparse, ItemSearchName) don't have either) are asked again once a day (UNKNOWN_RETRY_HOURS),
+    a few hundred a run, in case the API gains them. Their vendor price is unknown, not 0 (see write_lua)."""
     names = state.setdefault('names', {})
     details = state.setdefault('details', {})
-    missing = sorted({str(key_parts(i)[0]) for i in mk} - set(details), key=int)[:NAMES_PER_RUN]
-    if not missing or not names_fn:
+    now_ts = now_ts if now_ts is not None else time.time()
+    listed = {str(key_parts(i)[0]) for i in mk}
+    missing = sorted(listed - set(details), key=int)[:NAMES_PER_RUN]
+    stale = [k for k in sorted(listed & set(details), key=int) if not names.get(k)
+             and now_ts - (details[k][2] if len(details[k]) > 2 else 0) >= UNKNOWN_RETRY_HOURS * 3600][:UNKNOWN_RETRY_PER_RUN]
+    if (not missing and not stale) or not names_fn:
         return 0
-    got = names_fn([int(k) for k in missing])
+    got = names_fn([int(k) for k in missing + stale])
     for i, d in got.items():
         if isinstance(d, str):
             d = [d, 0, 1]
         names[str(i)] = d[0]
-        details[str(i)] = [d[1], d[2]]
-    return len(got)
+        details[str(i)] = [d[1], d[2]] if d[0] else [d[1], d[2], now_ts]  # unknown: when it was asked
+    return sum(1 for i, d in got.items() if (d if isinstance(d, str) else d[0]))
 
 
 def fetch():
@@ -389,7 +398,8 @@ def write_lua(path, state, mk, now_ts):
         if have.get(str(i)):
             names.append(f'[{i}]={lua(have[str(i)])}')
         d = det.get(str(i)) or [None, None]
-        info.append(f'[{i}]={lua([d[0], d[1], 1 if str(i) in goods else 0])}')
+        # Vendor price: only for items the API knows (it has a name). Unknown is nil, not 0 (0 = "sells for nothing").
+        info.append(f'[{i}]={lua([d[0] if have.get(str(i)) else None, d[1], 1 if str(i) in goods else 0])}')
     # The suffix rows are added after the main table, in chunks each inside its own function: Lua limits the
     # constants one function may hold (65,536 in LuaJIT), and one big table literal would pass it.
     sfx_rows = [f'S[{i}]={{' + ','.join(r) + '}' for i, r in sorted(sfx.items())]
@@ -444,7 +454,7 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
     prev = state.get('listings')
     if prev is not None and prev == now:
         # Blizzard hasn't published a new snapshot yet: change nothing, so this isn't counted as an hour of no sales.
-        added = update_names(state, market(now), names_fn)
+        added = update_names(state, market(now), names_fn, now_ts)
         if state.get('fmt') != FMT or added or reset:
             # ...but a data file written by an older collector is rewritten right away in the current format.
             state['fmt'] = FMT
@@ -470,7 +480,7 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
     else:
         ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
     mk = market(now)
-    added = update_names(state, mk, names_fn)
+    added = update_names(state, mk, names_fn, now_ts)
     span = hours_for_rate or 0
     update_history(state, now_ts, mk, ev, span)
     # Hours of sales watched in the kept window, shown by the add-on as "based on N h of sales".

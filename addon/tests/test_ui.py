@@ -2266,6 +2266,38 @@ X("""AuctionForeverData.sfx, AuctionForeverData.info[990201], AuctionForeverDB.f
 X('VE = { id = 2589, info = { lowRange24 = { 400, 700, 1000 }, sellThrough = 1, perHour = 10 }, flip = { buyQty = 10, qty = 10, buyUpTo = 500, cost = 5000, resell = 700, profit = 1450, hours = 12, chance = 1, volatile = true } }')
 pt = plain(str(L('AF_NS.Trade.PaneText(VE)')))
 ok('Volatile' in pt and '4s 00c to 10s 00c' in pt and '(7s 00c)' in pt, 'AF Buy detail says volatile: ' + pt.replace(chr(10), ' / '))
+# ---- Unknown vendor price (item not loaded, and the data file doesn't name it): not known, never 0 ---------------
+X('if not rawget(_G, "GetTimePreciseSec") then GetTimePreciseSec = function() return 0 end end')
+X("""UVSaved = { gi = C_Item.GetItemInfo, info = AuctionForeverData.info[990647], item = AuctionForeverData.items[990647],
+    nm = AuctionForeverData.names[990647], CC = C_Container.GetContainerItemInfo, NS = C_Container.GetContainerNumSlots }
+  C_Item.GetItemInfo = function(id) if id == 990647 then return nil end return UVSaved.gi(id) end
+  local R = {}
+  for i, V in pairs(AuctionForeverData.items[2589]) do R[i] = V end
+  AuctionForeverData.items[990647] = R
+  AuctionForeverData.info[990647] = { 0, 3, 0 } -- an old data file: unknown items got vendor price 0 and no name
+  AuctionForeverData.names[990647] = nil
+  AF_NS.Scan.Version = (AF_NS.Scan.Version or 0) + 1""")
+ok(L('AF_NS.UI.VendorKnown(990647)') is None and L('AF_NS.UI.VendorKnown(2589)') is not None,
+   'old data file: an unnamed item\'s shipped vendor price 0 is "not known" (a named one\'s is used)')
+X('AuctionForeverData.info[990647] = { nil, 3, 0 }')
+ok(L('AF_NS.UI.VendorKnown(990647)') is None, 'new data file (nil vendor price): not known')
+tl = {str(r[1]): plain(str(r[2])) for r in L('AF_NS.UI.TooltipLines(990647)').values()}
+ok(tl.get('Vendor') == 'not known yet' and tl.get('Profit') == '-' and tl.get('AH') not in (None, 'no data'),
+   f'tooltip: vendor "not known yet", no profit worked out against 0, the AH price still shown ({tl})')
+ba = L('{ AF_NS.UI.BagAdvice(990647) }')
+ok(ba[1] is None and ba[3] is True, 'bag advice waits for the vendor price (no advice yet, asked again later)')
+ok(L('AF_NS.Bags.Status(990647, false) == nil') and L('AF_NS.Bags.Status(990647, false) == nil'),
+   'bag icon: not decided (and not cached as "nothing") while the vendor price is unknown')
+X("""C_Container.GetContainerNumSlots = function(b) return b == 0 and 1 or 0 end
+  C_Container.GetContainerItemInfo = function(b, sl) if b == 0 and sl == 1 then return { itemID = 990647, stackCount = 5, hyperlink = "|Hitem:990647::::::::25:::::|h", isBound = false } end end
+  UQ = AF_NS.Trade.BuildQueue()""")
+ok(L('#UQ') == 0, 'AF Sell: an item with an unknown vendor price waits (not judged against a vendor price of 0)')
+X('C_Item.GetItemInfo = UVSaved.gi; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; UQ = AF_NS.Trade.BuildQueue()')
+ok(L('AF_NS.UI.VendorKnown(990647)') == 5 and L('AF_NS.Bags.Status(990647, false)') is not None,
+   'once the game knows the item, its own vendor price is used and the bag icon is decided')
+X("""AuctionForeverData.info[990647], AuctionForeverData.items[990647], AuctionForeverData.names[990647] = UVSaved.info, UVSaved.item, UVSaved.nm
+  C_Container.GetContainerItemInfo, C_Container.GetContainerNumSlots = UVSaved.CC, UVSaved.NS
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

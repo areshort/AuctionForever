@@ -196,5 +196,24 @@ s7 = C.load_state(st7)
 ok(s7['histv'] == C.HISTV and '10113' not in s7['soldprices'] and not any(k.startswith('10113') for k in s7['soldprices'])
    and s7['soldprices'].get('17', [[0, 0, 0]])[-1][1:] == [100, 20],
    f"format change: old suffix-mixed history dropped, item auctions not compared once, commodities still compared ({sorted(s7['soldprices'])})")
+# ---- Items the game data API doesn't know: vendor price unknown (nil), not 0; asked again once a day.
+asked = []
+def api(ids):
+    asked.append(sorted(ids))
+    return {i: (['Linen Cloth', 13, 1] if i == 2589 else ['', 0, 1]) for i in ids}
+su = {'names': {}, 'details': {}}
+C.update_names(su, {2589: {}, 647: {}, '1168:12719': {}}, api, now_ts=1_000_000)
+ok(asked[-1] == [647, 1168, 2589] and su['details']['647'] == [0, 1, 1_000_000] and su['details']['2589'] == [13, 1],
+   f"unknown items remember when they were asked ({su['details']})")
+C.update_names(su, {2589: {}, 647: {}, '1168:12719': {}}, api, now_ts=1_000_000 + 3600)
+ok(len(asked) == 1, 'an hour later: not asked again')
+C.update_names(su, {2589: {}, 647: {}, '1168:12719': {}}, api, now_ts=1_000_000 + 25 * 3600)
+ok(asked[-1] == [647, 1168], f'a day later: only the unknown ones asked again ({asked[-1]})')
+d8 = tempfile.mkdtemp()
+st8, out8 = os.path.join(d8, 'state.json.gz'), os.path.join(d8, 'AuctionForeverData.lua')
+C.run(st8, out8, [{'id': 1, 'item': {'id': 647}, 'buyout': 5000000, 'quantity': 1, 'time_left': 'VERY_LONG'}],
+      [good(2, 2589, 13, 20, 'LONG')], now_ts=2_000_000, names_fn=api)
+t8 = open(out8, encoding='utf-8').read()
+ok('[647]={nil,1,0}' in t8 and '[2589]={13,1,1}' in t8, 'data file: an unknown item\'s vendor price is nil, a known one\'s is kept')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

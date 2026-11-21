@@ -791,9 +791,10 @@ function T.BuildQueue()
 	local Q = {}
 	for _, G in ipairs(Order) do
 		local I = Core.Info(G.key or G.id)
-		G.vendor = UI().Vendor(G.id)
-		-- Same advice as the item tooltip's Rec line: only what's worth selling on the auction house.
-		if I and Core.Recommend(I, G.vendor, UI().TargetPrice(I)) == "Auction" then
+		G.vendor = UI().VendorKnown(G.id)
+		-- Same advice as the item tooltip's Rec line: only what's worth selling on the auction house. Vendor price not
+		-- known yet (item not loaded): left out until it is, not judged against a vendor price of 0.
+		if I and G.vendor and Core.Recommend(I, G.vendor, UI().TargetPrice(I)) == "Auction" then
 			G.info = I
 			Suggest(G)
 			G.value = G.price * G.count

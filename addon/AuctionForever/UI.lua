@@ -52,6 +52,17 @@ local function Shipped(id)
 	local D = AuctionForeverData
 	return type(D) == "table" and type(D.info) == "table" and D.info[id] or nil
 end
+-- The data file's vendor price. The game data API doesn't know about 3,000 listed items: newer data files write nil
+-- for them, older ones 0, so a 0 counts only for items the file names. nil = not known (not "sells for nothing").
+local function ShippedVendor(id)
+	local I = Shipped(id)
+	if not I or not I[1] then return nil end
+	if I[1] > 0 then return I[1] end
+	local D = AuctionForeverData
+	local Named = type(D) == "table" and type(D.names) == "table" and D.names[id]
+	if Named and Named ~= "" then return 0 end
+	return nil
+end
 local function ItemName(id)
 	local Name, Quality = Remember(id)
 	local Cache = NameCache()
@@ -116,14 +127,18 @@ local function Flippable(id)
 	if K then return K == "commodity" end
 	return Stacks(id)
 end
-local function Vendor(id)
+-- Vendor price: the game's, the names cache's, then the data file's; nil when none knows it (the item isn't loaded
+-- yet and the data file doesn't name it). Vendor() is that or 0, for amounts and estimates only; decisions that
+-- compare with the vendor price use VendorKnown and wait when it's nil.
+local function VendorKnown(id)
 	local _, _, _, _, _, _, _, _, _, _, Sell = C_Item.GetItemInfo(id)
 	if Sell then return Sell end
 	local C = NameCache()[id]
 	if C and C[3] then return C[3] end
-	local I = Shipped(id)
-	return I and I[1] or 0
+	return ShippedVendor(id)
 end
+local function Vendor(id) return VendorKnown(id) or 0 end
+L.VendorKnown = function(id) return VendorKnown(id) end
 -- A suffix version's name ending ("of the Whale"), from its market key; nil for a plain item.
 function L.SuffixName(Key)
 	local _, Bon = Core.SplitKey(Key)
@@ -198,8 +213,7 @@ end
 local function KnownVendor(id)
 	local C = NameCache()[id]
 	if C and C[3] then return C[3] end
-	local I = Shipped(id)
-	return I and I[1] or nil
+	return ShippedVendor(id)
 end
 -- Item quality without asking the game: the names cache, then the shipped data; 1 (common) when not known.
 local function QualityOf(id)
@@ -754,9 +768,8 @@ function L.FlipTargets()
 		end
 		if Low then
 			-- The data file's vendor price first: asking the game for thousands of unloaded items floods the server.
-			local Sh = Shipped(id)
-			local V = (Sh and Sh[1]) or Vendor(id)
-			if V > 0 and Low < V then
+			local V = KnownVendor(id) -- (unknown: no vendor deal; never asks the game, see above)
+			if V and V > 0 and Low < V then
 				local I = Info[id] or Core.Info(id)
 				Info[id] = I
 				local Item = not Flippable(id) -- (not a commodity: one purchase per auction)
@@ -1823,16 +1836,16 @@ L.TargetPrice = TargetPrice
 -- see Core.LinkKey); a version with no data shows no AH value, never another version's.
 function L.TooltipLines(id, Count, InBags, Key)
 	local I = Core.Info(Key or id)
-	local V = Vendor(id)
-	if not I and V <= 0 then return nil end
+	local V = VendorKnown(id) -- nil: not known yet (shown as such; the profit needs it)
+	if not I and (V or 0) <= 0 then return nil end
 	local Target = TargetPrice(I)
 	local N = (Count and Count > 1) and math.floor(Count) or 1
 	local Tag = N > 1 and string.format(" (x%d%s)", N, InBags and " in bags" or "") or ""
 	return {
-		{ "Vendor" .. Tag, V > 0 and Core.MoneyColor(V * N) or "-" },
+		{ "Vendor" .. Tag, (V == nil and "not known yet") or (V > 0 and Core.MoneyColor(V * N)) or "-" },
 		{ "AH" .. Tag, Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data" },
 		-- Per unit: the AH price after the 5% cut minus what a vendor pays (times the stack).
-		{ "Profit" .. Tag, Target and Core.MoneyDelta((math.floor(Target * (1 - Core.Cut)) - V) * N) or "-" },
+		{ "Profit" .. Tag, (Target and V) and Core.MoneyDelta((math.floor(Target * (1 - Core.Cut)) - V) * N) or "-" },
 		{ "Source", AF.Farm.Source(id) },
 	}
 end
@@ -1873,9 +1886,14 @@ function L.TooltipCount(Tip, id)
 	return nil
 end
 -- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
+-- A third result, true: the vendor price isn't known yet (the item isn't loaded), so no advice yet; ask again later.
 function L.BagAdvice(id, Key)
 	local I = Core.Info(Key or id)
-	local V = Vendor(id)
+	local V = VendorKnown(id)
+	if V == nil then
+		if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+		return nil, nil, true
+	end
 	if not I and V <= 0 then return nil, V end
 	return Core.Recommend(I, V, TargetPrice(I)), V
 end

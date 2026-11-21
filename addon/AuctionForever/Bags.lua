@@ -97,7 +97,9 @@ local function Decide(ID, Bound, MKey)
 	if Bound or KeepList()[ID] then return "" end
 	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(ID)
 	if ClassID == QUEST_CLASS then return "" end
-	return AF.UI.BagAdvice(ID, MKey) or ""
+	local Advice, _, Unknown = AF.UI.BagAdvice(ID, MKey)
+	if Unknown then return nil end -- vendor price not known yet: decided later, not cached as "nothing"
+	return Advice or ""
 end
 
 local TimerResetsAt, Left = 0, 0
