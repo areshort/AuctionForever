@@ -418,23 +418,45 @@ function L.LearnRecipes()
 end
 -- AF Buy's "Show all recipes" box (off: only recipes you know).
 function L.ShowAllRecipes() return Account().allRecipes == true end
+L.CraftMinSalesHours = 2 -- a product sold in fewer separate hours than this isn't sold on the AH by a craft plan
 function L.SetShowAllRecipes(On) Account().allRecipes = On and true or nil end
 -- Craft plans: buy the mats on the AH, craft, sell the products (AH or vendor). One row per product (its best
 -- recipe), shaped like a flip target row: { id, craft = recipe row, info, flip = plan (Farm.CraftPlan), known,
 -- knownHow, rank }. Only recipes you know (L.RecipeKnown) unless Show all recipes is on; only commodity mats (AF buys
 -- them like commodity flips). N crafts fit one item's share of the flip budget, like a flip.
 local CraftPlanCache
+-- Seconds until a recipe spell is off cooldown (0 = ready or not known): C_Spell.GetSpellCooldown, else the old
+-- GetSpellCooldown; the global cooldown (1.5 s or less) doesn't count. Any error or hidden value: 0.
+function L.SpellCooldownLeft(Spell)
+	local Ok, Left = pcall(function()
+		local St, D
+		local CS = rawget(_G, "C_Spell")
+		if CS and CS.GetSpellCooldown then
+			local Info = CS.GetSpellCooldown(Spell)
+			if type(Info) == "table" then St, D = Info.startTime, Info.duration end
+		else
+			local G = rawget(_G, "GetSpellCooldown")
+			if G then St, D = G(Spell) end
+		end
+		if type(St) == "number" and type(D) == "number" and D > 1.5 and St > 0 then return math.max(0, St + D - GetTime()) end
+		return 0
+	end)
+	return Ok and Left or 0
+end
 function L.CraftTargets()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
 	local Budget = L.FlipBudget()
 	local All = L.ShowAllRecipes()
-	local Key = string.format("%s:%d:%s:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0)
+	-- (the minute is in the key: cooldowns run out)
+	local Key = string.format("%s:%d:%s:%d:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0, math.floor(GetTime() / 60))
 	if CraftPlanCache and CraftPlanCache.key == Key then return CraftPlanCache.rows end
 	local Mine = L.MyProfessions()
 	local MinProfit = Core.MinFlipProfitFor(Budget)
 	local Env = FarmEnv()
 	local Opts = { cap = Budget * Core.ItemShare(Budget), share = Core.PlanRateShare, hours = Core.FlipMaxHours,
+		resaleCap = Core.ResaleCap, minSalesHours = L.CraftMinSalesHours,
+		cooldownLeft = function(Row) return L.SpellCooldownLeft(Row.spell) end,
 		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
 		need = function(Cost, Row)
 			if Row.route == "Vendor" then return Core.MinVendorProfit end
@@ -448,7 +470,13 @@ function L.CraftTargets()
 			if Known or All then
 				local Ok = true
 				for _, Rg in ipairs(R.reagents) do if Rg.source ~= "vendor" and not Flippable(Rg.id) then Ok = false end end
-				local P = Ok and Farm.CraftPlan(R, Opts, Env)
+				local P, Why, Left
+				if Ok then P, Why, Left = Farm.CraftPlan(R, Opts, Env) end
+				-- On cooldown past the planning window: only with Show all, as the plan it will be (Buy greyed).
+				if not P and Why == "cooldown" and All then
+					P = Farm.CraftPlan(R, setmetatable({ cooldownLeft = function() return 0 end }, { __index = Opts }), Env)
+					if P then P.onCooldown = Left end
+				end
 				if P then
 					local B = Best[R.id]
 					if not B or P.profit > B.flip.profit then

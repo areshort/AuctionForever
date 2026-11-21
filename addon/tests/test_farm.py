@@ -305,5 +305,29 @@ ok(P and P.route == 'Vendor' and P.crafts == 60 and P.resell == 1500 and P.profi
    f"vendor route: no sales limit, up to the mats listed (each craft still pays at 5s mats): {P and P.crafts} crafts, profit {P and P.profit}")
 X('Items[600].perHour = 2')
 
+# Cooldown recipes: only the crafts the cooldown allows in the window (8 h); none when it won't be ready in time.
+X("""CRecCd = { 7002, 171, 50, 1, { 601, 2, 602, 1 }, 0, 60, 80, 172800, 0 }
+  CRowCd = AF_NS.Farm.Craft(600, CRecCd, CEnv)""")
+P = L('CPlan({ share = 0.75, hours = 8 }, CRowCd)')
+ok(P and P.crafts == 1 and P.cooldown == 172800, f"48 h cooldown: 1 craft (not 10) ({P and P.crafts})")
+r = L('{ AF_NS.Farm.CraftPlan(CRowCd, { share = 0.75, hours = 8, cooldownLeft = function() return 30 * 3600 end }, CEnv) }')
+ok(r[1] is None and r[2] == 'cooldown' and r[3] == 30 * 3600, f"on cooldown for 30 h more: no plan, says why ({r[2]}, {r[3]})")
+X('CRowCd1 = AF_NS.Farm.Craft(600, { 7003, 171, 50, 1, { 601, 2, 602, 1 }, 0, 60, 80, 3600, 0 }, CEnv)')
+P = L('CPlan({ share = 0.75, hours = 8 }, CRowCd1)')
+P2 = L('CPlan({ share = 0.75, hours = 8, cooldownLeft = function() return 7.5 * 3600 end }, CRowCd1)')
+ok(P and P.crafts == 9 and P2 and P2.crafts == 1, f"1 h cooldown: 9 crafts in 8 h when ready, 1 when ready in 7.5 h ({P and P.crafts}, {P2 and P2.crafts})")
+# Selling on the AH: priced at most at what buyers paid (a lone listing far above the sales isn't a price), and the
+# product needs hours with sales. Here AF Sell would post at 50s (1c under a lone high listing); buyers paid 10s.
+X("""CEnvHi = Env({ vendor = { [602] = 10 }, postPrice = function(I, S) if I.id == 600 then return 5000, 2 end return 970, 2 end })
+  CRowHi = AF_NS.Farm.Craft(600, CRec, CEnvHi)""")
+P0 = L('AF_NS.Farm.CraftPlan(CRowHi, { share = 0.75, hours = 8 }, CEnvHi)')
+P = L('AF_NS.Farm.CraftPlan(CRowHi, { share = 0.75, hours = 8, resaleCap = function(I) return math.min(I.med24, I.medAll) end }, CEnvHi)')
+ok(P0 and P0.resell == 5000 and P and P.resell == 1000 and P.capped and P.profit < P0.profit and P.crafts == 10,
+   f"resale capped at what buyers paid: 10s, not the 50s listing ({P0 and P0.resell} -> {P and P.resell}, profit {P0 and P0.profit} -> {P and P.profit})")
+ok(P and P.sales == L('Items[600].sales') and P.salesHours == L('Items[600].hoursWithSales'), 'the plan carries its evidence (sales, hours with sales)')
+X('Items[600].hoursWithSales = 1')
+ok(L('CPlan({ share = 0.75, hours = 8, minSalesHours = 2 })') is None, 'sold in only 1 hour: not sold on the AH by a craft plan')
+X('Items[600].hoursWithSales = nil')
+
 print(f'\n{fails} failed' if fails else '\nall passed')
 sys.exit(1 if fails else 0)

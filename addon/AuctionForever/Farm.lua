@@ -318,6 +318,12 @@ end
 --   you already hold; the vendor route has no such limit, only Opts.maxCrafts);
 --   cost no more than Opts.cap (one item's share of the budget);
 --   still pay for the last craft (mats get dearer up the price ladders).
+-- Selling on the AH is judged more strictly than the Farm view does: the product needs Opts.minSalesHours hours with
+-- sales, and its post price is capped at Opts.resaleCap(I) (what buyers actually paid): a lone listing far above
+-- the sales (2 Woolen Boots listed at 9g, sold at 6s) isn't a price you can sell at. When that makes the vendor pay
+-- more, the plan sells to the vendor.
+-- Cooldown recipes: at most the crafts the cooldown allows within Opts.hours, after Opts.cooldownLeft(row) seconds
+-- still to wait (the game's cooldown on the recipe spell); nil, "cooldown", seconds left when it won't be ready in time.
 -- Returns nil when not even one craft fits, or the plan's expected profit is under Opts.need(cost, row).
 -- The plan: { craft, crafts, makes, units, cost (AH mats + vendor goods), profit (expected), route, resell (per
 -- unit: post price or vendor price), saleEach (expected per craft), mats = { {id, qty, upTo, cost} } (AH, in recipe
@@ -334,14 +340,36 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	Opts = Opts or {}
 	if not Row or Row.excluded or Row.buyExcluded or not Row.expected or not Row.cost or not Row.route then return nil end
+	local I = E.info(Row.id)
+	local VSum = (Row.matCrafts or 0) >= 1 and Row.vendorSell and Row.vendorSell * Row.makes or nil
 	local Vendor = Row.route == "Vendor"
-	local Each = Vendor and (Row.vendorSell or 0) * Row.makes or (Row.ahExpected + Row.cost)
-	if Each <= 0 then return nil end
+	local Each = Vendor and VSum or (Row.ahExpected + Row.cost)
+	local Price, Capped = Row.price, nil
+	if not Vendor then
+		if Opts.minSalesHours and (not I or (I.hoursWithSales or 0) < Opts.minSalesHours) then Each = nil end
+		local Top = Each and Opts.resaleCap and I and Opts.resaleCap(I)
+		if Top and Price and Price > Top then
+			local E2 = setmetatable({ postPrice = function(I2, S)
+				local P, H = E.postPrice(I2, S)
+				if P and P > Top then P = Top end
+				return P, H
+			end }, { __index = E })
+			Each, Price, Capped = (Farm.Expected(I, Row.status, E2, Row.makes)), Top, true
+		end
+		if VSum and (not Each or VSum > Each) then Vendor, Each = true, VSum end
+	end
+	if not Each or Each <= 0 then return nil end
 	local Max = Row.matCrafts or 0
 	if not Vendor then
-		local I = E.info(Row.id)
 		local Units = (I and I.perHour or 0) * (Opts.share or 1) * (Opts.hours or 8) - (I and I.held or 0)
 		Max = math.min(Max, math.floor(Units / Row.makes))
+	end
+	local CdLeft
+	if (Row.cooldown or 0) > 0 then
+		local Window = (Opts.hours or 8) * 3600
+		CdLeft = Opts.cooldownLeft and Opts.cooldownLeft(Row) or 0
+		if CdLeft >= Window then return nil, "cooldown", CdLeft end
+		Max = math.min(Max, 1 + math.floor((Window - CdLeft) / Row.cooldown))
 	end
 	Max = math.min(Max, Opts.maxCrafts or 1000)
 	if Max < 1 then return nil end
@@ -382,8 +410,9 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local Need = Opts.need and Opts.need(Total, Row) or 0
 	if Profit < Need then return nil end
 	return { craft = true, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
-		route = Row.route, resell = Vendor and Row.vendorSell or Row.price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
-		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, buyQty = N, buyUpTo = 0 }
+		route = Vendor and "Vendor" or "AH", resell = Vendor and Row.vendorSell or Price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
+		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, buyQty = N, buyUpTo = 0, capped = Capped,
+		sales = I and I.sales, salesHours = I and I.hoursWithSales, cooldown = Row.cooldown, cooldownLeft = CdLeft }
 end
 
 -- Every recipe in Env.recipes whose product has auction data. Returns the buy-mats ranking (expected a craft), the

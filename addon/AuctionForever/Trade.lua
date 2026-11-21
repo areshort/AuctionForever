@@ -297,7 +297,7 @@ function T.DrawBuy()
 	end
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
-	BuyP.Buy:SetEnabled(E ~= nil and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
+	BuyP.Buy:SetEnabled(E ~= nil and not Need and not (E.flip and E.flip.onCooldown) and Buy.state ~= "price" and Buy.state ~= "buying")
 	BuyP.Skip:SetEnabled(#Buy.rows > 1)
 	if E then
 		local F = Shown(E)
@@ -442,7 +442,11 @@ function T.BuyClick()
 		return
 	end
 	if Buy.state then return end
-	if F.craft then T.BuyCraft(E) return end
+	if F.craft then
+		if F.onCooldown then SayBuy("This recipe is on cooldown: ready in " .. T.HoursText(F.onCooldown) .. ".") return end
+		T.BuyCraft(E)
+		return
+	end
 	local Kind = Scan.Kind[E.id] or UI().Kind(E.id)
 	if not Kind then
 		SayBuy("Checking the current price first; click Buy again in a moment.")
@@ -936,9 +940,14 @@ end
 -- Craft plans ---------------------------------------------------------------------------------------------------
 local function ItemName(id) return (UI().ItemName(id)) end
 local function Profession(E) return E.craft.skillName or "profession" end
+function T.HoursText(Secs)
+	if Secs >= 3600 then return string.format("%.0fh", Secs / 3600) end
+	return string.format("%.0fmin", math.max(1, Secs / 60))
+end
 -- Status column: "craft: First Aid 225" (the recipe's required rank; trainer recipes have none).
 function T.CraftStatus(E)
 	local R = E.craft
+	if E.flip.onCooldown then return string.format("|cff808080on cooldown %s|r", T.HoursText(E.flip.onCooldown)) end
 	local Text = "craft: " .. Profession(E) .. ((R.req or 0) > 0 and (" " .. R.req) or "")
 	if not E.known then Text = "|cff808080" .. Text .. "|r" end
 	return Text
@@ -963,7 +972,11 @@ local function KnownLine(E)
 end
 function T.CraftDetail(E)
 	local F = E.flip
-	local Head = NameText(E.id) .. "   " .. TierLine(F) .. ", " .. (F.route == "Vendor" and "sell to vendor" or SellsText(E))
+	local Head = NameText(E.id) .. "   " .. TierLine(F) .. ", " .. (F.route == "Vendor" and "sell to vendor"
+		or (SellsText(E) .. string.format(" (based on %d sales in %d h%s)", F.sales or 0, F.salesHours or 0, F.capped and ", priced at what buyers paid" or "")))
+	if F.cooldown and F.cooldown > 0 then
+		Head = Head .. string.format(", cooldown %s%s", T.HoursText(F.cooldown), F.onCooldown and (": ready in " .. T.HoursText(F.onCooldown)) or "")
+	end
 	local Parts = {}
 	for _, M in ipairs(F.mats) do
 		Parts[#Parts + 1] = string.format("%d %s at up to %s (%s)", M.qty, ItemName(M.id), Core.MoneyColor(M.upTo or 0), Core.MoneyColor(M.cost))

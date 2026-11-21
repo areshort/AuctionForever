@@ -710,6 +710,22 @@ if real:
     ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil') and L('AF_NS.Trade.CraftRun() == nil')
        and 'went up' in str(L('AuctionForeverBuyPanel.Status:GetText()')), 'price rose: cancelled, run stopped: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     ok(L('(AF_NS.Core.Holding(AuctionForeverDB, 990102))') == L('CF.mats[1].qty'), 'stopped part way: the mats bought are recorded as yours (for AF Sell)')
+    X('AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
+    ok('based on 500 sales in 70 h' in str(L('AuctionForeverBuyPanel.Detail:GetText()')).split('\n')[0], 'detail says what the resale is based on: ' + str(L('AuctionForeverBuyPanel.Detail:GetText()')).split('\n')[0])
+    # A cooldown recipe on cooldown past the 8 h window: not listed; with Show all, listed as "on cooldown", Buy greyed.
+    X("""AuctionForeverDB.fresh = nil; AF_Recipes[990101][1][9] = 86400; AF_Recipes[990101][1][10] = 0
+      C_Spell = { GetSpellCooldown = function(s) if s == 7101 then return { startTime = GetTime(), duration = 82800 } end end }
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()""")
+    ok(L('#AF_NS.Trade.BuyRows()') == 0, 'transmute-style cooldown with 23 h left: not listed')
+    X('AF_NS.UI.SetShowAllRecipes(true); AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
+    ok(L('#AF_NS.Trade.BuyRows()') == 1 and 'on cooldown 23h' in str(L('AuctionForeverBuyPanel.Rows[1].Cells[7]:GetText()'))
+       and not L('AuctionForeverBuyPanel.Buy:IsEnabled()') and L('AF_NS.Trade.SelectedBuy().flip.crafts') == 1,
+       'Show all: listed as on cooldown (1 craft), Buy greyed: ' + str(L('AuctionForeverBuyPanel.Rows[1].Cells[7]:GetText()')))
+    X("""C_Spell.GetSpellCooldown = function() return { startTime = 0, duration = 0 } end; AF_NS.UI.SetShowAllRecipes(false)
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)""")
+    ok(L('#AF_NS.Trade.BuyRows()') == 1 and L('AF_NS.Trade.SelectedBuy().flip.crafts') == 1 and 'cooldown 24h' in str(L('AuctionForeverBuyPanel.Detail:GetText()')),
+       'ready: listed, one craft (a 24 h cooldown allows one in the window)')
+    X('C_Spell = nil; AF_Recipes[990101][1][9] = nil; AF_Recipes[990101][1][10] = nil')
     # Show all recipes box on AF Buy
     X('AuctionForeverDB.fresh = nil; AF_NS.UI.SetShowAllRecipes(false); AuctionForeverChar.recipes[7101] = false; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()')
     ok(L('#AF_NS.Trade.BuyRows()') == 0, 'unknown recipe, box off: not listed')
@@ -720,7 +736,7 @@ if real:
     ok(not L('AF_NS.UI.ShowAllRecipes()') and L('#AF_NS.Trade.BuyRows()') == 0, 'unticking hides it again')
     X("""for k in pairs(AuctionForeverDB) do AuctionForeverDB[k] = nil end; for k, v in pairs(CraftSavedDB) do AuctionForeverDB[k] = v end
       for k in pairs(AuctionForeverChar) do AuctionForeverChar[k] = nil end; for k, v in pairs(CraftSavedChar) do AuctionForeverChar[k] = v end
-      AuctionForeverData = CraftSavedData; AF_Recipes = CraftSavedRecipes; IsPlayerSpell = nil; C_SkillInfo = nil; C_TradeSkillUI = nil
+      AuctionForeverData = CraftSavedData; AF_Recipes = CraftSavedRecipes; IsPlayerSpell = nil; C_SkillInfo = nil; C_TradeSkillUI = nil; C_Spell = nil
       AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()""")
 
     # ---- A quick scan feeds AF Buy / AF Sell as it reads items (at most every 2 s); a full scan only at the end ----
