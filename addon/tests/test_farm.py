@@ -298,6 +298,20 @@ ok(P and P.crafts == 1, f"mats listed: 3 units allow 1 craft ({P and P.crafts})"
 X('Items[601].ladder = {}; Items[601].qty = 0')
 ok(L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, CRec, CEnv))') is None, 'no mats listed: no plan')
 X('Items[601].ladder = { {100, 10}, {200, 10}, {500, 100} }; Items[601].qty = 120')
+# Reagents in your bags are used first: 4 of 601 and 3 of 602 held. 12 crafts (the sales limit) need 24 of 601: 4 from
+# the bags, 20 bought (10 at 1s, 10 at 2s: 30s, up to 2s each); 12 of 602: 3 from the bags, 9 bought (90c).
+P = L('CPlan({ share = 0.75, hours = 8, held = function(id) return ({ [601] = 4, [602] = 3 })[id] or 0 end })')
+lst = P and [(P.list[i].source, P.list[i].id, P.list[i].qty) for i in range(1, len(P.list) + 1)]
+ok(P and P.crafts == 12 and P.cost == 3090 and P.profit == 7968 and P.mats[1].qty == 20 and P.mats[1].upTo == 200
+   and P.vendorGoods[1].qty == 9 and P.vendorCost == 90
+   and lst == [('Bags', 601, 4), ('AH', 601, 20), ('Bags', 602, 3), ('Vendor', 602, 9)] and P.list[2].upTo == 200 and P.list[4].each == 10,
+   f"bags first: only the rest is bought ({P and P.crafts} crafts, cost {P and P.cost}, profit {P and P.profit}, list {lst})")
+X('Items[601].ladder = { {100, 3} }; Items[601].qty = 3')
+P = L('CPlan({ share = 0.75, hours = 8, held = function(id) return id == 601 and 5 or 0 end }, AF_NS.Farm.Craft(600, CRec, CEnv))')
+ok(P and P.crafts == 4 and P.mats[1].qty == 3, f"3 listed + 5 in the bags allow 4 crafts ({P and P.crafts})")
+X('Items[601].ladder = { {100, 10}, {200, 10}, {500, 100} }; Items[601].qty = 120')
+P = L('CPlan({ share = 0.75, hours = 8 })')
+ok(P and [(P.list[i].source, P.list[i].qty) for i in range(1, len(P.list) + 1)] == [('AH', 20), ('Vendor', 10)], 'no bags: the list is the AH mats and the vendor goods')
 ok(L('(CPlan({ share = 0.75, hours = 8, need = function(c) return c * 10 end }))') is None, "under the profit it needs: no plan")
 X('CEnvV = Env({ vendor = { [602] = 10 }, vendorSell = function(id) return id == 600 and 1500 or nil end }); Items[600].perHour = 0.5')
 P = L('AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvV), { share = 0.75, hours = 8 }, CEnvV)')

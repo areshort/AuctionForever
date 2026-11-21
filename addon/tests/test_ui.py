@@ -1,6 +1,6 @@
 """Offline test of UI.lua with a fake WoW API (wowmock.lua). Proves it loads and its flows run; not that it looks right in game.
 Run: venv python -I test_ui.py [path to a real AuctionForeverData.lua]"""
-import os, sys
+import os, re, sys
 from lupa.luajit21 import LuaRuntime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -682,8 +682,26 @@ if real:
     ok(L('CF.crafts <= 50 and CF.mats[1].qty == 2 * CF.crafts and CF.mats[2].qty == CF.crafts and CF.vendorGoods[1].qty == CF.crafts'),
        f"N within the mats listed (50 of mat 990103): {n}; each mat bought for N crafts")
     det = str(L('AuctionForeverBuyPanel.Detail:GetText()')).split('\n')
-    ok(len(det) == 3 and det[1].startswith('Buy ' + str(L('CF.mats[1].qty'))) and ('craft ' + str(n)) in det[1] and 'sell on the AH at' in det[1]
-       and 'from a vendor' in det[1] and det[2].startswith('You know this recipe (seen in your Tailoring window'), f'detail lines: {det}')
+    plain = re.sub(r'\|c[0-9a-fA-F]{8}|\|r', '', det[1]) if len(det) > 1 else ''
+    ok(len(det) == 3 and plain.startswith('Mats: ' + str(L('CF.mats[1].qty')) + ' ') and '(AH, up to ' in plain and '(Vendor)' in plain
+       and ('Craft ' + str(n)) in plain and 'sell on the AH at' in plain and 'Buy ' not in plain
+       and det[2].startswith('You know this recipe (seen in your Tailoring window'), f'detail lines: compact Mats line with sources: {det}')
+    # The shopping list: one entry per reagent and source, AH ones with the most to pay each (the last ladder step
+    # the plan buys, the same price the Buy flow cancels above).
+    lst = [(L(f'CF.list[{i}].source'), L(f'CF.list[{i}].id'), L(f'CF.list[{i}].qty')) for i in range(1, (L('#CF.list') or 0) + 1)]
+    ok(lst == [('AH', 990102, 2 * n), ('AH', 990103, n), ('Vendor', 2320, n)] and L('CF.list[1].upTo') == L('CF.mats[1].upTo')
+       and L('CF.list[3].each') == L('CF.vendorGoods[1].cost') // n, f'shopping list: AH mats with up-to prices, vendor goods: {lst}')
+    # Reagents in your bags are used first: only the rest is bought, and the plan's cost counts only what's bought.
+    X("""SaveContC = C_Container
+      C_Container = { GetContainerNumSlots = function(b) return b == 0 and 2 or 0 end,
+        GetContainerItemInfo = function(b, s) if b == 0 then return ({ { itemID = 990102, stackCount = 4 }, { itemID = 2320, stackCount = 2 } })[s] end end }
+      AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1); BF = AF_NS.Trade.SelectedBuy().flip""")
+    bl = [(L(f'BF.list[{i}].source'), L(f'BF.list[{i}].id'), L(f'BF.list[{i}].qty')) for i in range(1, (L('#BF.list') or 0) + 1)]
+    m = L('BF.crafts')
+    ok(m == n and bl == [('Bags', 990102, 4), ('AH', 990102, 2 * m - 4), ('AH', 990103, m), ('Bags', 2320, 2), ('Vendor', 2320, m - 2)]
+       and L('BF.mats[1].qty') == 2 * m - 4 and L('BF.vendorGoods[1].qty') == m - 2 and L('BF.cost') < L('CF.cost'),
+       f'bags counted first: buys only the rest, cheaper plan ({L("BF.cost")} vs {L("CF.cost")}): {bl}')
+    X('C_Container = SaveContC; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1); CE = AF_NS.Trade.SelectedBuy(); CF = CE.flip')
     # Buying: one mat at a time, each with its own price check and Confirm.
     X('Calls = {}; Click(AuctionForeverBuyPanel.Buy)')
     c = L('LastCall("StartCommoditiesPurchase")')
@@ -1566,7 +1584,7 @@ X('''Tip = { lines = {} }
   for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
 tip = [str(v) for v in L('Tip.lines').values()]
 labels = [t.split(':')[0] for t in tip if ':' in t and not t.startswith('  ')]
-ok(labels == ['Tier', 'Expected', 'Sell rate', 'Sales/day', 'Source', 'Profit/craft', 'Mats on AH'] and any(t.startswith('  ') and '(vendor)' in t for t in tip)
+ok(labels == ['Tier', 'Expected', 'Sell rate', 'Sales/day', 'Source', 'Profit/craft', 'Mats on AH'] and any(t.startswith('  ') and '|cff1eff00Vendor|r' in t for t in tip) and not any('(vendor)' in t for t in tip)
    and any(t.startswith('  1x') for t in tip) and not any('Shift' in t for t in tip) and all(all(ord(c) < 128 for c in t) for t in tip)
    and all(len(t) < 80 for t in tip), f'craft row tooltip: short labels, reagents with prices, profit a craft, no Shift block: {tip}')
 X('''Tip = { lines = {} }
@@ -1704,6 +1722,24 @@ ok(len(q) == 55 and near_q == list(range(720001, 720011)) and len(q) - len(near_
    f'quick list cap 55: the other groups keep their 45, the 10 closest near misses after them ({len(q)}, {len(near_q)})')
 X("""AuctionForeverData, AuctionForeverDB, AF_NS.Scan.Version = SavedData, SavedDB, SavedVer + 100
   C_Item.GetItemInfoInstant = RealInstant; C_SkillInfo = RealSkill; C_Item.GetItemInfo = BaseGII""")
+# Shopping list text: AH lines show the most to pay each and the total at listed prices, vendor lines the vendor
+# price, bags lines "-"; the compact line names each source and stops at 3 entries with "+N more".
+def plain(t): return re.sub(r'\|c[0-9a-fA-F]{8}|\|r', '', str(t))
+X("""SL = AF_NS.UI.ShoppingLine
+  SL1 = SL({ id = 2320, qty = 20, source = "Vendor", each = 10, cost = 200 })
+  SL2 = SL({ id = 4306, qty = 40, source = "AH", upTo = 281, cost = 10500 })
+  SL3 = SL({ id = 4306, qty = 4, source = "Bags", cost = 0 })
+  ML = AF_NS.UI.MatsLine({ { id = 4306, qty = 40, source = "AH", upTo = 281 }, { id = 2320, qty = 20, source = "Vendor", each = 10 } })
+  ML5 = AF_NS.UI.MatsLine({ { id = 1, qty = 1, source = "Bags" }, { id = 2, qty = 1, source = "AH", upTo = 5 }, { id = 3, qty = 1, source = "Vendor" },
+    { id = 4, qty = 1, source = "AH", upTo = 5 }, { id = 5, qty = 1, source = "AH", upTo = 5 } })""")
+n2320, n4306 = plain(L('(AF_NS.UI.ShoppingLine({ id = 2320, qty = 1, source = "Bags" }))')).split(' x ')[1].split('  ')[0], None
+sl1, sl2, sl3, ml, ml5 = (plain(L(v)) for v in ('SL1', 'SL2', 'SL3', 'ML', 'ML5'))
+n4306 = sl3.split(' x ')[1].split('  ')[0]
+ok(sl1 == f'20 x {n2320}  Vendor  10c  (2s 00c)' and sl2 == f'40 x {n4306}  AH  up to 2s 81c  (1g 05s 00c)' and sl3 == f'4 x {n4306}  Bags  -'
+   and '|cffffd100AH|r' in str(L('SL2')) and '|cff1eff00Vendor|r' in str(L('SL1')) and '|cff9d9d9dBags|r' in str(L('SL3')),
+   f'shopping lines: {sl1!r} / {sl2!r} / {sl3!r}')
+ok(ml == f'Mats: 40 {n4306} (AH, up to 2s 81c), 20 {n2320} (Vendor)' and ml5.endswith(', +2 more') and ml5.count('(') == 3,
+   f'compact Mats line: {ml!r} / {ml5!r}')
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

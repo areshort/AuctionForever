@@ -985,21 +985,13 @@ function T.CraftDetail(E)
 	if F.cooldown and F.cooldown > 0 then
 		Head = Head .. string.format(", cooldown %s%s", T.HoursText(F.cooldown), F.onCooldown and (": ready in " .. T.HoursText(F.onCooldown)) or "")
 	end
-	local Parts = {}
-	for _, M in ipairs(F.mats) do
-		Parts[#Parts + 1] = string.format("%d %s at up to %s (%s)", M.qty, ItemName(M.id), Core.MoneyColor(M.upTo or 0), Core.MoneyColor(M.cost))
-	end
-	local Buys = #Parts > 0 and ("Buy " .. table.concat(Parts, " and ") .. ", c") or "C"
 	local Sale
 	if F.route == "Vendor" then
 		Sale = string.format("sell to vendor for %s each", Core.MoneyColor(F.resell))
 	else
 		Sale = string.format("sell on the AH at %s each", Core.MoneyColor(F.resell or 0))
 	end
-	local Line2 = string.format("%sraft %d%s, %s: %s.", Buys, F.crafts, F.makes > 1 and (" (makes " .. F.units .. ")") or "", Sale, Core.MoneyDelta(F.profit))
-	for _, G in ipairs(F.vendorGoods) do
-		Line2 = Line2 .. string.format(" + buy %d %s from a vendor (%s)", G.qty, ItemName(G.id), Core.MoneyColor(G.cost))
-	end
+	local Line2 = string.format("%s. Craft %d%s, %s: %s.", UI().MatsLine(F.list), F.crafts, F.makes > 1 and (" (makes " .. F.units .. ")") or "", Sale, Core.MoneyDelta(F.profit))
 	return Head .. "\n" .. Line2 .. "\n" .. KnownLine(E)
 end
 

@@ -443,13 +443,59 @@ function L.SpellCooldownLeft(Spell)
 	end)
 	return Ok and Left or 0
 end
+-- Units of each item in your bags (backpack and four bags), plus a signature that changes when they do.
+function L.BagCounts()
+	local Out, Sig = {}, 0
+	local C = rawget(_G, "C_Container")
+	if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return Out, Sig end
+	for Bag = 0, 4 do
+		for Slot = 1, C.GetContainerNumSlots(Bag) or 0 do
+			local Info = C.GetContainerItemInfo(Bag, Slot)
+			if Info and Info.itemID then
+				local N = Info.stackCount or 1
+				Out[Info.itemID] = (Out[Info.itemID] or 0) + N
+				Sig = (Sig + Info.itemID * 7919 + N * (Bag * 37 + Slot)) % 2147483647
+			end
+		end
+	end
+	return Out, Sig
+end
+-- Shopping list source label and color: AH yellow, Vendor green, Bags gray (already held), Farm orange (not sold).
+L.SOURCE_COLOR = { AH = "|cffffd100", Vendor = "|cff1eff00", Bags = "|cff9d9d9d", Farm = "|cffff8000" }
+function L.SourceText(Src) return (L.SOURCE_COLOR[Src] or "") .. Src .. "|r" end
+-- One shopping list line: "<count> x <name>  <source>  <price>  (<total>)". AH: "up to <the most to pay each>"
+-- with the total at listed prices; Vendor: the vendor price each; Bags: "-".
+function L.ShoppingLine(E)
+	local Price, Total
+	if E.source == "AH" then
+		Price, Total = "up to " .. Core.MoneyColor(E.upTo or 0), "(" .. Core.MoneyColor(E.cost or 0) .. ")"
+	elseif E.source == "Vendor" then
+		Price, Total = Core.MoneyColor(E.each or 0), "(" .. Core.MoneyColor(E.cost or 0) .. ")"
+	else
+		Price, Total = "-", ""
+	end
+	return (string.format("%d x %s  %s  %s  %s", E.qty, (ItemName(E.id)), L.SourceText(E.source), Price, Total):gsub("%s+$", ""))
+end
+-- The compact one-line version: "Mats: 40 Silk Cloth (AH, up to 2s 81c), 20 Coarse Thread (Vendor)", at most Max
+-- entries, then "+N more".
+function L.MatsLine(List, Max)
+	Max = Max or 3
+	local Parts = {}
+	for i, E in ipairs(List or {}) do
+		if i > Max then Parts[#Parts + 1] = "+" .. (#List - Max) .. " more" break end
+		local Src = E.source == "AH" and ("AH, up to " .. Core.MoneyColor(E.upTo or 0)) or E.source
+		Parts[#Parts + 1] = string.format("%d %s (%s)", E.qty, (ItemName(E.id)), Src)
+	end
+	return "Mats: " .. (#Parts > 0 and table.concat(Parts, ", ") or "-")
+end
 function L.CraftTargets()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
 	local Budget = L.FlipBudget()
 	local All = L.ShowAllRecipes()
-	-- (the minute is in the key: cooldowns run out)
-	local Key = string.format("%s:%d:%s:%d:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0, math.floor(GetTime() / 60))
+	local Held, BagSig = L.BagCounts()
+	-- (the minute is in the key: cooldowns run out; the bags: what you hold isn't bought)
+	local Key = string.format("%s:%d:%s:%d:%d:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0, math.floor(GetTime() / 60), BagSig)
 	if CraftPlanCache and CraftPlanCache.key == Key then return CraftPlanCache.rows end
 	local Mine = L.MyProfessions()
 	local MinProfit = Core.MinFlipProfitFor(Budget)
@@ -459,6 +505,7 @@ function L.CraftTargets()
 		-- sold on the AH only when it's a steady seller, like a flip (not flooded, warming up...)
 		ahStatus = { good = true, slow = true },
 		cooldownLeft = function(Row) return L.SpellCooldownLeft(Row.spell) end,
+		held = function(id) return Held[id] or 0 end,
 		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
 		need = function(Cost, Row)
 			if Row.route == "Vendor" then return Core.MinVendorProfit end
@@ -558,9 +605,10 @@ function L.FarmTooltip(E, Tip)
 	Line("Sales/day", string.format("%.0f", E.salesDay or 0))
 	Line("Source", Craft and ("Crafted (" .. ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") .. ")") or (E.source or "?"))
 	if not Craft then return end
+	local Held = L.BagCounts()
 	for _, Rg in ipairs(E.reagents or {}) do
-		local Src = Rg.source == "vendor" and " (vendor)" or ""
-		Tip:AddLine(string.format("  %dx %s  %s%s", Rg.n, (ItemName(Rg.id)), Money(Rg.each), Src), 0.8, 0.8, 0.8)
+		local Src = (Held[Rg.id] or 0) >= Rg.n and "Bags" or Rg.source == "vendor" and "Vendor" or Rg.source == "ah" and "AH" or "Farm"
+		Tip:AddLine(string.format("  %dx %s  %s  %s", Rg.n, (ItemName(Rg.id)), L.SourceText(Src), Src == "Bags" and "-" or Money(Rg.each)), 0.8, 0.8, 0.8)
 	end
 	if E.buyExcluded then Line("Profit/craft", "-") else Line("Profit/craft", Core.MoneyDelta(E.profit) .. " (" .. (E.route or "AH") .. ")") end
 	if (E.vendorProfit or 0) > 0 then Line("Sell to vendor", Core.MoneyDelta(E.vendorProfit) .. " a craft") end

@@ -329,7 +329,11 @@ end
 -- Returns nil when not even one craft fits, or the plan's expected profit is under Opts.need(cost, row).
 -- The plan: { craft, crafts, makes, units, cost (AH mats + vendor goods), profit (expected), route, resell (per
 -- unit: post price or vendor price), saleEach (expected per craft), mats = { {id, qty, upTo, cost} } (AH, in recipe
--- order), vendorGoods = { {id, qty, cost} }, vendorCost }.
+-- order, only what must be bought), vendorGoods = { {id, qty, cost} }, vendorCost, list (the shopping list: one entry
+-- per reagent and source, { id, qty, source = "Bags" / "AH" / "Vendor", each (vendor price), upTo (AH: the most to
+-- pay each), cost }) }.
+-- Opts.held(id): units of a reagent already in your bags. They're used first: only the rest is bought, the plan's
+-- cost counts only what's bought, and the mats listed plus what you hold bound N.
 local function UpTo(I, Qty)
 	local Got, Top = 0, nil
 	for _, Step in ipairs(I and I.ladder or {}) do
@@ -362,7 +366,12 @@ function Farm.CraftPlan(Row, Opts, Env)
 		if VSum and (not Each or VSum > Each) then Vendor, Each = true, VSum end
 	end
 	if not Each or Each <= 0 then return nil, Blocked end
-	local Max = Row.matCrafts or 0
+	local Held = {}
+	for _, R in ipairs(Row.reagents) do Held[R.id] = Opts.held and Opts.held(R.id) or 0 end
+	local Max = math.huge
+	for _, R in ipairs(Row.reagents) do
+		if R.source ~= "vendor" then Max = math.min(Max, math.floor((Listed(E.info(R.id)) + Held[R.id]) / R.n)) end
+	end
 	if not Vendor then
 		local Units = (I and I.perHour or 0) * (Opts.share or 1) * (Opts.hours or 8) - (I and I.held or 0)
 		Max = math.min(Max, math.floor(Units / Row.makes))
@@ -376,11 +385,12 @@ function Farm.CraftPlan(Row, Opts, Env)
 	end
 	Max = math.min(Max, Opts.maxCrafts or 1000)
 	if Max < 1 then return nil, Blocked end
+	local function Buy(R, N) return math.max(0, R.n * N - Held[R.id]) end
 	local function Cost(N)
 		local C = 0
 		for _, R in ipairs(Row.reagents) do
-			if R.source == "vendor" then C = C + R.each * R.n * N
-			else C = C + (Farm.BuyCost(E.info(R.id), R.n * N)) end
+			if R.source == "vendor" then C = C + R.each * Buy(R, N)
+			else C = C + (Farm.BuyCost(E.info(R.id), Buy(R, N))) end
 		end
 		return C
 	end
@@ -397,15 +407,24 @@ function Farm.CraftPlan(Row, Opts, Env)
 	end
 	local N = Lo
 	if N < 1 then return nil, Blocked end
-	local Mats, Goods, VCost = {}, {}, 0
+	local Mats, Goods, VCost, List = {}, {}, 0, {}
 	for _, R in ipairs(Row.reagents) do
-		local Q = R.n * N
-		if R.source == "vendor" then
-			Goods[#Goods + 1] = { id = R.id, qty = Q, cost = R.each * Q }
-			VCost = VCost + R.each * Q
-		else
-			local I = E.info(R.id)
-			Mats[#Mats + 1] = { id = R.id, qty = Q, upTo = UpTo(I, Q), cost = (Farm.BuyCost(I, Q)) }
+		local Q = Buy(R, N)
+		local FromBags = R.n * N - Q
+		if FromBags > 0 then List[#List + 1] = { id = R.id, qty = FromBags, source = "Bags", cost = 0 } end
+		if Q > 0 then
+			if R.source == "vendor" then
+				Goods[#Goods + 1] = { id = R.id, qty = Q, cost = R.each * Q }
+				VCost = VCost + R.each * Q
+				List[#List + 1] = { id = R.id, qty = Q, source = "Vendor", each = R.each, cost = R.each * Q }
+			else
+				local I = E.info(R.id)
+				-- upTo: the price of the last ladder level the plan buys from. The Buy flow cancels a mat whose live
+				-- price is above it, so it's the most to pay each.
+				local M = { id = R.id, qty = Q, upTo = UpTo(I, Q), cost = (Farm.BuyCost(I, Q)) }
+				Mats[#Mats + 1] = M
+				List[#List + 1] = { id = R.id, qty = Q, source = "AH", upTo = M.upTo, cost = M.cost }
+			end
 		end
 	end
 	local Total = Cost(N)
@@ -414,7 +433,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 	if Profit < Need then return nil, Blocked end
 	return { craft = true, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
 		route = Vendor and "Vendor" or "AH", resell = Vendor and Row.vendorSell or Price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
-		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, buyQty = N, buyUpTo = 0, capped = Capped,
+		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, list = List, buyQty = N, buyUpTo = 0, capped = Capped,
 		sales = I and I.sales, salesHours = I and I.hoursWithSales, cooldown = Row.cooldown, cooldownLeft = CdLeft }
 end
 
