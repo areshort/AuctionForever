@@ -21,6 +21,11 @@ Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-
 Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
 Core.MinVendorProfit = 200      -- 2 silver: listings under the vendor price must pay at least this to be a buy target
                                 -- (a sure profit: no AH cut, no deposit, no waiting)
+-- A flip that needs this many units or more bought (to clear the cheap listings under its resale price) isn't a
+-- flip at all: not cut down to fewer units, since reposting above a wall of cheap listings left behind won't sell
+-- (Mild Spices: 5,088 at 3-4c to make +1g 31s). 99 units is fine, 100 is not. Vendor buys the same (buying hundreds
+-- to vendor them is the same chore). Craft plans don't clear a wall: not limited by this.
+Core.MaxBuyUnits = 100
 Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 -- Flips plan their profit at this share of the resale price. Flips are commodities only, and commodity buyers fill
@@ -603,7 +608,7 @@ function Core.VendorDeal(Ladder, Vendor, Cap)
 		Qty, Cost, Profit, Top = Qty + Take, Cost + Take * P, Profit + Take * (Vendor - P), P
 		if Take < Q then break end
 	end
-	if Qty == 0 or Profit < Core.MinVendorProfit then return nil end
+	if Qty == 0 or Qty >= Core.MaxBuyUnits or Profit < Core.MinVendorProfit then return nil end
 	return { vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 
@@ -641,6 +646,7 @@ function Core.FlipOptions(I, Cap, MinProfit, Relax)
 		local Take = math.min(Q, math.floor((Cap - Cost) / P), MaxQty - Qty)
 		if Take <= 0 then break end
 		Qty, Cost = Qty + Take, Cost + Take * P
+		if Qty >= Core.MaxBuyUnits then break end -- this many to buy: not a flip (nor any bigger one)
 		-- What's left after buying: the rest of this level and everything above it.
 		local Rest = {}
 		if Take < Q then Rest[#Rest + 1] = { P, Q - Take } end

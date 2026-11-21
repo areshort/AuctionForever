@@ -539,8 +539,10 @@ if real:
     X("""RealSt, RealSP = AF_NS.Core.Status, AF_NS.Core.SellPrice
       AF_NS.Core.Status = function() return "slow" end
       AF_NS.Core.SellPrice = function(I, Q, Lo) return 3519, 24, 3, Q, "flooding" end
+      -- (in the queue whatever the hourly data says about AH vs vendor: this is about the price)
+      AF_NS.Core.Recommend = function() return "Auction" end
       MQ = AF_NS.Trade.BuildQueue()
-      AF_NS.Core.Status, AF_NS.Core.SellPrice = RealSt, RealSP""")
+      AF_NS.Core.Status, AF_NS.Core.SellPrice, AF_NS.Core.Recommend = RealSt, RealSP, RealRec""")
     mg = [L(f'MQ[{i}]') for i in range(1, int(L('#MQ')) + 1)]
     lg = [g for g in mg if g.id == 2589]
     mk = L('AF_NS.Core.Market(AF_NS.Core.Info(2589))')
@@ -1258,7 +1260,10 @@ ok(L(f'{BP}.Bar:GetValue()') == 8, 'AF Buy: the mouse wheel moves the bar too: '
 X('for k = #SB, SBn + 1, -1 do SB[k] = nil end; AF_NS.Trade.DrawBuy()')
 ok(not L(f'{BP}.Bar:IsShown()') and not L(f'{BP}.Bar.Count:IsShown()'), 'AF Buy: short list, no scroll bar')
 X('''SQ = AF_NS.Trade.SellQueue(); SQn = #SQ
+  -- (whether your bag items are worth the AH depends on the hourly data: make them so here)
+  local Rec = AF_NS.Core.Recommend; AF_NS.Core.Recommend = function() return "Auction" end
   local Src = SQn > 0 and SQ or AF_NS.Trade.BuildQueue()
+  AF_NS.Core.Recommend = Rec
   for k = 1, 20 do SQ[#SQ + 1] = Src[((k - 1) % #Src) + 1] end
   AF_NS.Trade.DrawSell()''')
 SP = 'AuctionForeverSellPanel'

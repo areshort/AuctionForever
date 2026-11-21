@@ -108,7 +108,8 @@ lua.execute(f'EO = {C}.FlipOptions(MakeItem(), 500000)')
 ok(L('#EO') == 1 and L('EO[1].profit') == 2870, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
 # Never buy more than the cautious resale speed sells in 8 h: 15/h planned -> at most 120. (Without the cap, buying
 # the 9s 50c level too would be offered: 150 units, 10 h of sales.)
-lua.execute(f"Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000)")
+# (MaxBuyUnits raised here: this is about the hours limit.)
+lua.execute(f"{C}.MaxBuyUnits = 1000; Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000); {C}.MaxBuyUnits = 100")
 ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)) <= 120,
    f"flip size capped at 8 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
 # Other sellers posting more than sells doesn't stop a flip: resale speed is measured sales x 0.75 (flooded items are
@@ -294,6 +295,22 @@ g, p = NM(1250, slow=True)
 ok(g is not None and abs(g - (0.20 - 0.151)) < 0.003, f"slow seller, 15.1% return, needs 20%: a near miss ({g})")
 g, p = NM(1100, slow=True)
 ok(g is None, f"slow seller about 2% return: more than 10 points short, no near miss ({g})")
+# Walls of cheap listings: a flip that needs 100+ units bought to clear them isn't a flip (not cut down to 100: the
+# wall left behind would undercut the resale). 99 is fine, 100 is not. Same for near misses and vendor buys.
+def wall(n, ph=200):
+    X(f"""WallN = {C}.FlipOptions(MakeItem({{ perHour = {ph}, medHour = {ph}, sellThrough = 1, qty = {n} + 100, qtyDayAgo = {n} + 100, med = 1000, medAll = 1000, med24 = 1000, hi = 1100,
+      ladder = {{ {{400, {n}}}, {{1000, 100}} }} }}), 100000000, 0)""")
+    return int(L('#WallN')), L('WallN[1] and WallN[1].buyQty')
+n5k, _ = wall(5000, 1000)
+ok(n5k == 0, f"5,000 cheap units to clear before the resale (and it sells 1,000/h): not a flip ({n5k} options)")
+n40, q40 = wall(40)
+ok(n40 >= 1 and q40 == 40, f"40 units to clear: a flip, buying all 40 ({n40}, {q40})")
+n99, q99 = wall(99)
+n100, _ = wall(100)
+ok(n99 >= 1 and q99 == 99 and n100 == 0, f"threshold: 99 units is a flip, 100 is not ({n99}, {n100})")
+ok(L(f'(({C}.NearMiss(MakeItem({{ perHour = 2000, medHour = 2000, sellThrough = 1, qty = 5100, qtyDayAgo = 5100, ladder = {{ {{880, 5000}}, {{1000, 100}} }} }}))))') is None,
+   'near misses: the same wall rule (5,000 at 8s 80c before a 10s resale)')
+ok(L(f'{C}.VendorDeal({{ {{1, 150}} }}, 10) == nil') and L(f'{C}.VendorDeal({{ {{1, 40}} }}, 10) ~= nil'), 'vendor buys: 150 units under the vendor price is too many, 40 is fine')
 # FlipNeed: the return by speed (an item or its FlipStatus); unknown speed is held to the slow sellers' return.
 ok(L(f'{C}.FlipNeed(10000, 200, "good")') == 1000 and L(f'{C}.FlipNeed(10000, 200, "slow")') == 2000
    and L(f'{C}.FlipNeed(10000, 200)') == 2000 and L(f'{C}.FlipNeed(1000, 500, "good")') == 500,
