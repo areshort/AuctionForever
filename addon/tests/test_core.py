@@ -279,6 +279,21 @@ n, p = MR(1250, slow=True)
 ok(n == 0, f"slow seller, 15.1% return: no flip ({n})")
 n, p = MR(1326, slow=True)
 ok(n == 1 and p == 2209, f"slow seller, 22.1% return: a flip ({n}, {p})")
+# Near misses (for the quick scan): not a flip, but within 10 points of the return it needs; gap = need - best return.
+def NM(next_price, slow=False):
+    extra = ', hoursWithSales = 20' if slow else ''
+    X(f"NMG, NMO = {C}.NearMiss(MakeItem({{ sellThrough = 1, med = 1400, medAll = 1400, med24 = 1400, hi = 1500{extra}, ladder = {{ {{1000, 10}}, {{{next_price}, 100}} }}, qty = 210 }}))")
+    return L('NMG'), L('NMO and NMO.profit')
+g, p = NM(1184)
+ok(g is not None and abs(g - 0.01) < 0.002 and p == 901, f"9.0% return, needs 10%: a near miss, 1 point short ({g}, {p})")
+g, p = NM(1100)
+ok(g is not None and 0.05 < g < 0.10, f"steady seller about 2% return: still within 10 points ({g})")
+g, p = NM(1000)
+ok(g is None, f"steady seller losing money: no near miss ({g})")
+g, p = NM(1250, slow=True)
+ok(g is not None and abs(g - (0.20 - 0.151)) < 0.003, f"slow seller, 15.1% return, needs 20%: a near miss ({g})")
+g, p = NM(1100, slow=True)
+ok(g is None, f"slow seller about 2% return: more than 10 points short, no near miss ({g})")
 # FlipNeed: the return by speed (an item or its FlipStatus); unknown speed is held to the slow sellers' return.
 ok(L(f'{C}.FlipNeed(10000, 200, "good")') == 1000 and L(f'{C}.FlipNeed(10000, 200, "slow")') == 2000
    and L(f'{C}.FlipNeed(10000, 200)') == 2000 and L(f'{C}.FlipNeed(1000, 500, "good")') == 500,

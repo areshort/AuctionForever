@@ -532,8 +532,15 @@ function L.FlipTargets()
 		-- Reachable now: you have the gold, whatever the gold rule says for the cheapest option.
 		R.need = math.min(R.need, GetMoney())
 	end
+	-- Near misses for the quick scan: worked out here, in the same pass over the flippable items (and cached with the
+	-- plan), so finding them costs no second pass over every item and no item info from the game.
+	local Near = {}
 	for _, id in ipairs(Ids) do
 		local All = Core.FlipOptions(Info[id], math.huge, MinProfit)
+		if #All == 0 and not CandOf[id] then
+			local Gap = Core.NearMiss(Info[id])
+			if Gap then Near[#Near + 1] = { id = id, gap = Gap } end
+		end
 		if #All > 0 then
 			local R = Row(id)
 			for _, O in ipairs(All) do
@@ -571,8 +578,15 @@ function L.FlipTargets()
 	end)
 	for _, E in ipairs(Rest) do Out[#Out + 1] = E end
 	L.LastPlan = { cost = Plan.cost, profit = Plan.profit, count = #Plan, budget = Budget }
-	PlanCache = { key = Key, rows = Out, plan = L.LastPlan }
+	table.sort(Near, function(a, b) if a.gap ~= b.gap then return a.gap < b.gap end return a.id < b.id end)
+	PlanCache = { key = Key, rows = Out, plan = L.LastPlan, near = Near }
 	return Out
+end
+-- Steady sellers that aren't flips but came within Core.NearMissReturn of the return they need, closest first:
+-- { id, gap }. A quick scan looks them up so new flip targets show up between full scans.
+function L.NearMisses()
+	L.FlipTargets()
+	return PlanCache and PlanCache.near or {}
 end
 -- Only the flips you can do with your gold now (the Flips list, price checks).
 function L.FlipRows()
@@ -672,10 +686,12 @@ function L.FlipEmptyReason()
 end
 
 -- Items a quick scan looks up: flip candidates, sellable bag items, top farm reagents, fast sellers still warming up.
+L.QuickCap, L.NearMissCount = 55, 10
 function L.QuickList()
 	local Out, Seen = {}, {}
-	local function Add(id, Cap, Count)
-		if Count[1] >= Cap or Seen[id] or #Out >= 45 then return end
+	-- The other groups keep their old 45 between them; the near misses get the last 10 (cap 55).
+	local function Add(id, Cap, Count, Total)
+		if Count[1] >= Cap or Seen[id] or #Out >= (Total or L.QuickCap - L.NearMissCount) then return end
 		Seen[id] = true; Out[#Out + 1] = id; Count[1] = Count[1] + 1
 	end
 	local C = { 0 }
@@ -703,6 +719,8 @@ function L.QuickList()
 		table.sort(Warm, function(x, y) return x[2] > y[2] end)
 		for _, W in ipairs(Warm) do Add(W[1], 10, C) end
 	end
+	C = { 0 }
+	for _, N in ipairs(L.NearMisses()) do Add(N.id, L.NearMissCount, C, L.QuickCap) end
 	return Out
 end
 

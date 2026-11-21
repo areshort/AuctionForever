@@ -621,7 +621,8 @@ function Core.FlipNeed(Cost, MinProfit, Speed)
 	return math.max(MinProfit or Core.MinFlipProfit, math.ceil(Core.FlipReturn(Speed) * Cost - 1e-9))
 end
 
-function Core.FlipOptions(I, Cap, MinProfit)
+-- Relax (optional): the return each option needs is lowered by this much (and no minimum profit): near misses.
+function Core.FlipOptions(I, Cap, MinProfit, Relax)
 	local Out = {}
 	local St = Core.FlipStatus(I)
 	if (St ~= "good" and St ~= "slow") or not Cap or Cap <= 0 then return Out end
@@ -646,13 +647,29 @@ function Core.FlipOptions(I, Cap, MinProfit)
 		for j = Level + 1, #Ladder do Rest[#Rest + 1] = Ladder[j] end
 		if not Rest[1] and MoreAbove then break end
 		local O = Evaluate(I, J, Qty, Cost, Rest)
-		if O and O.profit >= Core.FlipNeed(Cost, MinProfit, St) then
+		local Need = Relax and math.max(0, math.ceil((Core.FlipReturn(St) - Relax) * Cost - 1e-9)) or Core.FlipNeed(Cost, MinProfit, St)
+		if O and O.profit >= Need then
 			O.buyUpTo, O.slow = P, St == "slow" or nil
 			Out[#Out + 1] = O
 		end
 		if Take < Q then break end
 	end
 	return Out
+end
+
+-- Near miss: a steady seller that isn't a flip now but came close. Its best option (any gold) under rules relaxed by
+-- NearMissReturn (the return it needs lowered by that much, no minimum profit). Returns the gap (the return it needs
+-- minus the best return found, 0 when only the minimum profit stopped it) and that option; nil when nothing comes
+-- that close.
+Core.NearMissReturn = 0.10
+function Core.NearMiss(I)
+	local Best, BestRet
+	for _, O in ipairs(Core.FlipOptions(I, math.huge, 0, Core.NearMissReturn)) do
+		local R = O.cost > 0 and O.profit / O.cost or 0
+		if not BestRet or R > BestRet then Best, BestRet = O, R end
+	end
+	if not Best then return nil end
+	return math.max(0, Core.FlipReturn(Core.FlipStatus(I)) - BestRet), Best
 end
 
 -- The best single flip for this item within its share of the budget.

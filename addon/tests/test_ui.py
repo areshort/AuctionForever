@@ -926,13 +926,13 @@ ok(need is not None and abs(need - L('AF_NS.Core.GoldFor(7500)')) <= 1, f'a targ
 # An option that fits your budget counts as buyable even when it only came from the any-gold list.
 X("""MinSeen = {}
   local Prev = AF_NS.Core.FlipOptions
-  AF_NS.Core.FlipOptions = function(I, Cap, Min)
-    MinSeen[#MinSeen + 1] = Min
+  AF_NS.Core.FlipOptions = function(I, Cap, Min, Relax)
+    if not Relax then MinSeen[#MinSeen + 1] = Min end -- (the near-miss check relaxes the rules on purpose)
     if I.id == 2592 then
       if Cap == math.huge then return { { qty = 20, buyQty = 20, buyUpTo = 60, cost = 1200, resell = 120, hours = 2, durationIndex = 1, profit = 1080 } } end
       return {}
     end
-    return Prev(I, Cap, Min)
+    return Prev(I, Cap, Min, Relax)
   end
   AF_NS.UI.ResetBudget(); AF_NS.Scan.Version = AF_NS.Scan.Version + 1 -- not the cached list
   for _, E in ipairs(AF_NS.UI.FlipTargets()) do if E.id == 2592 then Row2592 = E end end
@@ -1468,6 +1468,42 @@ X('AF_NS.Farm.Crafts = RealCrafts')
 ql = L('AF_NS.UI.QuickList()')
 ok(2589 in [ql[i] for i in range(1, len(ql) + 1)], 'quick scan list still includes good Gather items')
 X('Click(AuctionForeverFrame.FarmBar.Gather); AuctionForeverFrame:Hide()')
+# Quick scan near misses: steady sellers that aren't flips but came within 10 points of the return they need.
+X("""NearData = AuctionForeverData
+  local F = { "low", "qty", "med", "hi", "med24", "medAll", "perHour", "medHour", "hoursSeen", "hoursWithSales", "sales",
+    "sellThrough", "qtyDayAgo", "newHour", "lows", "lowHi24", "ladder" }
+  local function It(Next) return { 1000, 210, 1400, 1500, 1400, 1400, 40, 40, 72, 70, 500, 1, 280, nil, nil, nil, { { 1000, 10 }, { Next, 100 } } } end
+  AuctionForeverData = { v = 1, time = os.time(), hours = 72, fields = F, names = {},
+    items = { [990001] = It(1184), [990002] = It(1000), [990003] = It(1206) },
+    info = { [990001] = { 1, 1, 1 }, [990002] = { 1, 1, 1 }, [990003] = { 1, 1, 1 } } }
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1; Money = 2000000""")
+nm = [(L(f'AF_NS.UI.NearMisses()[{i}].id'), L(f'AF_NS.UI.NearMisses()[{i}].gap')) for i in range(1, int(L('#AF_NS.UI.NearMisses()')) + 1)]
+fl = [L(f'AF_NS.UI.FlipTargets()[{i}].id') for i in range(1, int(L('#AF_NS.UI.FlipTargets()')) + 1)]
+ok([i for i, g in nm] == [990001] and abs(nm[0][1] - 0.0099) < 0.001, f'near misses: the 9% return item (needs 10%), 1 point short: {nm}')
+ok(990003 in fl and 990003 not in [i for i, g in nm], f'a real flip is a flip target, not a near miss ({fl})')
+X("""SaveFarm0, SaveCont0 = AF_NS.UI.FarmRows, C_Container
+  AF_NS.UI.FarmRows = function() return {} end; C_Container = { GetContainerNumSlots = function() return 0 end } -- only the flip and near-miss groups
+  QL0 = AF_NS.UI.QuickList()
+  AF_NS.UI.FarmRows, C_Container = SaveFarm0, SaveCont0""")
+ql = [L(f'QL0[{i}]') for i in range(1, int(L('#QL0')) + 1)]
+ok(ql == [990003, 990001], f'quick list: the flip, then the near miss; the far miss left out, nothing twice: {ql}')
+X("""AuctionForeverData = NearData; AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  SaveFR, SaveFarm, SaveNM, SaveCont = AF_NS.UI.FlipRows, AF_NS.UI.FarmRows, AF_NS.UI.NearMisses, C_Container
+  AF_NS.UI.FlipRows = function() local t = {} for i = 1, 20 do t[i] = { id = 700000 + i } end return t end
+  AF_NS.UI.FarmRows = function() local t = {} for i = 1, 20 do t[i] = { id = 710000 + i, status = "good" } end return t end
+  AF_NS.UI.NearMisses = function() local t = {} for i = 1, 20 do t[i] = { id = 720000 + i, gap = i / 100 } end return t end
+  local Info = AF_NS.Core.Info
+  SaveInfo = Info
+  AF_NS.Core.Info = function(id) if id > 730000 and id < 730100 then return { id = id } end return Info(id) end
+  SaveSt = AF_NS.Core.Status; AF_NS.Core.Status = function() return "warming up" end -- fill the warming-up group too
+  C_Container = { GetContainerNumSlots = function(b) return b == 0 and 20 or 0 end, GetContainerItemInfo = function(b, s) return { itemID = 730000 + s } end }
+  QL = AF_NS.UI.QuickList()
+  AF_NS.UI.FlipRows, AF_NS.UI.FarmRows, AF_NS.UI.NearMisses, C_Container, AF_NS.Core.Info = SaveFR, SaveFarm, SaveNM, SaveCont, SaveInfo
+  AF_NS.Core.Status = SaveSt""")
+q = [L(f'QL[{i}]') for i in range(1, int(L('#QL')) + 1)]
+near_q = [i for i in q if 720000 < i < 720100]
+ok(len(q) == 55 and near_q == list(range(720001, 720011)) and len(q) - len(near_q) == 45 and q[:15] == list(range(700001, 700016)),
+   f'quick list cap 55: the other groups keep their 45, the 10 closest near misses after them ({len(q)}, {len(near_q)})')
 X("""AuctionForeverData, AuctionForeverDB, AF_NS.Scan.Version = SavedData, SavedDB, SavedVer + 100
   C_Item.GetItemInfoInstant = RealInstant; C_SkillInfo = RealSkill; C_Item.GetItemInfo = BaseGII""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
