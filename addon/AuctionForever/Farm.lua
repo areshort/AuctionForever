@@ -322,6 +322,8 @@ end
 -- sales, and its post price is capped at Opts.resaleCap(I) (what buyers actually paid): a lone listing far above
 -- the sales (2 Woolen Boots listed at 9g, sold at 6s) isn't a price you can sell at. When that makes the vendor pay
 -- more, the plan sells to the vendor.
+-- Like flips, only products whose status is in Opts.ahStatus (e.g. good / slow; not "flooded": new listings far
+-- outpacing sales) are sold on the AH; otherwise the vendor route if it pays, else nil, that status.
 -- Cooldown recipes: at most the crafts the cooldown allows within Opts.hours, after Opts.cooldownLeft(row) seconds
 -- still to wait (the game's cooldown on the recipe spell); nil, "cooldown", seconds left when it won't be ready in time.
 -- Returns nil when not even one craft fits, or the plan's expected profit is under Opts.need(cost, row).
@@ -344,8 +346,9 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local VSum = (Row.matCrafts or 0) >= 1 and Row.vendorSell and Row.vendorSell * Row.makes or nil
 	local Vendor = Row.route == "Vendor"
 	local Each = Vendor and VSum or (Row.ahExpected + Row.cost)
-	local Price, Capped = Row.price, nil
+	local Price, Capped, Blocked = Row.price, nil, nil
 	if not Vendor then
+		if Opts.ahStatus and not Opts.ahStatus[Row.status] then Each, Blocked = nil, Row.status end
 		if Opts.minSalesHours and (not I or (I.hoursWithSales or 0) < Opts.minSalesHours) then Each = nil end
 		local Top = Each and Opts.resaleCap and I and Opts.resaleCap(I)
 		if Top and Price and Price > Top then
@@ -358,7 +361,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 		end
 		if VSum and (not Each or VSum > Each) then Vendor, Each = true, VSum end
 	end
-	if not Each or Each <= 0 then return nil end
+	if not Each or Each <= 0 then return nil, Blocked end
 	local Max = Row.matCrafts or 0
 	if not Vendor then
 		local Units = (I and I.perHour or 0) * (Opts.share or 1) * (Opts.hours or 8) - (I and I.held or 0)
@@ -372,7 +375,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 		Max = math.min(Max, 1 + math.floor((Window - CdLeft) / Row.cooldown))
 	end
 	Max = math.min(Max, Opts.maxCrafts or 1000)
-	if Max < 1 then return nil end
+	if Max < 1 then return nil, Blocked end
 	local function Cost(N)
 		local C = 0
 		for _, R in ipairs(Row.reagents) do
@@ -393,7 +396,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 		if Fits(Mid) then Lo = Mid else Hi = Mid - 1 end
 	end
 	local N = Lo
-	if N < 1 then return nil end
+	if N < 1 then return nil, Blocked end
 	local Mats, Goods, VCost = {}, {}, 0
 	for _, R in ipairs(Row.reagents) do
 		local Q = R.n * N
@@ -408,7 +411,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local Total = Cost(N)
 	local Profit = math.floor(Each * N - Total + 1e-6)
 	local Need = Opts.need and Opts.need(Total, Row) or 0
-	if Profit < Need then return nil end
+	if Profit < Need then return nil, Blocked end
 	return { craft = true, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
 		route = Vendor and "Vendor" or "AH", resell = Vendor and Row.vendorSell or Price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
 		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, buyQty = N, buyUpTo = 0, capped = Capped,

@@ -726,6 +726,16 @@ if real:
     ok(L('#AF_NS.Trade.BuyRows()') == 1 and L('AF_NS.Trade.SelectedBuy().flip.crafts') == 1 and 'cooldown 24h' in str(L('AuctionForeverBuyPanel.Detail:GetText()')),
        'ready: listed, one craft (a 24 h cooldown allows one in the window)')
     X('C_Spell = nil; AF_Recipes[990101][1][9] = nil; AF_Recipes[990101][1][10] = nil')
+    # A flooded product: no plan; with Show all, greyed as "flooded", no Buy.
+    X("""AuctionForeverDB.fresh = nil; CraftRealStatus = AF_NS.Core.Status
+      AF_NS.Core.Status = function(I) if I and I.id == 990101 then return "flooded" end return CraftRealStatus(I) end
+      CraftRealNeed = AF_NS.Core.FlipNeed; AF_NS.Core.FlipNeed = function() return 0 end -- (only the status rule decides here)
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()""")
+    ok(L('#AF_NS.Trade.BuyRows()') == 0, 'flooded product: no craft plan')
+    X('AF_NS.UI.SetShowAllRecipes(true); AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
+    ok(L('#AF_NS.Trade.BuyRows()') == 1 and 'flooded' in str(L('AuctionForeverBuyPanel.Rows[1].Cells[7]:GetText()')) and not L('AuctionForeverBuyPanel.Buy:IsEnabled()')
+       and 'Flooded' in str(L('AuctionForeverBuyPanel.Detail:GetText()')), 'Show all: shown greyed as flooded, Buy greyed: ' + str(L('AuctionForeverBuyPanel.Rows[1].Cells[7]:GetText()')))
+    X('AF_NS.Core.Status = CraftRealStatus; AF_NS.Core.FlipNeed = CraftRealNeed; AF_NS.UI.SetShowAllRecipes(false); AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
     # Show all recipes box on AF Buy
     X('AuctionForeverDB.fresh = nil; AF_NS.UI.SetShowAllRecipes(false); AuctionForeverChar.recipes[7101] = false; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()')
     ok(L('#AF_NS.Trade.BuyRows()') == 0, 'unknown recipe, box off: not listed')

@@ -298,7 +298,7 @@ ok(P and P.crafts == 1, f"mats listed: 3 units allow 1 craft ({P and P.crafts})"
 X('Items[601].ladder = {}; Items[601].qty = 0')
 ok(L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, CRec, CEnv))') is None, 'no mats listed: no plan')
 X('Items[601].ladder = { {100, 10}, {200, 10}, {500, 100} }; Items[601].qty = 120')
-ok(L('CPlan({ share = 0.75, hours = 8, need = function(c) return c * 10 end })') is None, "under the profit it needs: no plan")
+ok(L('(CPlan({ share = 0.75, hours = 8, need = function(c) return c * 10 end }))') is None, "under the profit it needs: no plan")
 X('CEnvV = Env({ vendor = { [602] = 10 }, vendorSell = function(id) return id == 600 and 1500 or nil end }); Items[600].perHour = 0.5')
 P = L('AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvV), { share = 0.75, hours = 8 }, CEnvV)')
 ok(P and P.route == 'Vendor' and P.crafts == 60 and P.resell == 1500 and P.profit == 1500 * 60 - 53600,
@@ -326,8 +326,18 @@ ok(P0 and P0.resell == 5000 and P and P.resell == 1000 and P.capped and P.profit
    f"resale capped at what buyers paid: 10s, not the 50s listing ({P0 and P0.resell} -> {P and P.resell}, profit {P0 and P0.profit} -> {P and P.profit})")
 ok(P and P.sales == L('Items[600].sales') and P.salesHours == L('Items[600].hoursWithSales'), 'the plan carries its evidence (sales, hours with sales)')
 X('Items[600].hoursWithSales = 1')
-ok(L('CPlan({ share = 0.75, hours = 8, minSalesHours = 2 })') is None, 'sold in only 1 hour: not sold on the AH by a craft plan')
+ok(L('(CPlan({ share = 0.75, hours = 8, minSalesHours = 2 }))') is None, 'sold in only 1 hour: not sold on the AH by a craft plan')
 X('Items[600].hoursWithSales = nil')
+# Flooded products (new listings far outpacing sales) aren't sold on the AH, like flips; the vendor route if it pays.
+X("Items[600].status = 'flooded'; CRowFl = AF_NS.Farm.Craft(600, CRec, CEnv)")
+r = L("{ AF_NS.Farm.CraftPlan(CRowFl, { share = 0.75, hours = 8, ahStatus = { good = true, slow = true } }, CEnv) }")
+ok(r[1] is None and r[2] == 'flooded', f"flooded product: no AH plan, says why ({r[2]})")
+P = L("CPlan({ share = 0.75, hours = 8 }, CRowFl)")
+ok(P and P.route == 'AH', 'without the status rule (Farm view): still an AH plan')
+X("CEnvFl = Env({ vendor = { [602] = 10 }, vendorSell = function(id) return id == 600 and 400 or nil end })")
+P = L("AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvFl), { share = 0.75, hours = 8, ahStatus = { good = true, slow = true } }, CEnvFl)")
+ok(P and P.route == 'Vendor' and P.resell == 400, f"flooded but the vendor pays: a vendor-route plan ({P and P.route}, {P and P.crafts} crafts)")
+X("Items[600].status = nil")
 
 print(f'\n{fails} failed' if fails else '\nall passed')
 sys.exit(1 if fails else 0)

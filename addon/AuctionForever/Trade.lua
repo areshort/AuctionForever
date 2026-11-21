@@ -297,7 +297,7 @@ function T.DrawBuy()
 	end
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
-	BuyP.Buy:SetEnabled(E ~= nil and not Need and not (E.flip and E.flip.onCooldown) and Buy.state ~= "price" and Buy.state ~= "buying")
+	BuyP.Buy:SetEnabled(E ~= nil and not Need and not (E.flip and (E.flip.onCooldown or E.flip.blocked)) and Buy.state ~= "price" and Buy.state ~= "buying")
 	BuyP.Skip:SetEnabled(#Buy.rows > 1)
 	if E then
 		local F = Shown(E)
@@ -444,6 +444,7 @@ function T.BuyClick()
 	if Buy.state then return end
 	if F.craft then
 		if F.onCooldown then SayBuy("This recipe is on cooldown: ready in " .. T.HoursText(F.onCooldown) .. ".") return end
+		if F.blocked then SayBuy("Not a craft to buy for: the product is " .. F.blocked .. ".") return end
 		T.BuyCraft(E)
 		return
 	end
@@ -948,6 +949,7 @@ end
 function T.CraftStatus(E)
 	local R = E.craft
 	if E.flip.onCooldown then return string.format("|cff808080on cooldown %s|r", T.HoursText(E.flip.onCooldown)) end
+	if E.flip.blocked then return "|cff808080" .. E.flip.blocked .. "|r" end
 	local Text = "craft: " .. Profession(E) .. ((R.req or 0) > 0 and (" " .. R.req) or "")
 	if not E.known then Text = "|cff808080" .. Text .. "|r" end
 	return Text
@@ -974,6 +976,11 @@ function T.CraftDetail(E)
 	local F = E.flip
 	local Head = NameText(E.id) .. "   " .. TierLine(F) .. ", " .. (F.route == "Vendor" and "sell to vendor"
 		or (SellsText(E) .. string.format(" (based on %d sales in %d h%s)", F.sales or 0, F.salesHours or 0, F.capped and ", priced at what buyers paid" or "")))
+	if F.blocked == "flooded" then
+		Head = Head .. "\n|cffffd100Flooded: far more is being posted than sold, so AF doesn't plan to sell it on the AH (shown because Show all recipes is on).|r"
+	elseif F.blocked then
+		Head = Head .. "\n|cffffd100Product " .. F.blocked .. ": not sold on the AH by a craft plan (shown because Show all recipes is on).|r"
+	end
 	if F.cooldown and F.cooldown > 0 then
 		Head = Head .. string.format(", cooldown %s%s", T.HoursText(F.cooldown), F.onCooldown and (": ready in " .. T.HoursText(F.onCooldown)) or "")
 	end

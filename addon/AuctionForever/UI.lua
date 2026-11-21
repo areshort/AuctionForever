@@ -456,6 +456,8 @@ function L.CraftTargets()
 	local Env = FarmEnv()
 	local Opts = { cap = Budget * Core.ItemShare(Budget), share = Core.PlanRateShare, hours = Core.FlipMaxHours,
 		resaleCap = Core.ResaleCap, minSalesHours = L.CraftMinSalesHours,
+		-- sold on the AH only when it's a steady seller, like a flip (not flooded, warming up...)
+		ahStatus = { good = true, slow = true },
 		cooldownLeft = function(Row) return L.SpellCooldownLeft(Row.spell) end,
 		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
 		need = function(Cost, Row)
@@ -476,6 +478,10 @@ function L.CraftTargets()
 				if not P and Why == "cooldown" and All then
 					P = Farm.CraftPlan(R, setmetatable({ cooldownLeft = function() return 0 end }, { __index = Opts }), Env)
 					if P then P.onCooldown = Left end
+				elseif not P and Why and All then
+					-- Not sold on the AH because of its status (flooded...): with Show all, the plan it would be (no Buy).
+					P = Farm.CraftPlan(R, setmetatable({ ahStatus = false }, { __index = Opts }), Env)
+					if P then P.blocked = Why end
 				end
 				if P then
 					local B = Best[R.id]
