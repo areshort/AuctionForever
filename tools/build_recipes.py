@@ -9,6 +9,11 @@ Source: WoW Forever (wago.tools product "wowf") DB2 tables exported as CSV, name
   ItemEffect + ItemXItemEffect   recipe items: TriggerType 6 = the spell the item teaches
   SpellName         spell names (to drop test/DNT spells)
   SpellCooldowns + SpellCategories   craft cooldowns (transmutes, Mooncloth...) and the shared cooldown category
+
+Tool conversions: crafts that aren't profession recipes but a tool item's use (ItemEffect TriggerType 0), e.g. the
+Salt Shaker (item 15846, spell 19566: Deeprock Salt -> Refined Deeprock Salt, 71 h cooldown). Taken when the tool
+needs a profession skill (ItemSparse RequiredSkill / RequiredSkillRank) and the product is sellable; they're filed
+under that profession, with the tool item in the teachItem slot. Without them such products looked gathered.
 Download a table: https://wago.tools/db2/<Table>/csv?build=<build>  (Forever builds: wago.tools/api/builds, key "wowf").
 
 Vendor-sold reagents are not in the client data (vendor lists are server side). They come from a hand-made list of
@@ -128,7 +133,8 @@ def build(data, ver):
             continue
         seen.add(sp)
         nm = names.get(sp, '')
-        if not nm or re.search(r'DNT|\[PH\]|\btest\b|OLD|UNUSED|Deprecated', nm, re.I):
+        # (OLD / UNUSED only as capital words: matched without case they dropped "Smelt Gold" and every "...Gold...")
+        if not nm or re.search(r'DNT|\[PH\]|\btest\b|Deprecated', nm, re.I) or re.search(r'\b(OLD|UNUSED)\b', nm):
             skipped['test/unnamed spell'] += 1
             continue
         if sp not in creates:
@@ -167,6 +173,31 @@ def build(data, ver):
             warn.append(f'vendor list item {it} has no BuyPrice in this build (dropped)')
             continue
         vendor[it] = max(1, round(int(s['BuyPrice']) / max(1, int(s['VendorStackCount'] or 1))))
+    # Tool conversions (see the module notes): a tool's use spell that makes a sellable item from reagents, when
+    # using the tool needs a profession skill.
+    tools = 0
+    for x in xeff:
+        e = ieff.get(int(x['ItemEffectID']))
+        it = int(x['ItemID'])
+        t = sparse.get(it)
+        if not e or e['TriggerType'] != '0' or not t:
+            continue
+        sp, line = int(e['SpellID']), int(t['RequiredSkill'] or 0)
+        if line not in PROFESSIONS or sp in seen or sp not in creates or not regs.get(sp):
+            continue
+        if any(r == it for r, _ in regs[sp]):
+            continue  # the item is used up making it (a one-time combine, e.g. a quest blade): not a tool
+        prod, n = creates[sp][0]
+        ps = sparse.get(prod)
+        if not ps or int(ps['Bonding']) in (BIND_ON_PICKUP, QUEST_ITEM):
+            continue
+        seen.add(sp)
+        cd = cooldown.get(sp, 0)
+        recipes[prod].append((sp, line, int(t['RequiredSkillRank'] or 0), n, regs[sp], it, 0, 0,
+                              cd, category.get(sp, 0) if cd else 0))
+        by_prof[PROFESSIONS[line]] += 1
+        tools += 1
+    skipped['(added) tool conversions'] = tools
     used = {r for rows in recipes.values() for row in rows for r, _ in row[4]}
     info = dict(sparse=sparse, items=items, names=names, skipped=skipped, by_prof=by_prof, warn=warn, used=used)
     return recipes, vendor, info
@@ -181,7 +212,8 @@ def write_lua(out, ver, recipes, vendor):
          '-- AF_Recipes[product] = { {spell, skillLine, skillReq, makes, {reagent, count, ...}, teachItem, yellow, grey}, ... }',
          '--   with cooldown recipes adding: cooldownSeconds, cooldownCategory (crafts in one category share the cooldown)',
          '-- skillReq = the recipe item required rank (0 = not in the client data: trainer recipes; yellow is a guide).',
-         '-- teachItem = recipe/pattern item that teaches it (0 = trainer or learned automatically).',
+         '-- teachItem = recipe/pattern item that teaches it (0 = trainer or learned automatically); for a tool conversion',
+         '--   (a tool item\'s use, e.g. the Salt Shaker) the tool item. yellow/grey 0 = no ranks (a tool, not a recipe).',
          '-- AF_RecipeVendor[item] = vendor price per unit (copper) for reagents sold by vendors.',
          'AF_RecipeBuild = "%s"' % ver,
          'AF_RecipeSkills = {' + ','.join('[%d]="%s"' % (k, v) for k, v in sorted(PROFESSIONS.items())) + '}',

@@ -59,7 +59,8 @@ function Farm.ClassOf(id)
 	local _, _, _, _, _, Class, Sub = F(id)
 	return Class, Sub
 end
--- Where an item comes from: "Crafted" (a recipe makes it), "Gather" (gathering professions: herbs, ore and stone,
+-- Where an item comes from: "Crafted" (a recipe makes it, or a profession tool such as the Salt Shaker), "Vendor"
+-- (sold by vendors: thread, flux, salt...; nothing to farm), "Gather" (gathering professions: herbs, ore and stone,
 -- leather and hides, the gems mining finds, fish) or "Drop" (everything else).
 Farm.GATHER_SUB = { [9] = true, [7] = true, [6] = true } -- trade goods: Herb, Metal & Stone, Leather
 -- Mining gems and fishing catches (their subclasses also hold drops, so by item ID; from Forever's item data).
@@ -70,6 +71,7 @@ for _, id in ipairs({ 774, 818, 1210, 1206, 1705, 1529, 3864, 7909, 7910, 12799,
 function Farm.Source(id, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	if E.recipes[id] then return "Crafted" end
+	if E.vendor[id] then return "Vendor" end
 	if Farm.GATHER_IDS[id] then return "Gather" end
 	local Class, Sub = E.classOf(id)
 	if Class == 7 and Farm.GATHER_SUB[Sub] then return "Gather" end
