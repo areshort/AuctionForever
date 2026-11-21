@@ -19,18 +19,19 @@ Core.LongerGain = 1.10          -- an 8 h or 24 h post must be expected to earn 
 Core.FloodDays = 1              -- more listed than this many days of sales: flooded
 Core.FallShare = 0.10           -- last-24 h selling price this far under the 3-day one: falling
 Core.MinFlipProfit = 500        -- 5 silver: a flip must expect at least this (smaller ones aren't worth the clicks)
-Core.MinVendorProfit = 200      -- 2 silver: listings under the vendor price must pay at least this to be a buy target
-                                -- (a sure profit: no AH cut, no deposit, no waiting)
+Core.MinVendorProfit = 200      -- 2 silver: a craft sold to a vendor must pay at least this (see MinVendorPurchase for
+                                -- buying listings to sell to a vendor)
 -- A flip that needs this many units or more bought (to clear the cheap listings under its resale price) isn't a
 -- flip at all: not cut down to fewer units, since reposting above a wall of cheap listings left behind won't sell
 -- (Mild Spices: 5,088 at 3-4c to make +1g 31s). 99 units is fine, 100 is not. Craft plans and vendor buys don't
 -- clear a wall: not limited by this.
 Core.MaxBuyUnits = 100
--- Vendor buys: commodities are one purchase for any quantity (200 Silk Cloth under the vendor price: one click), so
--- any size is fine. Item auctions are one purchase (one click) each: an auction is only worth buying to vendor if it
--- earns at least this much on its own (vendor price - its price; the ladder doesn't say how units are grouped into
--- auctions, so each unit counts as one auction). Any number of such auctions is fine.
-Core.MinVendorProfitEach = 1000
+-- Vendor buys (listings under the vendor price, sold to a vendor): 10s per purchase - each item auction, or one
+-- commodity purchase. A commodity is one purchase for any quantity (200 Silk Cloth: one click), so the whole purchase
+-- must earn 10s (122 Instant Poison for +2s 14c isn't worth the time); no unit cap. Item auctions are one purchase
+-- each, so each must earn 10s on its own (vendor price - its price; the ladder doesn't say how units are grouped into
+-- auctions, so each unit counts as one auction); any number of such auctions is fine.
+Core.MinVendorPurchase = 1000
 Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
 -- Flips plan their profit at this share of the resale price. Flips are commodities only, and commodity buyers fill
@@ -599,8 +600,9 @@ function Core.Resale(I, Qty, Cost)
 end
 
 -- Buy to sell to a vendor: every listing priced under the vendor price (cheapest first), within Cap. A sure profit
--- (vendors pay a fixed price, no AH cut, no deposit), so no sales data is needed. nil under MinVendorProfit.
--- Item = item auctions (one purchase each, only those earning MinVendorProfitEach); nil = a commodity (one purchase).
+-- (vendors pay a fixed price, no AH cut, no deposit), so no sales data is needed. nil when a purchase earns under
+-- MinVendorPurchase. Item = item auctions (one purchase each: each must earn it); nil = a commodity (one purchase:
+-- the whole of it must earn it).
 function Core.VendorDeal(Ladder, Vendor, Cap, Item)
 	if not Vendor or Vendor <= 0 or type(Ladder) ~= "table" then return nil end
 	Cap = Cap or math.huge
@@ -608,14 +610,14 @@ function Core.VendorDeal(Ladder, Vendor, Cap, Item)
 	for _, Step in ipairs(Ladder) do
 		local P, Q = Step[1], Step[2]
 		if not P or P >= Vendor then break end
-		if Item and Vendor - P < Core.MinVendorProfitEach then break end -- (pricier auctions earn even less)
+		if Item and Vendor - P < Core.MinVendorPurchase then break end -- (pricier auctions earn even less)
 		local Take = Q
 		if P > 0 and Cap < math.huge then Take = math.min(Q, math.floor((Cap - Cost) / P)) end
 		if Take <= 0 then break end
 		Qty, Cost, Profit, Top = Qty + Take, Cost + Take * P, Profit + Take * (Vendor - P), P
 		if Take < Q then break end
 	end
-	if Qty == 0 or Profit < Core.MinVendorProfit then return nil end
+	if Qty == 0 or Profit < Core.MinVendorPurchase then return nil end
 	return { purchases = Item and Qty or 1, vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 

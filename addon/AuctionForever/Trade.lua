@@ -635,7 +635,7 @@ local function OnPriceUpdated(Unit, Total)
 	local R, Profit, MinProfit
 	if Pd.vendor then
 		R = { resell = Pd.resell }
-		Profit, MinProfit = Pd.resell * Pd.qty - Total, Core.MinVendorProfit
+		Profit, MinProfit = Pd.resell * Pd.qty - Total, Core.MinVendorPurchase
 	else
 		local Now = Core.Info(Pd.id)
 		R = Core.Resale(Now, Pd.qty, Total)
