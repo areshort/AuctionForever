@@ -728,10 +728,30 @@ function L.FlipTargets()
 	for i, Name in ipairs(D.fields or {}) do if Name == "low" then LowAt = i end end
 	local Fresh = type(AuctionForeverDB) == "table" and AuctionForeverDB.fresh and AuctionForeverDB.fresh.items
 	local VendorAll = {}
-	for id, Raw in pairs(D.items) do
+	-- Random-suffix gear: a vendor pays the same for every version, so here the versions' listings are one ladder
+	-- (the purchase takes the cheapest auction of the item, whatever its suffix).
+	local VIds = {}
+	for id in pairs(D.items) do VIds[id] = true end
+	for id in pairs(type(D.sfx) == "table" and D.sfx or {}) do VIds[id] = true end
+	for id in pairs(VIds) do
+		local Raw = D.items[id]
 		local Low = LowAt and type(Raw) == "table" and Raw[LowAt] or nil
 		local F = Fresh and Fresh[id]
 		if F and F[1] and (not Low or F[1] < Low) then Low = F[1] end
+		local Vers = type(D.sfx) == "table" and D.sfx[id]
+		if Vers and not Info[id] then
+			local Lad = {}
+			for _, VI in ipairs(Raw and { Core.Info(id) } or {}) do for _, St in ipairs(VI.ladder or {}) do Lad[#Lad + 1] = St end end
+			for B in pairs(Vers) do
+				local VI = Core.Info(id .. ":" .. B)
+				for _, St in ipairs(VI and VI.ladder or {}) do Lad[#Lad + 1] = St end
+				local VF = Fresh and Fresh[id .. ":" .. B]
+				local VL = (VF and VF[1]) or (VI and VI.low)
+				if VL and (not Low or VL < Low) then Low = VL end
+			end
+			table.sort(Lad, function(a, b) return a[1] < b[1] end)
+			Info[id] = setmetatable({ ladder = Lad }, { __index = Core.Info(id) or {} })
+		end
 		if Low then
 			-- The data file's vendor price first: asking the game for thousands of unloaded items floods the server.
 			local Sh = Shipped(id)

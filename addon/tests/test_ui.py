@@ -2212,6 +2212,22 @@ ok(len(sq) == 2 and sq[0][0] == '990201:12719' and sq[1][0] == '990201:12722' an
 X('AF_NS.Scan.Version = AF_NS.Scan.Version + 1; DR = AF_NS.UI.DropRows()')
 dr = [str(L(f'DR[{i}].key')) for i in range(1, L('#DR') + 1) if L(f'DR[{i}].id') == 990201]
 ok(sorted(dr) == ['990201:12719', '990201:12722'], f'Farm Drop: one row per suffix version: {dr}')
+# AF Buy: suffix gear under its vendor price is still a vendor deal (a vendor pays the same for every version).
+X("""local Base = AuctionForeverData.sfx[990201][12722]
+  local R = {}
+  for i, V in pairs(Base) do R[i] = V end
+  local Idx = {}
+  for i, N in ipairs(AuctionForeverData.fields) do Idx[N] = i end
+  R[Idx.low] = 1000; R[Idx.qty] = 2; R[Idx.ladder] = { { 1000, 2 } }
+  AuctionForeverData.sfx[990201][12800] = R
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  VT = nil
+  for _, Rw in ipairs(AF_NS.UI.FlipTargets()) do if Rw.id == 990201 then VT = Rw end end
+  AuctionForeverData.sfx[990201][12800] = nil
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+vt = L('VT and (VT.best or VT.start)')
+ok(vt is not None and vt.vendor and vt.qty == 2 and vt.profit == 2 * (2700 - 1000),
+   f"AF Buy: a suffix version listed under the vendor price is a vendor deal ({vt and dict(vt)})")
 # Scans: a full scan row keyed by its link's version; an item lookup splits the results by version.
 X("""C_AuctionHouse.GetReplicateItemLink = function(i) return i == 1 and WhaleLink or BearLink end
   RK = { AF_NS.Scan.ReplicateKey(1, 990201), AF_NS.Scan.ReplicateKey(2, 990201), AF_NS.Scan.ReplicateKey(3, 2589) }
