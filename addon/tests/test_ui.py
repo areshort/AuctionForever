@@ -697,6 +697,32 @@ if real:
     ok(L('AF_NS.Trade.SellIndex()') == 1, f'Skip walks the queue and wraps back to the start ({n} items)')
     X('Click(AuctionForeverSellPanel.QueueRows[2])')
     ok(n < 2 or L('AF_NS.Trade.SellIndex()') == 2, 'clicking a queue row selects it')
+    # Price column: each row's suggested price each; the selected row shows the price in the boxes (your edit).
+    X('AF_NS.Trade.SelectSell(1); AF_NS.Trade.DrawSell()')
+    pc = [(str(L(f'AuctionForeverSellPanel.QueueRows[{i}].Cells[3] and AuctionForeverSellPanel.QueueRows[{i}].Cells[3]:GetText()')),
+           str(L(f'AF_NS.Core.MoneyColor(AF_NS.Trade.SellQueue()[{i}].price)'))) for i in range(1, min(n, 14) + 1)]
+    ok(n >= 2 and all(a == b for a, b in pc), f'AF Sell list: a Price column with each row suggested price each: {pc[:3]}')
+    X("""AuctionForeverSellPanel.Gold:SetText("7"); AuctionForeverSellPanel.Silver:SetText("0"); AuctionForeverSellPanel.Copper:SetText("3")
+      AuctionForeverSellPanel.Copper:GetScript("OnTextChanged")(AuctionForeverSellPanel.Copper, true)""")
+    ok(plain(L('AuctionForeverSellPanel.QueueRows[1].Cells[3]:GetText()')) == '7g 00s 03c'
+       and str(L('AuctionForeverSellPanel.QueueRows[2].Cells[3]:GetText()')) == pc[1][1],
+       f"edited price shows on the selected row only: {plain(L('AuctionForeverSellPanel.QueueRows[1].Cells[3]:GetText()'))}")
+    ok(L('AuctionForeverSellPanel.QueueRows[1]._width') + 14 + 4 + 16 <= L('AuctionForeverSellPanel.Name._points[1][2]')
+       and L('AuctionForeverSellPanel.Name._points[1][2]') + L('AuctionForeverSellPanel.Name._width') <= 790 - 4
+       and L('AuctionForeverSellPanel.Deposit._points[1][2]') + L('AuctionForeverSellPanel.Deposit._width') <= 790 - 4,
+       'AF Sell: list, scroll bar and the item pane side by side within the 790 px page')
+    X('AF_NS.Trade.SelectSell(1); HintFlag = AF_NS.Trade.SelectedSell().flag; AF_NS.Trade.SelectedSell().flag = nil; AF_NS.Trade.DrawSell()')
+    ok(str(L('AuctionForeverSellPanel.Hint:GetText()')) == 'Prefilled: 1c under the cheapest listing.',
+       'hint: "Prefilled: 1c under the cheapest listing." ' + str(L('AuctionForeverSellPanel.Hint:GetText()')))
+    X('AF_NS.Trade.SelectedSell().flag = HintFlag; AF_NS.Trade.DrawSell()')
+    # Your own listings are left out when finding the cheapest: the whole cheapest level yours -> 1c under the next.
+    X("""OwnI = AF_NS.Core.Info(2589); OwnLow, OwnQ = OwnI.ladder[1][1], OwnI.ladder[1][2]; OwnNext = OwnI.ladder[2] and OwnI.ladder[2][1]
+      AF_NS.Core.MyListings = { [2589] = { [OwnLow] = OwnQ } }
+      OwnG = AF_NS.Trade.SuggestFor(2589, 5)
+      AF_NS.Core.MyListings = nil""")
+    if L('OwnNext'):
+        ok(L('OwnG.price') == max(L('OwnNext') - 1, L('math.ceil(AF_NS.UI.Vendor(2589) / 0.95)')) or L('OwnG.flag') == 'market',
+           f"own listings ignored: 1c under the next seller ({L('OwnG.price')}, yours at {L('OwnLow')}, next {L('OwnNext')})")
     # ---- Craft plans in AF Buy ------------------------------------------------------------------------------------
     # One recipe (Tailoring 50): 2 x mat 990102 + 1 x mat 990103 from the AH, 1 Coarse Thread (2320) from a vendor.
     X("""local function Copy(t, seen) if type(t) ~= "table" then return t end seen = seen or {} if seen[t] then return seen[t] end

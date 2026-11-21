@@ -405,27 +405,24 @@ function Core.NetSpeed(I)
 	return (I.perHour or 0) * Core.PlanRateShare - I.newHour
 end
 
--- Your selling price: the highest price where everything cheaper plus your stack clears within 2 h at the net
--- speed; otherwise 1c under the cheapest listing. Never below Floor. Duration = the shortest that fits your stack;
--- more than a day of sales posts only what sells in 24 h.
+-- Your selling price: 1c under the cheapest listing (your own listings are already out of the ladder, see
+-- Core.Info); nothing listed: what buyers recently paid. Never below Floor. Duration = the shortest that fits your
+-- stack at the net speed; more than a day of sales posts only what sells in 24 h.
 -- Returns price, hours, duration index, quantity to post, and a flag: "loss" (being in front is below Floor),
--- "flooding" (more posted than sold), "guess" (new listings not measured yet) or nil.
+-- "flooding" (more posted than sold) or nil.
 function Core.SellPrice(I, Qty, Floor)
 	Qty, Floor = math.max(1, Qty or 1), Floor or 1
 	local Ladder = I.ladder or {}
 	local Net = Core.NetSpeed(I)
 	local Speed = (Net and Net > 0) and Net or (I.perHour or 0) * Core.PlanRateShare
 	local Flag
-	if not Net then Flag = "guess" elseif Net <= 0 then Flag = "flooding" end
+	if Net and Net <= 0 then Flag = "flooding" end
 	local Price
 	if not Ladder[1] then
 		Price = Core.Ceiling(I) or Core.Market(I)
 		if not Price then return nil end
 	else
-		if Net and Net > 0 then
-			Price = Core.PostPrice(setmetatable({ perHour = Net }, { __index = I }), Qty, 2, Floor)
-		end
-		Price = Price or (Ladder[1][1] - 1)
+		Price = Ladder[1][1] - 1
 	end
 	if Price < Floor then Price, Flag = Floor, "loss" end
 	Price = math.floor(Price)

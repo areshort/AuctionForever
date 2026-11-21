@@ -737,7 +737,9 @@ local function BuildBuy()
 end
 
 -- AF Sell -----------------------------------------------------------------------------------------------------
-local QUEUE_COLS = { 150, 40 }
+-- Name, count, suggested price each (the list is QUEUE_W wide: icon 24 + columns + 6 between).
+local QUEUE_COLS = { 120, 30, 72 }
+local QUEUE_W, SELL_X, SELL_W = 260, 300, 480
 
 local function SaySell(Msg) if SellP then SellP.Status:SetText(Msg or "") end end
 local function Floor(G) return math.max(1, math.ceil((G.vendor or 0) / (1 - Core.Cut))) end
@@ -878,6 +880,9 @@ function T.DrawSell()
 			R.Icon:SetTexture(UI().Icon(G.id))
 			R.Cells[1]:SetText(NameText(G.key or G.id, true))
 			R.Cells[2]:SetText("x" .. G.count)
+			-- (the selected row: the price in the boxes, so your edit shows here too)
+			local Each = (i + Off == Sell.idx) and T.SellPrice() or G.price
+			R.Cells[3]:SetText(Each and Core.MoneyColor(Each) or "-")
 			R.Sel:SetShown(i + Off == Sell.idx)
 		end
 	end
@@ -903,11 +908,10 @@ function T.DrawSell()
 	local Hint = {
 		loss = "|cffff4040Being the cheapest would sell below your floor (vendor or what you paid): holding may be better.|r",
 		flooding = "|cffffd100More is being posted than sold: priced 1c under the cheapest; prices may keep falling.|r",
-		guess = "New listings per hour not measured yet: priced 1c under the cheapest to be safe.",
 		market = "|cffffd100Not a steady seller: priced at what buyers have recently paid, not under the (higher) cheapest listing.|r",
 		cutloss = "|cffff4040The market has stayed under what you paid (all day, or it expired twice): priced at the market to cut the loss. Or keep it and wait.|r",
 	}
-	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: the highest price that still sells within 2 h with other sellers posting.")
+	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: 1c under the cheapest listing.")
 	SellP.Info:SetText(Line)
 end
 
@@ -1052,18 +1056,18 @@ local function BuildSell()
 	ScanTicker(P)
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Sell")
 	Text(P, "GameFontNormalSmall", 20, -44):SetText("Your items that sell here (click one)")
-	P.QueueRows = RowList(P, 14, -60, 230, ROWS, QUEUE_COLS, function(r) T.SelectSell(r + (Sell.offset or 0)) end)
+	P.QueueRows = RowList(P, 14, -60, QUEUE_W, ROWS, QUEUE_COLS, function(r) T.SelectSell(r + (Sell.offset or 0)) end)
 	P:EnableMouseWheel(true)
 	P:SetScript("OnMouseWheel", function(_, Delta)
 		Sell.offset = math.max(0, math.min(math.max(0, #Sell.queue - ROWS), (Sell.offset or 0) - Delta * 3))
 		T.DrawSell()
 	end)
-	P.Bar = ScrollBar(P, 248, -60, function(V) Sell.offset = V; T.DrawSell() end)
+	P.Bar = ScrollBar(P, 14 + QUEUE_W + 4, -60, function(V) Sell.offset = V; T.DrawSell() end)
 	P.Empty = Text(P, "GameFontHighlight", 20, -64, 220)
 	P.Empty:SetText("Nothing in your bags sells here for more than the vendor pays.")
-	local X = 270
-	P.Name = Text(P, "GameFontNormalLarge", X, -60, 480)
-	P.Info = Text(P, "GameFontHighlightSmall", X, -86, 480)
+	local X = SELL_X
+	P.Name = Text(P, "GameFontNormalLarge", X, -60, SELL_W)
+	P.Info = Text(P, "GameFontHighlightSmall", X, -86, SELL_W)
 	Text(P, "GameFontNormal", X, -120):SetText("Price each")
 	P.Gold = MoneyBox(P, X + 100, -116, 50, "g")
 	P.Silver = MoneyBox(P, X + 170, -116, 30, "s")
@@ -1075,12 +1079,13 @@ local function BuildSell()
 	for i, H in ipairs(Core.Durations) do
 		P.Dur[i] = Button(P, H .. " h", X + 100 + (i - 1) * 70, -180, 64, function() T.SetSellDuration(i) end)
 	end
-	P.Deposit = Text(P, "GameFontHighlightSmall", X, -216, 600)
-	P.Hint = Text(P, "GameFontDisableSmall", X, -236, 480)
-	P.Hint:SetText("Prefilled from recent sales: the best price that should sell within the duration.")
-	P.Post = Button(P, "Post", X, -270, 160, function() T.PostClick() end)
-	P.Skip = Button(P, "Skip", X + 170, -270, 90, function() T.SelectSell(Sell.idx + 1) end)
-	P.Status = Text(P, "GameFontHighlightSmall", X, -304, 480)
+	-- (the deposit line can take two lines at this width: the hint starts below them)
+	P.Deposit = Text(P, "GameFontHighlightSmall", X, -216, SELL_W)
+	P.Hint = Text(P, "GameFontDisableSmall", X, -244, SELL_W)
+	P.Hint:SetText("Prefilled: 1c under the cheapest listing.")
+	P.Post = Button(P, "Post", X, -282, 160, function() T.PostClick() end)
+	P.Skip = Button(P, "Skip", X + 170, -282, 90, function() T.SelectSell(Sell.idx + 1) end)
+	P.Status = Text(P, "GameFontHighlightSmall", X, -316, SELL_W)
 end
 
 -- Craft plans ---------------------------------------------------------------------------------------------------
