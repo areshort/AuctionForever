@@ -15,3 +15,4 @@ UI.lua
 Bags.lua
 Trade.lua
 Mail.lua
+Brief.lua

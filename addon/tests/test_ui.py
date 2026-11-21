@@ -22,7 +22,7 @@ setmetatable(_G, { __index = function(_, k)
   if not Allowed[k] then
     local Info = debug.getinfo(2, "S")
     local Src = Info and Info.source or "?"
-    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Mail.lua") or Src:find("Trade.lua") or Src:find("Farm.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
+    if Src:find("Core.lua") or Src:find("Scan.lua") or Src:find("UI.lua") or Src:find("SelfTest.lua") or Src:find("Mail.lua") or Src:find("Trade.lua") or Src:find("Farm.lua") or Src:find("Brief.lua") then UndefinedReads[#UndefinedReads + 1] = Src .. ": " .. tostring(k) end
   end
 end })
 """)
@@ -1133,7 +1133,7 @@ tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok([r[0] for r in tl] == ['Vendor', 'AH', 'Profit', 'Source'], 'tooltip lines: exactly Vendor, AH, Profit, Source: ' + str([r[0] for r in tl]))
 v = L('AF_NS.UI.Vendor(2589)'); ah = L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
 exp = int(ah * 0.95) - v
-ok(str(tl[2][1]) == L(f'AF_NS.Core.MoneyDelta({exp})') and str(tl[2][1]).startswith('|cff1eff00+|r'),
+ok(str(tl[2][1]) == L(f'AF_NS.Core.MoneyDelta({exp})') and (exp <= 0 or str(tl[2][1]).startswith('|cff1eff00+|r')),
    f'Profit = AH after the 5% cut - vendor, green plus ({ah}c, vendor {v}c -> {tl[2][1]})')
 ok(str(tl[3][1]) in ('Gather', 'Drop', 'Crafted'), 'Source line: ' + str(tl[3][1]))
 X('IsShiftKeyDown = function() return true end; RealGIC = C_Item.GetItemCount; C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end')
@@ -1912,6 +1912,107 @@ ok(sl1 == f'20 x {n2320}  Vendor  10c  (2s 00c)' and sl2 == f'40 x {n4306}  AH  
    f'shopping lines: {sl1!r} / {sl2!r} / {sl3!r}')
 ok(ml == f'Mats: 40 {n4306} (AH, up to 2s 81c), 20 {n2320} (Vendor)' and ml5 == 'Mats: 1 Item 2 (AH, up to 5c), 1 Item 4 (AH, up to 5c), 1 Item 5 (AH, up to 5c), +2 more',
    f'compact Mats line: {ml!r} / {ml5!r}')
+# ---- Login brief ------------------------------------------------------------------------------------------------
+X("""BriefMsgs = {}
+  DEFAULT_CHAT_FRAME = { AddMessage = function(self, m) BriefMsgs[#BriefMsgs + 1] = m end }
+  BriefSaved = { FT = AF_NS.UI.FlipTargets, CT = AF_NS.UI.CraftTargets, GR = AF_NS.UI.GatherRows, CO = AF_NS.Farm.ClassOf, SI = C_SkillInfo,
+    seen = AuctionForeverDB.briefSeen, off = AuctionForeverDB.briefOff, plan = AF_NS.UI.LastPlan }
+  BriefPlan = { count = 2, cost = 30000, profit = 12000 }
+  AF_NS.UI.FlipTargets = function() AF_NS.UI.LastPlan = BriefPlan return {} end
+  BriefCraftArg = nil
+  BriefCrafts = { { id = 2589, known = true, flip = { craftProfit = 6000 } }, { id = 2592, known = false, flip = { craftProfit = 90000 } },
+    { id = 4306, known = true, flip = { craftProfit = 80000, blocked = "over budget" } } }
+  AF_NS.UI.CraftTargets = function(KnownOnly) BriefCraftArg = KnownOnly return BriefCrafts end
+  BriefGather = { { id = 2770, expected = 8000, salesDay = 99.6 }, { id = 765, expected = 20000, salesDay = 50 }, { id = 2318, expected = 30000, salesDay = 40 } }
+  AF_NS.UI.GatherRows = function() return BriefGather end
+  local Sub = { [2770] = 7, [765] = 9, [2318] = 6 }
+  AF_NS.Farm.ClassOf = function(id) if Sub[id] then return 7, Sub[id] end return BriefSaved.CO(id) end
+  BriefRanks = { [186] = 120 }
+  C_SkillInfo = { GetSkillLineInfoByID = function(id) local R = BriefRanks[id] if R then return { rank = R } end end }
+  AuctionForeverDB.briefSeen = nil; AuctionForeverDB.briefOff = nil""")
+
+
+def msgs(): return [str(v) for v in L('BriefMsgs').values()]
+
+
+X('FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(4)')
+before = msgs()
+X('AdvanceTime(2)')
+m1 = msgs()
+X('AdvanceTime(30)')
+p1 = [plain(x) for x in m1]
+ok(before == [] and len(m1) >= 2 and len(msgs()) == len(m1) and all(x.startswith('|cffff80ff[AF] ') for x in m1)
+   and p1[0].startswith('[AF] Data ') and ' min old (' in p1[0] and p1[0].endswith(' h history).'),
+   f'fresh login: one brief after ~5 s, whisper pink, "[AF]", data age first: {p1}')
+import re as _re
+ok(all(_re.fullmatch(r'(?:[^|]|\|r\|cffff80ff|\|c[0-9a-f]{8}[^|]*\|r\|cffff80ff)*', x[len('|cffff80ff'):-2]) for x in m1), 'every coin color goes back to pink: the whole line stays pink')
+ok(len(p1) >= 3 and p1[1] == '[AF] Buy: 2 flips, +' + plain(L('AF_NS.Core.MoneyColor(12000)')) + ' in plan. Check the AF Buy tab.'
+   and p1[2] == '[AF] Craft: ' + str(L('(AF_NS.UI.ItemName(2589))')) + ' +' + plain(L('AF_NS.Core.MoneyColor(6000)')) + ' per craft, mats under target.'
+   and L('BriefCraftArg') == True,
+   f'Buy line (plan +50s or more), Craft line: the best known recipe only (not Show all, not blocked): {p1[1:3]}')
+ok(len(p1) == 4 and p1[3] == '[AF] Gather: ' + str(L('(AF_NS.UI.ItemName(2770))')) + ' ~' + plain(L('AF_NS.Core.MoneyColor(8000)')) + ' each, 100 sold/day (Mining).'
+   and not any('Herbalism' in x or 'Skinning' in x for x in p1),
+   f"Gather: only this character's professions (Mining here; the better herb and leather are not mentioned): {p1[3:]}")
+ok(L('AuctionForeverDB.briefSeen ~= nil and next(AuctionForeverDB.briefSeen) ~= nil'), 'first brief: remembers what is on the AH (nothing "new" yet)')
+X('BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", false, true); AdvanceTime(30); FireEvent("PLAYER_ENTERING_WORLD", false, false); AdvanceTime(30)')
+ok(msgs() == [], 'a /reload or a zone change: no brief')
+# Thresholds: under 50s each, nothing; no gathering profession, no Gather line.
+X("""BriefPlan.profit = 4999; BriefCrafts[1].flip.craftProfit = 4999; BriefGather[1].expected = 4999; BriefGather[2].expected = 4999; BriefRanks = { [2944] = 50 }
+  BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief")""")
+p2 = [plain(x) for x in msgs()]
+ok(len(p2) == 2 and p2[1] == '[AF] Nothing big today.', f'/af brief: under every threshold -> "Nothing big today." ({p2})')
+X('BriefGather[2].expected = 20000; BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief")')
+p3 = [plain(x) for x in msgs()]
+ok(any(x.startswith('[AF] Gather: ') and x.endswith('(Herbalism).') for x in p3), f"Herbalism (Forever's second skill line) gathers herbs: {p3}")
+# New on the AH: notable items (Uncommon+ or 1g+) not there last time; at most 3 names, the first with its sales.
+X("""local N = {}
+  for id in pairs(AuctionForeverData.items) do local I = AF_NS.Core.Info(id) if I and (I.med or 0) >= 10000 and (I.sales or 0) > 0 then N[#N + 1] = id end end
+  table.sort(N); BriefNew = N
+  for i = 1, math.min(4, #N) do AuctionForeverDB.briefSeen[N[i]] = nil end
+  for k = 1, 10 do AuctionForeverDB.briefSeen[9000000 + k] = true end
+  BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief")""")
+p4 = [plain(x) for x in msgs()]
+nl = [x for x in p4 if x.startswith('[AF] New on the AH: ')]
+ok(L('#BriefNew') >= 4 and len(nl) == 1 and nl[0].count(', ') == 2 and ' sold at ' in nl[0].split(', ')[0] and nl[0].endswith('.'),
+   f'new on the AH: 3 names, the first with its sales: {nl}')
+ok(L('AuctionForeverDB.briefSeen[9000001]') == True and L('AuctionForeverDB.briefSeen[BriefNew[1]]') == True, 'old ids are kept while there is room; the new ones are remembered')
+X('BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief")')
+ok(not any(x.startswith('[AF] New on the AH') for x in [plain(x) for x in msgs()]), 'seen once: not new again')
+X('BriefCap = AF_NS.Brief.SEEN_CAP; AF_NS.Brief.SEEN_CAP = 5; SlashCmdList.AUCTIONFOREVER("brief"); AF_NS.Brief.SEEN_CAP = BriefCap')
+ok(L('AuctionForeverDB.briefSeen[9000001] == nil and AuctionForeverDB.briefSeen[BriefNew[1]] == true'), 'over the cap: only what is in the data now is kept')
+# /af brief off / on
+X('BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief off"); BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(30)')
+ok(L('AuctionForeverDB.briefOff') == True and msgs() == [], '/af brief off: no login brief')
+X('SlashCmdList.AUCTIONFOREVER("brief on"); BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(30)')
+ok(L('AuctionForeverDB.briefOff') is None and len(msgs()) >= 2, '/af brief on: back on')
+# The real craft list: a character with one profession (the one the most rows need) and Show all on; the brief asks
+# for the recipes it knows only.
+X("""BriefAll, BriefRec, BriefIPS = AuctionForeverDB.allRecipes, AuctionForeverChar.recipes, IsPlayerSpell
+  AuctionForeverDB.allRecipes = true; AuctionForeverChar.recipes = nil; IsPlayerSpell = nil; Money = 100000000
+  BriefRanks = { [1] = 300 }
+  local function Lists(Line)
+    BriefRanks = { [Line] = 300 }
+    AF_NS.UI.RecipeVersion = (AF_NS.UI.RecipeVersion or 0) + 1
+    local A = BriefSaved.CT(false)
+    AF_NS.UI.RecipeVersion = AF_NS.UI.RecipeVersion + 1
+    return A, BriefSaved.CT(true)
+  end
+  local A = Lists(1)
+  local Count = {}
+  for _, E in ipairs(A) do Count[E.craft.skill] = (Count[E.craft.skill] or 0) + 1 end
+  BriefLine = nil
+  for Line, N in pairs(Count) do if not BriefLine or N > Count[BriefLine] then BriefLine = Line end end
+  BriefShowAll, BriefKnownOnly = Lists(BriefLine)
+  AuctionForeverDB.allRecipes, AuctionForeverChar.recipes, IsPlayerSpell = BriefAll, BriefRec, BriefIPS""")
+sa = [(L(f'BriefShowAll[{i}].known'), L(f'BriefShowAll[{i}].craft.skill')) for i in range(1, L('#BriefShowAll') + 1)]
+ko = [(L(f'BriefKnownOnly[{i}].known'), L(f'BriefKnownOnly[{i}].craft.skill')) for i in range(1, L('#BriefKnownOnly') + 1)]
+line = L('BriefLine')
+ok(len(ko) > 0 and any(sk != line for _, sk in sa) and all(k and sk == line for k, sk in ko),
+   f'craft list for the brief: Show all ignored, only the known profession ({line}): {len(sa)} with Show all, {len(ko)} known, lines {set(sk for _, sk in ko)}')
+src = open(os.path.join(ADDON, 'Brief.lua'), encoding='utf-8').read() if os.path.exists(os.path.join(ADDON, 'Brief.lua')) else ''
+ok('SendChatMessage' not in src and 'DEFAULT_CHAT_FRAME' in src, 'the brief only prints to your own chat frame')
+X("""AF_NS.UI.FlipTargets, AF_NS.UI.CraftTargets, AF_NS.UI.GatherRows, AF_NS.Farm.ClassOf, C_SkillInfo = BriefSaved.FT, BriefSaved.CT, BriefSaved.GR, BriefSaved.CO, BriefSaved.SI
+  AuctionForeverDB.briefSeen, AuctionForeverDB.briefOff, AF_NS.UI.LastPlan = BriefSaved.seen, BriefSaved.off, BriefSaved.plan; DEFAULT_CHAT_FRAME = nil""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

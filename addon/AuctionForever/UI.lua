@@ -526,11 +526,12 @@ function L.MatsLine(List, Max)
 	end
 	return "Mats: " .. (#Parts > 0 and table.concat(Parts, ", ") or "-")
 end
-function L.CraftTargets()
+-- KnownOnly: only recipes you know, whatever Show all recipes says (the login brief).
+function L.CraftTargets(KnownOnly)
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
 	local Budget = L.FlipBudget()
-	local All = L.ShowAllRecipes()
+	local All = not KnownOnly and L.ShowAllRecipes()
 	local Held, BagSig = L.BagCounts()
 	-- (the minute is in the key: cooldowns run out; the bags: what you hold isn't bought)
 	local Key = string.format("%s:%d:%s:%d:%d:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0, math.floor(GetTime() / 60), BagSig)
@@ -1887,6 +1888,7 @@ SLASH_AUCTIONFOREVER1 = "/af"
 SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
+	if Msg:match("^brief") and AF.Brief then AF.Brief.Command(Msg) return end
 	if Msg:match("^keep") and AF.Bags then AF.Bags.KeepCommand(Msg) elseif Msg:match("^icon") and AF.Bags then AF.Bags.IconCommand(Msg) elseif Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run()
 	elseif Msg == "missed" then for _, Ln in ipairs(L.MissedSummary()) do print("|cffffd100AuctionForever:|r " .. Ln) end
 	else L.Toggle(1) end
