@@ -132,6 +132,16 @@ rows3[5][1] = 5  # one stray cheap listing
 nl3 = C.item_numbers('96', {'hourly': {'96': rows3}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 11 * 3600)
 ok(nl3['lowRange24'] == [100, 100, 100] and nl2['lowRange24'] is None,
    f"one stray cheap listing doesn't widen the range ({nl3['lowRange24']}); under 12 hours: none ({nl2['lowRange24']})")
+# ---- Sales rate over 4-hour blocks: a real rate for items sold one at a time; a single buyout stays out.
+gearrows = [[1_000_000 + i * 3600, 500, 3, [1, 0, 1, 3, 0, 2][i % 6], 0, 0, 1.0, 0] for i in range(24)]  # 1.17/h
+br = C.block_rate(gearrows)
+hourly_med = sorted(r[3] for r in gearrows)[12]
+ok(hourly_med == 1 and br is not None and br != 1 and abs(br - sum(r[3] for r in gearrows) / 24) < 0.15,
+   f'one-at-a-time sales: the hourly median says 1/h (24/day), the 4 h blocks {br:.2f}/h (mean {sum(r[3] for r in gearrows) / 24:.2f})')
+burst = [[1_000_000 + i * 3600, 500, 3, 40 if i == 7 else 0, 0, 0, 1.0, 0] for i in range(24)]
+ok(C.block_rate(burst) == 0 and C.block_rate(gearrows[:5]) is None, 'one buyout of 40: block median 0 (not steady); under 2 blocks: none')
+nb = C.item_numbers('96', {'hourly': {'96': gearrows}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 23 * 3600)
+ok(nb['blockHour'] == br and 'blockHour' in C.FIELDS, 'data file field blockHour')
 # ---- History counted the old way (cancels as sales) is dropped once, then kept.
 d2 = tempfile.mkdtemp()
 st4, out4 = os.path.join(d2, 's.gz'), os.path.join(d2, 'o.lua')

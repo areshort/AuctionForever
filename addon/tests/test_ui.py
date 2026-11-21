@@ -2351,6 +2351,40 @@ X("""AF_NS.Core.Status, C_Item.GetItemInfo = AgSaved.st, AgSaved.gi
   AuctionForeverData.items[990801], AuctionForeverData.items[990802] = nil, nil
   AuctionForeverData.info[990801], AuctionForeverData.info[990802] = nil, nil
   AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+# ---- Sales rate of items sold one at a time: the 4-hour block median, not the whole-unit hourly median ----------
+X("""BHSaved = { fields = AuctionForeverData.fields, items = AuctionForeverData.items[2589], fresh = AuctionForeverDB.fresh, obs = AuctionForeverDB.obs }
+  AuctionForeverDB.fresh, AuctionForeverDB.obs = nil, {}
+  local F = {}
+  for i, N in ipairs(BHSaved.fields) do F[i] = N end
+  local HasBH = false
+  for _, N in ipairs(F) do if N == "blockHour" then HasBH = true end end
+  if not HasBH then F[#F + 1] = "blockHour" end
+  local Idx = {}
+  for i, N in ipairs(F) do Idx[N] = i end
+  AuctionForeverData.fields = F
+  local function Row(Med, Mean, BH)
+    local R = {}
+    for i, V in pairs(BHSaved.items) do R[i] = V end
+    R[Idx.medHour], R[Idx.perHour], R[Idx.blockHour] = Med, Mean, BH
+    return R
+  end
+  AuctionForeverData.items[990901] = Row(1, 1.7, 1.6)   -- gear: hourly median 1 (24/day), blocks 1.6/h
+  AuctionForeverData.items[990902] = Row(40, 55, 70)    -- busy: hourly median kept
+  AuctionForeverData.items[990903] = Row(1, 1.7, nil)   -- older data file without blocks: as before
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+r1, r2, r3 = (L(f'AF_NS.Core.Info({i}).perHour') for i in (990901, 990902, 990903))
+ok(abs(r1 - 1.6) < 1e-9 and r2 == 40 and r3 == 1, f'sales rate: one-at-a-time sellers use the 4 h block median ({r1 * 24:.1f}/day, not 24), busy items the hourly median ({r2}), no blocks: as before ({r3})')
+X("""AuctionForeverData.items[990901], AuctionForeverData.items[990902], AuctionForeverData.items[990903] = nil, nil, nil
+  AuctionForeverData.fields, AuctionForeverDB.fresh, AuctionForeverDB.obs = BHSaved.fields, BHSaved.fresh, BHSaved.obs
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+# ---- Refined Deeprock Salt: made with the Salt Shaker (a tool, not a recipe), so Crafted, not Gather ----------------
+ok(L('AF_NS.Farm.Source(15409)') == 'Crafted', f"Refined Deeprock Salt is Crafted ({L('AF_NS.Farm.Source(15409)')}), so never in Gather")
+rc = L('AF_Recipes[15409] and AF_Recipes[15409][1]')
+ok(rc is not None and rc[1] == 19566 and rc[2] == 165 and rc[3] == 250 and list(rc[5].values()) == [8150, 1] and rc[6] == 15846 and rc[9] == 255600,
+   'Salt Shaker conversion from Forever data: spell 19566, Leatherworking 250, 1 Deeprock Salt, tool 15846, 71 h cooldown')
+ok(L('AF_Recipes[17202] and AF_Recipes[17202][1][6]') == 17716, 'SnowMaster 9000 (Engineering tool): Snowball from Ice Cold Milk')
+ok(L('AF_NS.Farm.Source(3577)') == 'Crafted' and L('AF_Recipes[3577] ~= nil'), 'Gold Bar is Crafted (Smelt Gold was dropped: the test-spell filter matched "old" in "Gold")')
+ok(L('AF_NS.Farm.Source(4289)') == 'Vendor' and L('AF_NS.Farm.Source(2320)') == 'Vendor', 'vendor-sold goods (Salt, thread) are "Vendor", not Gather or Drop')
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

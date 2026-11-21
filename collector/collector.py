@@ -286,6 +286,25 @@ def update_history(state, now_ts, mk, ev, span=0):
                 del store[k]
 
 
+def block_rate(rows, block_hours=4.0):
+    """Median sold per hour over blocks of BLOCK hours of compared snapshots (sold / hours in each block), or None
+    with under 2 blocks. Gear sells one at a time, so an hour's count is a whole number and the median hour is 0, 1,
+    2...: 0, 24 or 48 a day, never 41. Blocks of a few hours give a real rate and still keep one big buyout from
+    looking like steady sales (it lands in one block of many)."""
+    rows = sorted((r for r in rows if len(r) > 6 and r[6] > 0), key=lambda r: r[0])
+    blocks, sold, hours = [], 0.0, 0.0
+    for r in rows:
+        sold, hours = sold + r[3], hours + r[6]
+        if hours >= block_hours:
+            blocks.append(sold / hours)
+            sold, hours = 0.0, 0.0
+    if hours >= block_hours / 2:
+        blocks.append(sold / hours)
+    elif blocks and hours > 0:
+        blocks[-1] = (blocks[-1] * block_hours + sold) / (block_hours + hours)  # a short tail joins the last block
+    return statistics.median(blocks) if len(blocks) >= 2 else None
+
+
 def item_numbers(k, state, mk, now_ts):
     """The numbers the add-on needs for one item."""
     all_rows = state['hourly'].get(k, [])
@@ -340,7 +359,7 @@ def item_numbers(k, state, mk, now_ts):
         'sales': sales, 'sellThrough': (sold_total / (sold_total + exp_total)) if (sold_total + exp_total) else None,
         'qtyDayAgo': qty_24h_ago[0] if qty_24h_ago else None,
         'newHour': new_hour,
-        'lows': lows, 'lowHi24': low_hi24, 'lowRange24': low_range24,
+        'lows': lows, 'lowHi24': low_hi24, 'lowRange24': low_range24, 'blockHour': block_rate(all_rows),
         'daily': state['daily'].get(k, []),
     }
 
@@ -369,7 +388,7 @@ def lua(v):
 RESTORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restore', 'history-2026-11-21.json.gz')
 SFX_CHUNK = 400  # suffix items per chunk of the data file (see write_lua)
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
-          'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24', 'lowRange24']
+          'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24', 'lowRange24', 'blockHour']
 
 
 def write_lua(path, state, mk, now_ts):

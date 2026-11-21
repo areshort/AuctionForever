@@ -234,8 +234,13 @@ function Core.MergeScan(I, DataTime)
 		for _, Ps in ipairs(Posts) do if Ps[2] == id and Ps[1] >= T0 and Ps[1] <= T1 then N = N + Ps[3] end end
 		return N
 	end
+	-- The cloud hours' rate: the median hour. For items selling under QuantizedBelow an hour (gear, one at a time),
+	-- an hour's count is a whole number, so its median is 0 or 1 or 2 (0, 24, 48 a day: a step, not the rate): there
+	-- the median over 4-hour blocks (blockHour, from the cloud data) is used. Busy items keep the hourly median.
+	local CloudRate = I.medHour or I.perHour or 0
+	if I.blockHour and (I.medHour or 0) < Core.QuantizedBelow then CloudRate = I.blockHour end
 	local Rates = {}
-	for _ = 1, math.floor(CloudH + 0.5) do Rates[#Rates + 1] = I.medHour or I.perHour or 0 end
+	for _ = 1, math.floor(CloudH + 0.5) do Rates[#Rates + 1] = CloudRate end
 	local CloudN = #Rates
 	local Windows = math.floor((I.hoursWithSales or 0) + 0.5)
 	local Obs = DB.obs and DB.obs[Key]
@@ -628,6 +633,7 @@ end
 -- quarter. So they're flipped only at up to VolatileBuyShare up the range, and resold at no more than the range's
 -- middle (the 24 h median of the lowest price), not at what buyers paid at its peaks.
 Core.VolatileRange, Core.VolatileBuyShare = 1.6, 0.25
+Core.QuantizedBelow = 2 -- sold per hour: under this the hourly median moves in whole-unit steps (see Core.Info)
 function Core.Volatile(I)
 	local R = I and I.lowRange24
 	if type(R) ~= "table" or not R[1] or not R[3] or R[1] <= 0 then return false end
