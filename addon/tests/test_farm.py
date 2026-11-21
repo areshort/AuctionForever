@@ -304,8 +304,13 @@ P = L('CPlan({ share = 0.75, hours = 8, held = function(id) return ({ [601] = 4,
 lst = P and [(P.list[i].source, P.list[i].id, P.list[i].qty) for i in range(1, len(P.list) + 1)]
 ok(P and P.crafts == 12 and P.cost == 3090 and P.profit == 7968 and P.mats[1].qty == 20 and P.mats[1].upTo == 200
    and P.vendorGoods[1].qty == 9 and P.vendorCost == 90
-   and lst == [('Bags', 601, 4), ('AH', 601, 20), ('Bags', 602, 3), ('Vendor', 602, 9)] and P.list[2].upTo == 200 and P.list[4].each == 10,
+   and lst == [('AH', 601, 20), ('Vendor', 602, 9), ('Owned', 601, 4), ('Owned', 602, 3)] and P.list[1].upTo == 200 and P.list[2].each == 10,
    f"bags first: only the rest is bought ({P and P.crafts} crafts, cost {P and P.cost}, profit {P and P.profit}, list {lst})")
+# Bank units count as held too, after the bags: 2 of 601 in the bags, 3 in the bank: 19 bought.
+P = L('CPlan({ share = 0.75, hours = 8, held = function(id) return id == 601 and 2 or 0 end, bank = function(id) return id == 601 and 3 or 0 end })')
+lst = P and [(P.list[i].source, P.list[i].id, P.list[i].qty) for i in range(1, len(P.list) + 1)]
+ok(P and P.crafts == 12 and P.mats[1].qty == 19 and lst == [('AH', 601, 19), ('Vendor', 602, 12), ('Owned', 601, 2), ('Bank', 601, 3)],
+   f"bank after the bags: {lst}")
 X('Items[601].ladder = { {100, 3} }; Items[601].qty = 3')
 P = L('CPlan({ share = 0.75, hours = 8, held = function(id) return id == 601 and 5 or 0 end }, AF_NS.Farm.Craft(600, CRec, CEnv))')
 ok(P and P.crafts == 4 and P.mats[1].qty == 3, f"3 listed + 5 in the bags allow 4 crafts ({P and P.crafts})")

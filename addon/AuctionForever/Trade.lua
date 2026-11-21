@@ -15,8 +15,9 @@ local ITEM = Status and Status.Item or 1
 
 local BuyP, SellP           -- panels
 local Buy = { rows = {}, sel = 1, sort = "plan", asc = false }
+local Run, LastRun -- a craft plan whose mats you're buying, and the last one you finished (see Craft plans below)
 local SORTS
-local BUY_KEYS = { "name", "tier", "rate", "cost", "resell", "profit", "gold" } -- one per AF Buy column
+local BUY_KEYS = { "name", "tier", "rate", "cost", "resell", "profit", "status" } -- one per AF Buy column
 local Sell = { queue = {}, idx = 1 }
 
 -- Helpers -----------------------------------------------------------------------------------------------------
@@ -135,8 +136,9 @@ local function ScrollBar(Parent, X, Y, OnScroll)
 	return S
 end
 -- Bar range and position for a list of Total rows scrolled to Off; returns the offset kept inside the list.
-local function SyncBar(S, Off, Total)
-	local Max = math.max(0, Total - ROWS)
+local function SyncBar(S, Off, Total, Rows)
+	Rows = Rows or ROWS
+	local Max = math.max(0, Total - Rows)
 	Off = math.max(0, math.min(Max, Off or 0))
 	Syncing = true
 	S:SetMinMaxValues(0, Max)
@@ -144,7 +146,7 @@ local function SyncBar(S, Off, Total)
 	Syncing = nil
 	S:SetShown(Max > 0)
 	S.Count:SetShown(Max > 0)
-	S.Count:SetText(string.format("%d-%d of %d", Off + 1, math.min(Total, Off + ROWS), Total))
+	S.Count:SetText(string.format("%d-%d of %d", Off + 1, math.min(Total, Off + Rows), Total))
 	return Off
 end
 T.ScrollBar, T.SyncBar = ScrollBar, SyncBar -- the AuctionForever window uses them too
@@ -188,6 +190,16 @@ end
 -- AF Buy uses the auction house window's full width (about 930 wide): roomier columns, 10 apart.
 local BUY_COLS = { 220, 34, 60, 150, 90, 100, 130 }
 local BUY_GAP, BUY_W = 10, 868 -- 24 (icon) + columns + 6 gaps
+-- The details panel under the table (the selected row), pixel layout. The table starts at PANE_TOP; the panel ends
+-- above the Next button (at -420), 4 below the table. Panel, top down: 4 padding, the header and evidence lines (14
+-- each), 2, the column headers (14), one 20 px line per source line (its Buy button 18 tall), 4, three summary
+-- lines (14 each), 2: 96 px with 2 text lines, + 20 a source line. With the table at 5 rows (110 px), 5 lines fit.
+-- (Over the table: the summary lines at -8 / -23 / -38, the filter bar at -58, the column headers at -82.)
+local FILTER_Y, HEAD_Y = -58, -82
+local PANE_TOP, PANE_SPACE = -100, 316 -- the table's top, and the height from there to just above the buttons
+local PANE_TEXT_H, PANE_LINE_H, PANE_MIN_ROWS, PANE_MAX_LINES = 14, 20, 5, 8
+local PANE_COLS = { 40, 190, 80, 110, 60, 100 }
+local PANE_NAMES = { "Need", "Reagent", "Source", "Pay up to", "Listed now", "Cost" }
 
 local function SayBuy(Msg) if BuyP then BuyP.Status:SetText(Msg or "") end end
 local function ResetPurchase(Cancel)
@@ -245,6 +257,18 @@ local function SellsText(E)
 	local R = Rate(E)
 	return R and string.format("sells %d%%", math.floor(R * 100 + 0.5)) or "sell rate not measured yet"
 end
+-- Status column order, low to high: in the plan (0), fits now / vendor it (1), needs more gold (2, least gold
+-- first), craft plans (3), craft plans on cooldown or blocked (4).
+local function StatusRank(E)
+	local F = Shown(E)
+	if E.craft then return (F.onCooldown or F.blocked) and 4 or 3 end
+	local Need = ShownNeed(E)
+	if Need then return 2 + math.min(Need, 1e12) / 1e13 end
+	if E.plan and F == E.flip then return 0 end
+	return 1
+end
+T.StatusRank = StatusRank
+function T.SortKey(Key, E) return SORTS[Key] and SORTS[Key](E) end
 SORTS = {
 	tier = function(E) return T.Return(Shown(E)) end,
 	rate = function(E) return Rate(E) end,
@@ -252,15 +276,26 @@ SORTS = {
 	cost = function(E) return Shown(E).cost end,
 	resell = function(E) return Shown(E).resell end,
 	profit = function(E) return (E.best or E.flip).profit end,
-	gold = function(E) return E.need or 0 end,
+	status = StatusRank,
 }
 local BUY_NAMES = { "Item", "Tier", "Sell rate", "Buy", "Resell at", "Profit", "Status" }
 function T.DrawBuy()
 	if not BuyP then return end
-	local Off = SyncBar(BuyP.Bar, Buy.offset, #Buy.rows)
+	local Sel = Buy.rows[Buy.sel]
+	local Model = Sel and T.PaneModel(Sel)
+	local Visible = Model and Model.rows or ROWS
+	Buy.visible = Visible
+	if Buy.keepSel and Sel then -- a new selection: keep it scrolled into view
+		local O = Buy.offset or 0
+		if Buy.sel <= O then O = Buy.sel - 1 elseif Buy.sel > O + Visible then O = Buy.sel - Visible end
+		Buy.offset = O
+	end
+	Buy.keepSel = nil
+	BuyP.Bar:SetHeight(Visible * ROW_H)
+	local Off = SyncBar(BuyP.Bar, Buy.offset, #Buy.rows, Visible)
 	Buy.offset = Off
 	for i, R in ipairs(BuyP.Rows) do
-		local E = Buy.rows[i + Off]
+		local E = i <= Visible and Buy.rows[i + Off] or nil
 		R:SetShown(E ~= nil)
 		R.id = E and E.id
 		if E then
@@ -297,26 +332,9 @@ function T.DrawBuy()
 	end
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
-	BuyP.Buy:SetEnabled(E ~= nil and not Need and not (E.flip and (E.flip.onCooldown or E.flip.blocked)) and Buy.state ~= "price" and Buy.state ~= "buying")
+	BuyP.Buy:SetEnabled(E ~= nil and not E.craft and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
 	BuyP.Skip:SetEnabled(#Buy.rows > 1)
-	if E then
-		local F = Shown(E)
-		if F.craft then
-			BuyP.Detail:SetText(T.CraftDetail(E))
-		elseif F.vendor then
-			local N = F.purchases or 1
-			BuyP.Detail:SetText(string.format("%s   %s\nBuy %d in %d purchase%s at up to %s each (about %s), sell to a vendor for %s each: %s, no AH cut.%s",
-				NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, N, N == 1 and "" or "s", Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyDelta(F.profit),
-				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.MoneyColor(Core.MinKeep) .. " always kept).") or ""))
-		else
-		BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
-			NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyDelta(F.profit),
-			F.slow and ("\n" .. "|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r") or "",
-			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.MoneyColor(Core.MinKeep) .. "; one item may use only part of it).") or ""))
-		end
-	else
-		BuyP.Detail:SetText("")
-	end
+	T.DrawPane(E, Model)
 	local R = Core.FlipResults(SaveDB(), time(), 7)
 	BuyP.Results:SetText(R.sold > 0 and string.format("Your flips, last 7 days: %d sold, profit %s (plan expected %s)",
 		R.sold, Core.MoneyColor(R.profit), Core.MoneyColor(R.expected)) or "")
@@ -347,11 +365,69 @@ function T.TargetGold()
 	end
 	return Min and math.ceil(Min / 100) * 100
 end
--- Put the loaded list in the chosen order (no new work: sorting only reorders what's loaded).
+-- Filter bar: All, Flips, or one profession's craft plans (only professions with rows now). Remembered per
+-- account (AuctionForeverDB.buyFilter); a remembered profession with no rows now shows All.
+local PROF_SHORT = { Blacksmithing = "Blacksmith", Enchanting = "Enchant", Engineering = "Engineer", Leatherworking = "Leather",
+	Jewelcrafting = "Jewel", Inscription = "Inscript", Mining = "Mining", Smelting = "Mining" }
+function T.ProfLabel(Name) return PROF_SHORT[Name] or (Name or "?"):sub(1, 10) end
+local function Prof(E) return E.craft and (E.craft.skillName or "?") or nil end
+function T.BuyFilter() return SaveDB().buyFilter or "all" end
+function T.SetBuyFilter(F)
+	SaveDB().buyFilter = F
+	Buy.offset = 0
+	T.SortRowsNow()
+end
+-- The professions with craft rows in the loaded list, by name.
+function T.BuyProfessions()
+	local Seen, Out = {}, {}
+	for _, E in ipairs(Buy.loaded or {}) do
+		local P = Prof(E)
+		if P and not Seen[P] then Seen[P] = true; Out[#Out + 1] = P end
+	end
+	table.sort(Out)
+	return Out
+end
+local function DrawFilters(Profs, Eff, NShown, Total)
+	local P = BuyP
+	if not (P and P.Filters) then return end
+	local Keys = { "all", "flips" }
+	for _, Name in ipairs(Profs) do Keys[#Keys + 1] = Name end
+	local X = 0
+	for i, B in ipairs(P.Filters) do
+		local K = Keys[i]
+		B:SetShown(K ~= nil)
+		B.key = K
+		if K then
+			local Label = K == "all" and "All" or K == "flips" and "Flips" or T.ProfLabel(K)
+			local W = math.max(40, #Label * 7 + 20)
+			B:SetText(Label)
+			B:SetWidth(W)
+			B:ClearAllPoints()
+			B:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + X, FILTER_Y)
+			B:SetEnabled(K ~= Eff)
+			X = X + W + 4
+		end
+	end
+	P.FilterNote:ClearAllPoints()
+	P.FilterNote:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + X + 6, FILTER_Y - 5)
+	P.FilterNote:SetText(string.format("Showing %d of %d", NShown, Total))
+end
+-- Put the loaded list in the chosen order (no new work: sorting only reorders what's loaded), through the filter.
 local function SortRows()
 	local Id = Buy.rows[Buy.sel] and Buy.rows[Buy.sel].id
 	Buy.rows = {}
-	for i, E in ipairs(Buy.loaded or {}) do Buy.rows[i] = E end
+	local Profs = T.BuyProfessions()
+	local Eff = T.BuyFilter()
+	if Eff ~= "all" and Eff ~= "flips" then
+		local Ok = false
+		for _, Name in ipairs(Profs) do if Name == Eff then Ok = true end end
+		if not Ok then Eff = "all" end
+	end
+	Buy.filterNow = Eff
+	for _, E in ipairs(Buy.loaded or {}) do
+		if Eff == "all" or (Eff == "flips" and not E.craft) or (E.craft and Prof(E) == Eff) then Buy.rows[#Buy.rows + 1] = E end
+	end
+	DrawFilters(Profs, Eff, #Buy.rows, #(Buy.loaded or {}))
 	if SORTS[Buy.sort] then UI().SortBy(Buy.rows, SORTS[Buy.sort], Buy.asc) end
 	Buy.sel = 1
 	for i, E in ipairs(Buy.rows) do if E.id == Id then Buy.sel = i end end
@@ -363,6 +439,7 @@ local function SortRows()
 	end
 	T.DrawBuy()
 end
+T.SortRowsNow = function() SortRows() end
 -- Rebuild the list from your data (refresh, a purchase, a scan). Opening the tab reuses it unless your gold changed;
 -- sorting always reuses it.
 -- Craft plans (UI.CraftTargets) join the flip targets: after the plan, among what you can buy now (most profit
@@ -389,7 +466,7 @@ end
 -- Sort AF Buy by a key ("plan" = the plan's order). Asc nil: gold needed lowest first, the rest highest first.
 function T.SetBuySort(Key, Asc)
 	Buy.sort = SORTS[Key] and Key or "plan"
-	if Asc == nil then Asc = Buy.sort == "gold" end
+	if Asc == nil then Asc = Buy.sort == "status" end
 	Buy.asc = Asc
 	Buy.offset = 0
 	SortRows()
@@ -409,6 +486,7 @@ function T.SelectBuy(i)
 	if #Buy.rows == 0 then T.DrawBuy() return end
 	Buy.sel = ((i - 1) % #Buy.rows) + 1
 	Buy.bought = 0
+	Buy.keepSel = true
 	T.DrawBuy()
 	-- No price check here: the list comes from your scans, and the purchase itself gets the live price from the
 	-- server (and cancels if it rose). "Refresh prices" re-checks the list on purpose.
@@ -446,7 +524,7 @@ function T.BuyClick()
 	if F.craft then
 		if F.onCooldown then SayBuy("This recipe is on cooldown: ready in " .. T.HoursText(F.onCooldown) .. ".") return end
 		if F.blocked then SayBuy("Not a craft to buy for: the product is " .. F.blocked .. ".") return end
-		T.BuyCraft(E)
+		SayBuy("Buy each mat with the Buy button on its line below.")
 		return
 	end
 	local Kind = Scan.Kind[E.id] or UI().Kind(E.id)
@@ -560,15 +638,23 @@ local function BuildBuy()
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -8)
 	P.Target = Text(P, "GameFontHighlightSmall", 300, -23)
 	P.Results = Text(P, "GameFontHighlightSmall", 300, -38)
-	P.Headers = Header(P, 14, -64, BUY_COLS, BUY_NAMES, function(c) T.BuyHeaderClick(c) end, BUY_GAP)
-	P.Rows = RowList(P, 14, -82, BUY_W, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end, BUY_GAP)
+	P.Filters = {}
+	for i = 1, 14 do
+		local B = Button(P, "All", 14, FILTER_Y, 40, function(self) if self.key then T.SetBuyFilter(self.key) end end)
+		B:SetHeight(20)
+		B:Hide()
+		P.Filters[i] = B
+	end
+	P.FilterNote = Text(P, "GameFontDisableSmall", 14, FILTER_Y - 5)
+	P.Headers = Header(P, 14, HEAD_Y, BUY_COLS, BUY_NAMES, function(c) T.BuyHeaderClick(c) end, BUY_GAP)
+	P.Rows = RowList(P, 14, PANE_TOP, BUY_W, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end, BUY_GAP)
 	P:EnableMouseWheel(true)
 	P:SetScript("OnMouseWheel", function(_, Delta)
-		Buy.offset = math.max(0, math.min(math.max(0, #Buy.rows - ROWS), (Buy.offset or 0) - Delta * 3))
+		Buy.offset = math.max(0, math.min(math.max(0, #Buy.rows - (Buy.visible or ROWS)), (Buy.offset or 0) - Delta * 3))
 		T.DrawBuy()
 	end)
-	P.Bar = ScrollBar(P, 14 + BUY_W + 4, -82, function(V) Buy.offset = V; T.DrawBuy() end)
-	P.Empty = Text(P, "GameFontDisable", 20, -88, 600) -- one line in the table, where the first row would be
+	P.Bar = ScrollBar(P, 14 + BUY_W + 4, PANE_TOP, function(V) Buy.offset = V; T.DrawBuy() end)
+	P.Empty = Text(P, "GameFontDisable", 20, PANE_TOP - 6, 600) -- one line in the table, where the first row would be
 	-- Craft plans: only recipes you know, unless this is ticked.
 	P.AllRecipes = CreateFrame("CheckButton", nil, P, "UICheckButtonTemplate")
 	P.AllRecipes:SetSize(20, 20)
@@ -581,12 +667,8 @@ local function BuildBuy()
 	end)
 	P.AllRecipesLabel = Text(P, "GameFontHighlightSmall", 722, -40)
 	P.AllRecipesLabel:SetText("Show all recipes")
-	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
-	-- Pinned by its bottom just above the buttons: longer text grows upward instead of running into them.
-	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
-	P.Detail:ClearAllPoints()
-	P.Detail:SetPoint("BOTTOMLEFT", P.Buy, "TOPLEFT", 0, 6)
-	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
+	T.BuildPane(P)
+	P.Skip = Button(P, "Next", 20, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
 	-- Beside the buttons, centred on them and wide enough for two lines: a long message no longer runs down over
 	-- the auction house's money/bid bar below the panel.
 	P.Status = Text(P, "GameFontHighlightSmall", 320, -420, 350)
@@ -956,53 +1038,300 @@ function T.CraftStatus(E)
 	return Text
 end
 -- What AF knows about you and the recipe (see UI.RecipeKnown).
-local function KnownLine(E)
+local Money = Core.MoneyColor
+-- How AF knows you have the recipe, short, for the panel header (see UI.RecipeKnown).
+local function KnownShort(E)
+	if E.known and E.knownHow == "spell" then return "you know it" end
+	if E.known and E.knownHow == "window" then return "known: seen in your " .. Profession(E) .. " window" end
+	if E.known then return "probably known: your " .. Profession(E) .. " is " .. (E.rank or 0) end
+	return "|cffffd100not known|r"
+end
+local function NotKnownLine(E)
 	local P, R = Profession(E), E.craft
-	local Ranks = E.rank and (P .. " " .. E.rank .. ((R.req or 0) > 0 and ("/" .. R.req) or "")) or nil
-	if E.known and E.knownHow == "spell" then
-		return "You know this recipe" .. (Ranks and (" (" .. Ranks .. ")") or "") .. "."
-	elseif E.known and E.knownHow == "window" then
-		return "You know this recipe (seen in your " .. P .. " window" .. (Ranks and ("; " .. Ranks) or "") .. ")."
-	elseif E.known then
-		return string.format("Probably known: your %s is %d%s (recipes not checked yet: open your %s window once).",
-			P, E.rank or 0, (R.req or 0) > 0 and (", the recipe needs " .. R.req) or "", P)
-	end
 	local Why
 	if E.knownHow == "window" then Why = "not learned in your " .. P .. " window"
 	elseif E.rank then Why = "your " .. P .. " is " .. E.rank .. ", the recipe needs " .. (R.req or 0)
 	else Why = "you don't have " .. P end
 	return "|cffffd100You don't know this recipe (" .. Why .. "); shown because Show all recipes is on.|r"
 end
-function T.CraftDetail(E)
-	local F = E.flip
-	local Head = NameText(E.id) .. "   " .. TierLine(F) .. ", " .. (F.route == "Vendor" and "sell to vendor"
-		or (SellsText(E) .. string.format(" (based on %d sales in %d h%s)", F.sales or 0, F.salesHours or 0, F.capped and ", priced at what buyers paid" or "")))
-	if F.blocked == "flooded" then
-		Head = Head .. "\n|cffffd100Flooded: far more is being posted than sold, so AF doesn't plan to sell it on the AH (shown because Show all recipes is on).|r"
-	elseif F.blocked then
-		Head = Head .. "\n|cffffd100Product " .. F.blocked .. ": not sold on the AH by a craft plan (shown because Show all recipes is on).|r"
-	end
-	if F.cooldown and F.cooldown > 0 then
-		Head = Head .. string.format(", cooldown %s%s", T.HoursText(F.cooldown), F.onCooldown and (": ready in " .. T.HoursText(F.onCooldown)) or "")
-	end
-	local Sale
-	if F.route == "Vendor" then
-		Sale = string.format("sell to vendor for %s each", Core.MoneyColor(F.resell))
-	else
-		Sale = string.format("sell on the AH at %s each", Core.MoneyColor(F.resell or 0))
-	end
-	local Line2 = string.format("%s. Craft %d%s, %s: %s.", UI().MatsLine(F.list), F.crafts, F.makes > 1 and (" (makes " .. F.units .. ")") or "", Sale, Core.MoneyDelta(F.profit))
-	return Head .. "\n" .. Line2 .. "\n" .. KnownLine(E)
-end
 
--- Buying a craft plan's mats: one AH mat at a time (recipe order), each with its own live price check and Confirm
--- click, like a commodity flip. It stops when a mat's price rose past the plan's max, or the craft no longer pays at
--- the live prices. When every mat is bought, the product is recorded as a purchase (crafts x makes units for what
--- the mats cost, vendor goods included), so AF Sell knows what the crafted items cost you; a run stopped part way
--- records the mats bought so far as purchases of those mats instead. Crafting itself is up to you.
-local Run -- { key, id, spell, plan, status, step, spent, got = { {id, qty, total} } }
+-- Buying a craft plan's mats: each AH mat has its own Buy button on its line in the panel, which buys exactly the
+-- plan's quantity of it (what's left of it after a partial buy) with its own live price check and Confirm click,
+-- like a commodity flip. It cancels when the live price is over the line's "pay up to" (the plan's max for that
+-- mat), or the craft no longer pays at the live prices. The plan is kept while you buy (the list may be re-planned
+-- meanwhile). When every AH mat is bought, the product is recorded as a purchase (crafts x makes units for what the
+-- mats cost, vendor goods included), so AF Sell knows what the crafted items cost you; a run left part way (another
+-- craft's mats, or the auction house closed) records the mats bought so far as purchases of those mats instead.
+-- Crafting itself is up to you.
+-- Run = { key, id, spell, plan, status, bought = { [mat index] = qty }, spent, got = { {id, qty, total} } }
 local function RunKey(E) return E.id .. ":" .. (E.craft.spell or 0) end
 function T.CraftRun() return Run end
+function T.LastCraftRun() return LastRun end
+function T.BuyVisible() return Buy.visible end
+-- The option the panel shows and buys, and the craft run it belongs to (if any).
+local function PlanOf(E)
+	if not E.craft then return Shown(E), nil end
+	local K = RunKey(E)
+	local R = (Run and Run.key == K and Run) or (LastRun and LastRun.key == K and LastRun) or nil
+	return R and R.plan or E.flip, R
+end
+-- Panel text above the lines: what it is (craft: product x N, profession, how known), then the evidence.
+function T.PaneText(E)
+	local F = PlanOf(E)
+	if not E.craft then
+		local Need = ShownNeed(E)
+		local Out = NameText(E.id) .. "\n" .. TierLine(F) .. ", " .. SellsText(E)
+		if F.slow then Out = Out .. "\n|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r" end
+		if Need then
+			Out = Out .. "\n" .. (F.vendor and ("Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Money(Core.MinKeep) .. " always kept).")
+				or ("A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Money(Core.MinKeep) .. "; one item may use only part of it)."))
+		end
+		return Out
+	end
+	local R = E.craft
+	local Head = string.format("%s x%d   %s%s (%s)", NameText(E.id), F.crafts, Profession(E), (R.req or 0) > 0 and (" " .. R.req) or "", KnownShort(E))
+	local Ev = TierLine(F) .. ", " .. (F.route == "Vendor" and "sold to a vendor"
+		or (SellsText(E) .. string.format(" (based on %d sales in %d h%s)", F.sales or 0, F.salesHours or 0, F.capped and ", priced at what buyers paid" or "")))
+	if F.cooldown and F.cooldown > 0 then
+		Ev = Ev .. string.format(", cooldown %s%s", T.HoursText(F.cooldown), F.onCooldown and (": ready in " .. T.HoursText(F.onCooldown)) or "")
+	end
+	if F.blocked == "flooded" then
+		Ev = Ev .. "\n|cffffd100Flooded: far more is being posted than sold, so AF doesn't plan to sell it on the AH (shown because Show all recipes is on).|r"
+	elseif F.blocked then
+		Ev = Ev .. "\n|cffffd100Product " .. F.blocked .. ": not sold on the AH by a craft plan (shown because Show all recipes is on).|r"
+	end
+	if not E.known then Ev = Ev .. "\n" .. NotKnownLine(E) end
+	return Head .. "\n" .. Ev
+end
+-- One line per source line of the plan (AH, Vendor, Owned, Bank order); a flip: one line, the item.
+-- { kind ("flip" / "AH" / "Vendor" / "Owned" / "Bank"), id, qty, source, upTo (AH: pay up to; Vendor: price each),
+-- listed (units listed now), cost, mat (AH: index in plan.mats), bought (AH: units bought so far), have }.
+function T.PaneLines(E)
+	local F, R = PlanOf(E)
+	if not E.craft then
+		return { { kind = "flip", id = E.id, qty = F.buyQty, source = "AH", upTo = F.buyUpTo, listed = AF.Farm.Listed(E.info or Core.Info(E.id)), cost = F.cost } }
+	end
+	local Out, Bags = {}, nil
+	for _, X in ipairs(UI().BySource(F.list or {})) do
+		local L = { kind = X.source, id = X.id, qty = X.qty, source = X.source, cost = X.cost }
+		if X.source == "AH" then
+			L.upTo, L.listed = X.upTo, AF.Farm.Listed(Core.Info(X.id))
+			for m, M in ipairs(F.mats) do if M.id == X.id then L.mat = m end end
+			L.bought = R and R.bought and R.bought[L.mat] or 0
+		elseif X.source == "Vendor" then
+			L.upTo = X.each
+		elseif X.source == "Owned" then
+			Bags = Bags or UI().BagCounts()
+			L.have = Bags[X.id] or X.qty
+		elseif X.source == "Bank" then
+			L.have = UI().BankCount(X.id)
+		end
+		Out[#Out + 1] = L
+	end
+	return Out
+end
+-- The summary under the lines: what to do, the money, what it leaves you.
+function T.PaneSummary(E)
+	local F, R = PlanOf(E)
+	local Tier, Color, Ret = T.Tier(F)
+	local Then
+	if F.craft then
+		local Makes = F.makes > 1 and (" (makes " .. F.units .. ")") or ""
+		if F.route == "Vendor" then
+			Then = string.format("Craft %d%s, then Vendor for %s each (%s)", F.crafts, Makes, Money(F.resell), Money(F.resell * F.units))
+		else
+			Then = string.format("Craft %d%s, then Auction at %s each (after cut %s)", F.crafts, Makes, Money(F.resell or 0),
+				Money(math.floor((F.resell or 0) * (1 - Core.Cut)) * F.units))
+		end
+	elseif F.vendor then
+		local N = F.purchases or 1
+		Then = string.format("Then: Vendor for %s each (%s, no AH cut), bought in %d purchase%s", Money(F.resell), Money(F.resell * F.buyQty), N, N == 1 and "" or "s")
+	else
+		Then = string.format("Then: Auction at %s each over %d h (after cut %s)", Money(F.resell), F.hours or 0, Money(math.floor(F.resell * (1 - Core.Cut)) * F.buyQty))
+	end
+	-- Still to pay: the AH mats not bought yet (at the plan's prices) and the vendor goods.
+	local ToPay = F.cost or 0
+	if R and R.bought then
+		ToPay = F.vendorCost or 0
+		for m, M in ipairs(F.mats) do ToPay = ToPay + M.cost * math.max(0, 1 - (R.bought[m] or 0) / math.max(1, M.qty)) end
+	end
+	return Then .. "\n" .. string.format("%s %s   Profit %s (%s%s|r, %d%% return)", F.craft and "Mats" or "Cost", Money(F.cost), Core.MoneyDelta(F.profit),
+		Color, Tier, math.floor((Ret or 0) * 100 + 0.5)) .. "\n" .. "Leaves you " .. Money(math.floor(GetMoney() - ToPay))
+end
+local function TextLines(S) local N = 1 for _ in S:gmatch("\n") do N = N + 1 end return N end
+-- The panel for a row: its text, lines and summary, its height, and the table rows that fit above it. Lines that
+-- don't fit (with the table at PANE_MIN_ROWS) collapse: Owned/Bank lines first into one "Owned/Bank: ..." line,
+-- then the last ones into a "+N more" line.
+function T.PaneModel(E)
+	local M = { detail = T.PaneText(E), summary = T.PaneSummary(E), lines = T.PaneLines(E) }
+	M.top = 4 + TextLines(M.detail) * PANE_TEXT_H + 2 -- the column headers
+	local Fixed = M.top + PANE_TEXT_H + 4 + 3 * PANE_TEXT_H + 2
+	local Fit = math.floor((PANE_SPACE - 4 - PANE_MIN_ROWS * ROW_H - Fixed) / PANE_LINE_H)
+	Fit = math.max(1, math.min(Fit, PANE_MAX_LINES))
+	if #M.lines > Fit then
+		local Keep, Held = {}, {}
+		for _, L in ipairs(M.lines) do
+			if L.kind == "Owned" or L.kind == "Bank" then Held[#Held + 1] = L else Keep[#Keep + 1] = L end
+		end
+		if #Held > 0 then Keep[#Keep + 1] = { kind = "held", parts = Held } end
+		if #Keep > Fit then
+			local More = #Keep - Fit + 1
+			for i = #Keep, Fit, -1 do table.remove(Keep, i) end
+			Keep[#Keep + 1] = { kind = "more", n = More }
+		end
+		M.lines = Keep
+	end
+	M.fit = Fit
+	M.height = Fixed + #M.lines * PANE_LINE_H
+	M.rows = math.max(PANE_MIN_ROWS, math.min(ROWS, math.floor((PANE_SPACE - 4 - M.height) / ROW_H)))
+	return M
+end
+function T.BuildPane(P)
+	local Pane = CreateFrame("Frame", nil, P)
+	Pane:SetSize(BUY_W, 200)
+	Pane:SetPoint("TOPLEFT", P, "TOPLEFT", 14, PANE_TOP - ROWS * ROW_H)
+	Pane.Bg = Pane:CreateTexture(nil, "BACKGROUND")
+	Pane.Bg:SetAllPoints()
+	Pane.Bg:SetColorTexture(0, 0, 0, 0.3)
+	P.Pane = Pane
+	P.Detail = Pane:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	P.Detail:SetPoint("TOPLEFT", Pane, "TOPLEFT", 6, -4)
+	P.Detail:SetWidth(BUY_W - 12)
+	P.Detail:SetJustifyH("LEFT")
+	P.PaneHead = {}
+	local X = 24
+	for c, W in ipairs(PANE_COLS) do
+		local H = Pane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		H:SetWidth(W)
+		H:SetJustifyH("LEFT")
+		H:SetText(PANE_NAMES[c])
+		H.x = X
+		P.PaneHead[c] = H
+		X = X + W + 6
+	end
+	local BtnX = X
+	P.Lines = {}
+	for i = 1, PANE_MAX_LINES do
+		local W = CreateFrame("Frame", nil, Pane)
+		W:SetSize(BUY_W, PANE_LINE_H)
+		W.Icon = W:CreateTexture(nil, "ARTWORK")
+		W.Icon:SetSize(16, 16)
+		W.Icon:SetPoint("LEFT", 4, 0)
+		W.Cells = {}
+		local CX = 24
+		for c, CW in ipairs(PANE_COLS) do
+			local FS = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			FS:SetPoint("LEFT", W, "LEFT", CX, 0)
+			FS:SetWidth(CW)
+			FS:SetJustifyH("LEFT")
+			FS:SetWordWrap(false)
+			W.Cells[c] = FS
+			CX = CX + CW + 6
+		end
+		W.Wide = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		W.Wide:SetPoint("LEFT", W, "LEFT", 24, 0)
+		W.Wide:SetWidth(BUY_W - 30)
+		W.Wide:SetJustifyH("LEFT")
+		W.Wide:SetWordWrap(false)
+		W.Btn = CreateFrame("Button", nil, W, "UIPanelButtonTemplate")
+		W.Btn:SetSize(120, 18)
+		W.Btn:SetPoint("LEFT", W, "LEFT", BtnX, 0)
+		W.Btn:SetText("Buy")
+		W.Btn:SetScript("OnClick", function() T.BuyMat(W.mat) end)
+		W.Note = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		W.Note:SetPoint("LEFT", W, "LEFT", BtnX + 126, 0)
+		W.Note:SetWidth(BUY_W - BtnX - 130)
+		W.Note:SetJustifyH("LEFT")
+		P.Lines[i] = W
+	end
+	-- A flip's Buy button sits on its one line, where a mat's Buy button would be (wider: "Confirm 20 for 1g 05s 00c").
+	P.Buy = CreateFrame("Button", nil, P.Lines[1], "UIPanelButtonTemplate")
+	P.Buy:SetSize(220, 18)
+	P.Buy:SetPoint("LEFT", P.Lines[1], "LEFT", BtnX, 0)
+	P.Buy:SetText("Buy")
+	P.Buy:SetScript("OnClick", function() T.BuyClick() end)
+	P.Summary = Pane:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	P.Summary:SetWidth(BUY_W - 12)
+	P.Summary:SetJustifyH("LEFT")
+end
+local function Owned(K) return K == "Owned" or K == "Bank" end
+function T.DrawPane(E, M)
+	local P = BuyP
+	local Pane = P.Pane
+	Pane:SetShown(E ~= nil)
+	if not E then P.Detail:SetText(""); P.Summary:SetText("") return end
+	Pane:ClearAllPoints()
+	Pane:SetPoint("TOPLEFT", P, "TOPLEFT", 14, PANE_TOP - M.rows * ROW_H - 4)
+	Pane:SetHeight(M.height)
+	P.Detail:SetText(M.detail)
+	for _, H in ipairs(P.PaneHead) do
+		H:ClearAllPoints()
+		H:SetPoint("TOPLEFT", Pane, "TOPLEFT", H.x, -M.top)
+	end
+	P.PaneHead[2]:SetText(E.craft and "Reagent" or "Item")
+	local Y = -M.top - PANE_TEXT_H
+	local F, R = PlanOf(E)
+	local Busy = Buy.state ~= nil
+	local Blocked = E.craft and (F.onCooldown or F.blocked)
+	for i, W in ipairs(P.Lines) do
+		local L = M.lines[i]
+		W:SetShown(L ~= nil)
+		W.mat = nil
+		if L then
+			W:ClearAllPoints()
+			W:SetPoint("TOPLEFT", Pane, "TOPLEFT", 0, Y - (i - 1) * PANE_LINE_H)
+			for c = 1, #PANE_COLS do W.Cells[c]:SetText("") end
+			W.Wide:SetText("")
+			W.Note:SetText("")
+			W.Btn:Hide()
+			W.Icon:SetTexture(L.id and UI().Icon(L.id) or nil)
+			if L.kind == "held" then
+				local Parts = {}
+				for _, H in ipairs(L.parts) do Parts[#Parts + 1] = H.qty .. " " .. ItemName(H.id) .. " (" .. H.kind .. ")" end
+				W.Wide:SetText(UI().SourceText("Owned") .. "/Bank: " .. table.concat(Parts, ", "))
+			elseif L.kind == "more" then
+				W.Wide:SetText(string.format("+%d more: buy them in the Blizzard window", L.n))
+			else
+				W.Cells[1]:SetText(tostring(L.qty))
+				W.Cells[2]:SetText(NameText(L.id))
+				W.Cells[3]:SetText(UI().SourceText(L.source))
+				W.Cells[4]:SetText(Owned(L.kind) and "-" or L.kind == "Vendor" and Money(L.upTo) or ("up to " .. Money(L.upTo)))
+				W.Cells[5]:SetText(L.listed and tostring(L.listed) or "-")
+				W.Cells[6]:SetText(Owned(L.kind) and "-" or Money(L.cost))
+				if L.kind == "AH" then
+					W.mat = L.mat
+					W.Btn:Show()
+					local Pend = R and R == Run and Buy.pending and Buy.pending.craft and Buy.pending.mat == L.mat
+					if L.bought >= L.qty then
+						W.Btn:SetText("Buy")
+						W.Btn:SetEnabled(false)
+						W.Note:SetText("|cff1eff00bought|r")
+					else
+						if L.bought > 0 then W.Note:SetText(string.format("|cffffd100bought %d of %d|r", L.bought, L.qty)) end
+						if Pend and Buy.state == "confirm" then
+							W.Btn:SetText("Confirm")
+							W.Btn:SetEnabled(true)
+						elseif Pend then
+							W.Btn:SetText("...")
+							W.Btn:SetEnabled(false)
+						else
+							W.Btn:SetText(L.bought > 0 and "Buy rest" or "Buy")
+							W.Btn:SetEnabled(not Busy and not Blocked and not (R and R == LastRun))
+						end
+					end
+				elseif L.kind == "Vendor" then
+					W.Note:SetText("buy from a vendor")
+				elseif Owned(L.kind) then
+					W.Note:SetText("you have " .. (L.have or L.qty))
+				end
+			end
+		end
+	end
+	P.Buy:SetShown(not E.craft)
+	P.Summary:ClearAllPoints()
+	P.Summary:SetPoint("TOPLEFT", Pane, "TOPLEFT", 6, Y - #M.lines * PANE_LINE_H - 4)
+	P.Summary:SetText(M.summary)
+end
 function T.EndCraftRun(Done)
 	if not Run then return end
 	local DB = SaveDB()
@@ -1018,52 +1347,65 @@ function T.EndCraftRun(Done)
 	end
 	Run = nil
 end
-function T.BuyCraft(E)
-	if Run and Run.key ~= RunKey(E) then T.EndCraftRun(false) end
-	if not Run then
-		Run = { key = RunKey(E), id = E.id, spell = E.craft.spell, plan = E.flip, status = E.craft.status, step = 1, spent = 0, got = {} }
-	end
-	local M = Run.plan.mats[Run.step]
-	if not M then
-		SayBuy("Nothing to buy on the auction house: every mat for this comes from a vendor.")
-		Run = nil
+-- A mat line's Buy button (m: the mat's index in the plan): get the live price of what's left of it; on that
+-- line's Confirm, buy it.
+function T.BuyMat(m)
+	local E = T.SelectedBuy()
+	if not (E and E.craft and m) then return end
+	if Buy.state == "confirm" and Buy.pending and Buy.pending.craft and Buy.pending.mat == m then
+		local Pd = Buy.pending
+		C_AuctionHouse.ConfirmCommoditiesPurchase(Pd.id, Pd.qty)
+		Buy.state = "buying"
+		SayBuy("Buying...")
+		T.DrawBuy()
 		return
 	end
+	if Buy.state then return end
+	local F = E.flip
+	if F.onCooldown then SayBuy("This recipe is on cooldown: ready in " .. T.HoursText(F.onCooldown) .. ".") return end
+	if F.blocked then SayBuy("Not a craft to buy for: the product is " .. F.blocked .. ".") return end
+	if LastRun and LastRun.key == RunKey(E) then SayBuy("The mats for this craft are bought: craft it first.") return end
+	if Run and Run.key ~= RunKey(E) then T.EndCraftRun(false) end
+	if not Run then
+		Run = { key = RunKey(E), id = E.id, spell = E.craft.spell, plan = E.flip, status = E.craft.status, bought = {}, spent = 0, got = {} }
+	end
+	local M = Run.plan.mats[m]
+	if not M then return end
+	local Left = M.qty - (Run.bought[m] or 0)
+	if Left <= 0 then return end
 	Buy.state = "price"
-	Buy.pending = { id = M.id, qty = M.qty, max = M.upTo or 0, craft = true }
-	C_AuctionHouse.StartCommoditiesPurchase(M.id, M.qty)
-	SayBuy(string.format("Mat %d of %d: getting the current price of %d %s...", Run.step, #Run.plan.mats, M.qty, ItemName(M.id)))
+	Buy.pending = { id = M.id, qty = Left, max = M.upTo or 0, craft = true, mat = m }
+	C_AuctionHouse.StartCommoditiesPurchase(M.id, Left)
+	SayBuy(string.format("Getting the current price of %d %s (pay up to %s each)...", Left, ItemName(M.id), Money(M.upTo or 0)))
 	T.DrawBuy()
 end
 CraftPrice = function(Pd, Unit, Total)
 	local P = Run and Run.plan
 	if not P then ResetPurchase(true); T.DrawBuy() return end
-	-- The craft at live prices: what's bought, this mat now, the rest at the plan's prices, the vendor goods.
+	-- The craft at live prices: what's bought, this mat now, the other mats not bought yet at the plan's prices, the
+	-- vendor goods.
 	local Rest = 0
-	for j = Run.step + 1, #P.mats do Rest = Rest + P.mats[j].cost end
+	for m, M in ipairs(P.mats) do
+		if m ~= Pd.mat then Rest = Rest + M.cost * math.max(0, 1 - (Run.bought[m] or 0) / math.max(1, M.qty)) end
+	end
 	local Cost = Run.spent + Total + Rest + (P.vendorCost or 0)
 	local Profit = math.floor(P.saleEach * P.crafts - Cost + 1e-6)
 	local Budget = UI().FlipBudget()
 	local Need = P.route == "Vendor" and Core.MinVendorProfit or Core.FlipNeed(Cost, Core.MinFlipProfitFor(Budget), Run.status)
-	local Done = string.format(" Stopped after %d of %d mats.", Run.step - 1, #P.mats)
 	if Unit > Pd.max then
 		ResetPurchase(true)
-		SayBuy(string.format("Price of %s went up: now %s each (max %s). Not bought.%s", ItemName(Pd.id), Core.MoneyColor(Unit), Core.MoneyColor(Pd.max), Done))
-		T.EndCraftRun(false)
+		SayBuy(string.format("Price of %s went up: now %s each (pay up to %s). Not bought.", ItemName(Pd.id), Money(Unit), Money(Pd.max)))
 		Recheck({ Pd.id }, function() T.RefreshBuy() end)
 	elseif Total > Budget then
 		ResetPurchase(true)
-		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.%s", Core.MoneyColor(Total), Core.MoneyColor(Budget), Done))
-		T.EndCraftRun(false)
+		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Money(Total), Money(Budget)))
 	elseif Profit < Need then
 		ResetPurchase(true)
-		SayBuy(string.format("At today's prices the craft would make %s (under %s). Not bought.%s", Core.MoneyDelta(Profit), Core.MoneyColor(Need), Done))
-		T.EndCraftRun(false)
+		SayBuy(string.format("At today's prices the craft would make %s (under %s). Not bought.", Core.MoneyDelta(Profit), Money(Need)))
 	else
 		Buy.state = "confirm"
 		Pd.total = Total
-		BuyP.Buy:SetText(string.format("Confirm %d for %s", Pd.qty, Core.MoneyColor(Total)))
-		SayBuy(string.format("%s: %s each now. Click Confirm to buy (mat %d of %d).", ItemName(Pd.id), Core.MoneyColor(Unit), Run.step, #P.mats))
+		SayBuy(string.format("%s: %s each now. Click Confirm on its line to buy %d for %s.", ItemName(Pd.id), Money(Unit), Pd.qty, Money(Total)))
 	end
 	T.DrawBuy()
 end
@@ -1073,20 +1415,25 @@ function T.CraftMatBought(Pd)
 	if not Run then T.DrawBuy() return end
 	Run.spent = Run.spent + (Pd.total or 0)
 	Run.got[#Run.got + 1] = { Pd.id, Pd.qty, Pd.total or 0 }
-	Run.step = Run.step + 1
+	Run.bought[Pd.mat] = (Run.bought[Pd.mat] or 0) + Pd.qty
 	local P = Run.plan
-	if Run.step <= #P.mats then
-		local M = P.mats[Run.step]
-		SayBuy(string.format("Bought %d %s for %s. Click Buy for the next mat (%d of %d: %d %s).", Pd.qty, ItemName(Pd.id), Core.MoneyColor(Pd.total or 0), Run.step, #P.mats, M.qty, ItemName(M.id)))
-		BuyP.Buy:SetText("Buy next mat")
+	local Left = {}
+	for m, M in ipairs(P.mats) do
+		local N = M.qty - (Run.bought[m] or 0)
+		if N > 0 then Left[#Left + 1] = N .. " " .. ItemName(M.id) end
+	end
+	if #Left > 0 then
+		SayBuy(string.format("Bought %d %s for %s. Still to buy: %s.", Pd.qty, ItemName(Pd.id), Money(Pd.total or 0), table.concat(Left, ", ")))
 		T.DrawBuy()
 		return
 	end
 	local id, Spent = Run.id, Run.spent
 	local Goods = {}
 	for _, G in ipairs(P.vendorGoods or {}) do Goods[#Goods + 1] = G.qty .. " " .. ItemName(G.id) end
+	local Done = Run
 	T.EndCraftRun(true)
-	SayBuy(string.format("All mats bought (%s).%s Craft %d %s, then sell them: AF Sell knows what they cost you.", Core.MoneyColor(Spent),
+	LastRun = Done
+	SayBuy(string.format("All AH mats bought (%s).%s Craft %d %s, then sell them: AF Sell knows what they cost you.", Money(Spent),
 		#Goods > 0 and (" Buy " .. table.concat(Goods, ", ") .. " from a vendor.") or "", P.crafts, ItemName(id)))
 	T.RefreshBuy()
 end
@@ -1169,6 +1516,7 @@ Events:SetScript("OnEvent", function(_, Event, A1, A2)
 	elseif Event == "AUCTION_HOUSE_CLOSED" then
 		ResetPurchase(true)
 		T.EndCraftRun(false)
+		LastRun = nil
 		Sell.pending = nil
 	end
 end)

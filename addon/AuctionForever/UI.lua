@@ -460,11 +460,43 @@ function L.BagCounts()
 	end
 	return Out, Sig
 end
--- Shopping list source label and color: AH yellow, Vendor green, Bags gray (already held), Farm orange (not sold).
-L.SOURCE_COLOR = { AH = "|cffffd100", Vendor = "|cff1eff00", Bags = "|cff9d9d9d", Farm = "|cffff8000" }
-function L.SourceText(Src) return (L.SOURCE_COLOR[Src] or "") .. Src .. "|r" end
+-- Units of an item in your bank (the client knows them away from the bank too): all you have minus what you carry.
+function L.BankCount(id)
+	local C = rawget(_G, "C_Item")
+	local Count = C and C.GetItemCount
+	if not Count then return 0 end
+	local Ok, All, Carried = pcall(function() return Count(id, true), Count(id) end)
+	if not Ok or type(All) ~= "number" or type(Carried) ~= "number" then return 0 end
+	return math.max(0, All - Carried)
+end
+-- Shopping list sources: an icon and the word. AH: a pile of coins, Vendor: a bag (both from Interface\Icons; the
+-- minimap tracking / gossip icons aren't referenced by the client's UI code, so they weren't used); Owned (in your
+-- bags) and Bank: a green check mark (the checkbox check, tinted green); Farm (not sold anywhere): orange word.
+L.SOURCE_ORDER = { "AH", "Vendor", "Owned", "Bank", "Farm" }
+L.SOURCE_ICON = {
+	AH = "|TInterface\\Icons\\INV_Misc_Coin_02:14:14:0:0:64:64:5:59:5:59|t ",
+	Vendor = "|TInterface\\Icons\\Inv_misc_bag_08:14:14:0:0:64:64:5:59:5:59|t ",
+	Owned = "|TInterface\\Buttons\\UI-CheckBox-Check:14:14:0:0:32:32:0:32:0:32:30:255:0|t |cff1eff00",
+	Bank = "|TInterface\\Buttons\\UI-CheckBox-Check:14:14:0:0:32:32:0:32:0:32:30:255:0|t |cff1eff00",
+	Farm = "|cffff8000",
+}
+function L.SourceText(Src)
+	local Pre = L.SOURCE_ICON[Src] or ""
+	return Pre .. Src .. (Pre:find("|c", 1, true) and "|r" or "")
+end
+-- A shopping list in source order (AH, Vendor, Owned, Bank, Farm), keeping the given order within a source.
+function L.BySource(List)
+	local Out = {}
+	for _, Src in ipairs(L.SOURCE_ORDER) do
+		for _, E in ipairs(List or {}) do if E.source == Src then Out[#Out + 1] = E end end
+	end
+	local Known = {}
+	for _, Src in ipairs(L.SOURCE_ORDER) do Known[Src] = true end
+	for _, E in ipairs(List or {}) do if not Known[E.source] then Out[#Out + 1] = E end end -- (anything else last)
+	return Out
+end
 -- One shopping list line: "<count> x <name>  <source>  <price>  (<total>)". AH: "up to <the most to pay each>"
--- with the total at listed prices; Vendor: the vendor price each; Bags: "-".
+-- with the total at listed prices; Vendor: the vendor price each; Owned / Bank: "-".
 function L.ShoppingLine(E)
 	local Price, Total
 	if E.source == "AH" then
@@ -481,7 +513,8 @@ end
 function L.MatsLine(List, Max)
 	Max = Max or 3
 	local Parts = {}
-	for i, E in ipairs(List or {}) do
+	List = L.BySource(List)
+	for i, E in ipairs(List) do
 		if i > Max then Parts[#Parts + 1] = "+" .. (#List - Max) .. " more" break end
 		local Src = E.source == "AH" and ("AH, up to " .. Core.MoneyColor(E.upTo or 0)) or E.source
 		Parts[#Parts + 1] = string.format("%d %s (%s)", E.qty, (ItemName(E.id)), Src)
@@ -506,6 +539,7 @@ function L.CraftTargets()
 		ahStatus = { good = true, slow = true },
 		cooldownLeft = function(Row) return L.SpellCooldownLeft(Row.spell) end,
 		held = function(id) return Held[id] or 0 end,
+		bank = function(id) return L.BankCount(id) end,
 		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
 		need = function(Cost, Row)
 			if Row.route == "Vendor" then return Core.MinVendorProfit end
@@ -606,10 +640,14 @@ function L.FarmTooltip(E, Tip)
 	Line("Source", Craft and ("Crafted (" .. ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") .. ")") or (E.source or "?"))
 	if not Craft then return end
 	local Held = L.BagCounts()
+	local Lines = {}
 	for _, Rg in ipairs(E.reagents or {}) do
-		local Src = (Held[Rg.id] or 0) >= Rg.n and "Bags" or Rg.source == "vendor" and "Vendor" or Rg.source == "ah" and "AH" or "Farm"
-		Tip:AddLine(string.format("  %dx %s  %s  %s", Rg.n, (ItemName(Rg.id)), L.SourceText(Src), Src == "Bags" and "-" or Money(Rg.each)), 0.8, 0.8, 0.8)
+		local Src = (Held[Rg.id] or 0) >= Rg.n and "Owned" or L.BankCount(Rg.id) >= Rg.n and "Bank"
+			or Rg.source == "vendor" and "Vendor" or Rg.source == "ah" and "AH" or "Farm"
+		Lines[#Lines + 1] = { source = Src, text = string.format("  %dx %s  %s  %s", Rg.n, (ItemName(Rg.id)), L.SourceText(Src),
+			(Src == "Owned" or Src == "Bank") and "-" or Money(Rg.each)) }
 	end
+	for _, X in ipairs(L.BySource(Lines)) do Tip:AddLine(X.text, 0.8, 0.8, 0.8) end
 	if E.buyExcluded then Line("Profit/craft", "-") else Line("Profit/craft", Core.MoneyDelta(E.profit) .. " (" .. (E.route or "AH") .. ")") end
 	if (E.vendorProfit or 0) > 0 then Line("Sell to vendor", Core.MoneyDelta(E.vendorProfit) .. " a craft") end
 	if E.matCrafts and E.matCrafts < math.huge then Line("Mats on AH", E.matCrafts .. " crafts") end

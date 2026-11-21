@@ -330,10 +330,10 @@ end
 -- The plan: { craft, crafts, makes, units, cost (AH mats + vendor goods), profit (expected), route, resell (per
 -- unit: post price or vendor price), saleEach (expected per craft), mats = { {id, qty, upTo, cost} } (AH, in recipe
 -- order, only what must be bought), vendorGoods = { {id, qty, cost} }, vendorCost, list (the shopping list: one entry
--- per reagent and source, { id, qty, source = "Bags" / "AH" / "Vendor", each (vendor price), upTo (AH: the most to
--- pay each), cost }) }.
--- Opts.held(id): units of a reagent already in your bags. They're used first: only the rest is bought, the plan's
--- cost counts only what's bought, and the mats listed plus what you hold bound N.
+-- per reagent and source, { id, qty, source = "AH" / "Vendor" / "Owned" / "Bank", each (vendor price), upTo (AH: the
+-- most to pay each), cost }, grouped by source in that order, recipe order within a group) }.
+-- Opts.held(id) / Opts.bank(id): units of a reagent in your bags / your bank. They're used first (bags, then bank):
+-- only the rest is bought, the plan's cost counts only what's bought, and the mats listed plus what you hold bound N.
 local function UpTo(I, Qty)
 	local Got, Top = 0, nil
 	for _, Step in ipairs(I and I.ladder or {}) do
@@ -367,7 +367,12 @@ function Farm.CraftPlan(Row, Opts, Env)
 	end
 	if not Each or Each <= 0 then return nil, Blocked end
 	local Held = {}
-	for _, R in ipairs(Row.reagents) do Held[R.id] = Opts.held and Opts.held(R.id) or 0 end
+	local InBags, InBank = {}, {}
+	for _, R in ipairs(Row.reagents) do
+		InBags[R.id] = Opts.held and Opts.held(R.id) or 0
+		InBank[R.id] = Opts.bank and Opts.bank(R.id) or 0
+		Held[R.id] = InBags[R.id] + InBank[R.id]
+	end
 	local Max = math.huge
 	for _, R in ipairs(Row.reagents) do
 		if R.source ~= "vendor" then Max = math.min(Max, math.floor((Listed(E.info(R.id)) + Held[R.id]) / R.n)) end
@@ -407,25 +412,32 @@ function Farm.CraftPlan(Row, Opts, Env)
 	end
 	local N = Lo
 	if N < 1 then return nil, Blocked end
-	local Mats, Goods, VCost, List = {}, {}, 0, {}
+	local Mats, Goods, VCost = {}, {}, 0
+	local Group = { AH = {}, Vendor = {}, Owned = {}, Bank = {} }
 	for _, R in ipairs(Row.reagents) do
 		local Q = Buy(R, N)
-		local FromBags = R.n * N - Q
-		if FromBags > 0 then List[#List + 1] = { id = R.id, qty = FromBags, source = "Bags", cost = 0 } end
+		local FromBags = math.min(R.n * N - Q, InBags[R.id])
+		local FromBank = R.n * N - Q - FromBags
+		if FromBags > 0 then table.insert(Group.Owned, { id = R.id, qty = FromBags, source = "Owned", cost = 0 }) end
+		if FromBank > 0 then table.insert(Group.Bank, { id = R.id, qty = FromBank, source = "Bank", cost = 0 }) end
 		if Q > 0 then
 			if R.source == "vendor" then
 				Goods[#Goods + 1] = { id = R.id, qty = Q, cost = R.each * Q }
 				VCost = VCost + R.each * Q
-				List[#List + 1] = { id = R.id, qty = Q, source = "Vendor", each = R.each, cost = R.each * Q }
+				table.insert(Group.Vendor, { id = R.id, qty = Q, source = "Vendor", each = R.each, cost = R.each * Q })
 			else
 				local I = E.info(R.id)
 				-- upTo: the price of the last ladder level the plan buys from. The Buy flow cancels a mat whose live
 				-- price is above it, so it's the most to pay each.
 				local M = { id = R.id, qty = Q, upTo = UpTo(I, Q), cost = (Farm.BuyCost(I, Q)) }
 				Mats[#Mats + 1] = M
-				List[#List + 1] = { id = R.id, qty = Q, source = "AH", upTo = M.upTo, cost = M.cost }
+				table.insert(Group.AH, { id = R.id, qty = Q, source = "AH", upTo = M.upTo, cost = M.cost })
 			end
 		end
+	end
+	local List = {}
+	for _, G in ipairs({ "AH", "Vendor", "Owned", "Bank" }) do
+		for _, X in ipairs(Group[G]) do List[#List + 1] = X end
 	end
 	local Total = Cost(N)
 	local Profit = math.floor(Each * N - Total + 1e-6)
