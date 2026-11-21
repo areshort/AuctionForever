@@ -12,6 +12,7 @@
 --   Env.vendor            -> { [item] = vendor price per unit } for reagents vendors sell. Default: AF_RecipeVendor.
 --   Env.vendorSell(id)    -> what a vendor pays for one (copper), or nil when not known. Used when that beats the AH.
 --   Env.recipes           -> AF_Recipes.  Env.skills -> AF_RecipeSkills.
+--   Env.classOf(id)       -> item class and subclass IDs (no server call), or nil. Default: C_Item.GetItemInfoInstant.
 local _, AF = ...
 AF = AF or AuctionForever or {}
 
@@ -39,10 +40,36 @@ local function Default(Env)
 		recipes = Env.recipes or AF_Recipes or {},
 		skills = Env.skills or AF_RecipeSkills or {},
 		vendorSell = Env.vendorSell,
+		classOf = Env.classOf or Farm.ClassOf,
 		cache = {},
 	}
 end
 Farm.Env = Default
+
+-- Item class and subclass without asking the server (GetItemInfoInstant is local data).
+function Farm.ClassOf(id)
+	local CI = rawget(_G, "C_Item")
+	local F = CI and CI.GetItemInfoInstant
+	if not F then return nil end
+	local _, _, _, _, _, Class, Sub = F(id)
+	return Class, Sub
+end
+-- Where an item comes from: "Crafted" (a recipe makes it), "Gather" (gathering professions: herbs, ore and stone,
+-- leather and hides, the gems mining finds, fish) or "Drop" (everything else).
+Farm.GATHER_SUB = { [9] = true, [7] = true, [6] = true } -- trade goods: Herb, Metal & Stone, Leather
+-- Mining gems and fishing catches (their subclasses also hold drops, so by item ID; from Forever's item data).
+Farm.GATHER_IDS = {}
+for _, id in ipairs({ 774, 818, 1210, 1206, 1705, 1529, 3864, 7909, 7910, 12799, 12361, 12364, 12800, 12363, -- gems
+	4603, 6289, 6291, 6303, 6308, 6317, 6361, 6362, 8365, 8959, 13754, 13755, 13756, 13758, 13759, 13760, 13889, 13890,
+	21071, 21153, 6358, 6359, 6522, 7973, 12238, 13422, 13757, 13888 }) do Farm.GATHER_IDS[id] = true end -- fish
+function Farm.Source(id, Env)
+	local E = Env and Env.cache and Env or Default(Env)
+	if E.recipes[id] then return "Crafted" end
+	if Farm.GATHER_IDS[id] then return "Gather" end
+	local Class, Sub = E.classOf(id)
+	if Class == 7 and Farm.GATHER_SUB[Sub] then return "Gather" end
+	return "Drop"
+end
 
 -- Fallback status when Core isn't loaded (tests): sells, not flooded or falling.
 function Farm.Status(I)
@@ -112,6 +139,7 @@ function Farm.Raw(id, Env)
 	Row.expected, Row.net, Row.chance, Row.rate, Row.hours, Row.price = Exp, Net, Ch, Rate, H, P
 	Row.salesDay = (I.perHour or 0) * 24
 	Row.crafted = E.recipes[id] ~= nil
+	Row.source = Farm.Source(id, E)
 	if Row.salesDay <= 0 then Row.excluded = "no sales" return Row end
 	if Exp <= 0 then Row.excluded = "expected loss: deposits lost outweigh the sales" return Row end
 	if not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
@@ -172,6 +200,14 @@ function Farm.ReagentPrice(id, Qty, E)
 	return Cost / Qty, "ah", Got
 end
 
+-- Units of an item listed now (the whole ladder).
+local function Listed(I)
+	local N = 0
+	for _, Step in ipairs(I and I.ladder or {}) do N = N + Step[2] end
+	return N
+end
+Farm.Listed = Listed
+
 -- What a reagent would earn if you posted it instead of crafting (expected, sell-rate weighted) or vendored it,
 -- whichever is more; nil when neither is known.
 local function ReagentSellValue(id, E)
@@ -185,41 +221,52 @@ local function ReagentSellValue(id, E)
 end
 
 -- One recipe. Recipe = { spell, skillLine, skillReq, makes, {reagent, count, ...}, teachItem, yellow, grey
--- [, cooldownSeconds, cooldownCategory] }.
---   sale     = what posting the products is expected to earn (sell-rate weighted, deposit lost when unsold)
---   profit   = products' price after the cut - mats bought (not weighted: if it sells)
---   expected = sale - mats bought (AH ladder, vendor price for vendor goods): the buy-mats ranking
---   added    = sale - what the mats would earn posted or vendored themselves - vendor goods: what crafting adds over
---              selling mats you gathered; self = sale - vendor goods (mats cost you nothing)
--- Unpriced mats: buy mats is excluded; added counts them at 0 and says so.
+-- [, cooldownSeconds, cooldownCategory] }. Mats are bought for one craft: the AH ladder (vendor goods at the vendor
+-- price); matCrafts = how many crafts the mats listed now allow (math.huge: vendor goods only).
+-- Two ways to sell what it makes (route):
+--   "AH":     ahExpected = what posting the products is expected to earn (sell-rate weighted, deposit lost when
+--             unsold) - mats; ahProfit = products' price after the cut - mats (if it sells).
+--   "Vendor": vendorProfit = vendor price x makes - mats: a sure sale (no cut, no deposit), only when the mats listed
+--             now cover a craft.
+-- The route with the higher expected profit wins: expected / profit / rate (1 for the vendor) follow it.
+--   added = best sale - what the mats would earn posted or vendored themselves - vendor goods: what crafting adds over
+--           selling mats you gathered; self = best sale - vendor goods (mats cost you nothing).
+-- Unpriced mats: buying them is excluded; added counts them at 0 and says so.
 function Farm.Craft(Product, Recipe, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	local Row = { id = Product, spell = Recipe[1], skill = Recipe[2], skillName = E.skills[Recipe[2]], req = Recipe[3],
 		makes = Recipe[4], teach = Recipe[6] ~= 0 and Recipe[6] or nil, yellow = Recipe[7], grey = Recipe[8],
-		cooldown = Recipe[9], cdCategory = Recipe[10] ~= 0 and Recipe[10] or nil, notes = {}, reagents = {} }
+		cooldown = Recipe[9], cdCategory = Recipe[10] ~= 0 and Recipe[10] or nil, notes = {}, reagents = {}, source = "Crafted" }
 	local I = E.info(Product)
 	local S = E.status(I)
 	Row.status = S
-	if not I or EXCLUDE[S] then Row.excluded = "product: " .. (EXCLUDE[S] or "no auction data") return Row end
-	local Sale, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, Row.makes)
-	if not Sale then Row.excluded = "product: no price" return Row end
-	Row.price, Row.hours, Row.rate, Row.chance = P, H, Rate, Ch
-	Row.net = Net / Row.makes
-	local VS = E.vendorSell and E.vendorSell(Product)
-	if VS and VS * Row.makes > Sale then
-		Sale, Net, Row.net = VS * Row.makes, VS * Row.makes, VS
-		Row.notes[#Row.notes + 1] = "the product earns more at a vendor than posted on the AH"
+	-- Selling on the AH: needs auction data with sales.
+	local AHWhy, Sale, Net, DepKnown
+	if not I or EXCLUDE[S] then AHWhy = "product: " .. (EXCLUDE[S] or "no auction data")
+	else
+		local Ch, Rate, H, P
+		Sale, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, Row.makes)
+		if not Sale then AHWhy = "product: no price"
+		else
+			Row.price, Row.hours, Row.rate, Row.chance = P, H, Rate, Ch
+			Row.net = Net / Row.makes
+			Row.salesDay = (I.perHour or 0) * 24
+			if Row.salesDay <= 0 then AHWhy = "product: no sales" end
+		end
 	end
-	Row.sale = Sale
-	Row.salesDay = (I.perHour or 0) * 24
-	if Row.salesDay <= 0 then Row.excluded = "product: no sales" return Row end
+	if AHWhy then Sale, Net = nil, nil end
+	local VS = E.vendorSell and E.vendorSell(Product)
+	if VS and VS <= 0 then VS = nil end
+	Row.vendorSell = VS
+	if not Sale and not VS then Row.excluded = AHWhy return Row end
+	Row.salesDay = Row.salesDay or 0
 	if Row.cooldown and Row.cooldown > 0 then
 		local T = Row.cooldown >= 3600 and string.format("%.0f h", Row.cooldown / 3600)
 			or string.format("%.0f min", Row.cooldown / 60)
 		Row.notes[#Row.notes + 1] = "cooldown " .. T .. (Row.cdCategory and " (shared with others in its group)" or "")
 	end
 	local Regs = Recipe[5]
-	local Cost, Mats, Vend, Missing, Unsold = 0, 0, 0, nil, nil
+	local Cost, Mats, Vend, Missing, Unsold, MatCrafts = 0, 0, 0, nil, nil, math.huge
 	for i = 1, #Regs - 1, 2 do
 		local R, N = Regs[i], Regs[i + 1]
 		local Each, Src = Farm.ReagentPrice(R, N, E)
@@ -227,24 +274,41 @@ function Farm.Craft(Product, Recipe, Env)
 		Row.reagents[#Row.reagents + 1] = { id = R, n = N, each = Each, source = Src, sell = SellV }
 		if Each then Cost = Cost + Each * N else Missing = Missing or R end
 		if Src == "vendor" then Vend = Vend + Each * N
-		elseif SellV then Mats = Mats + SellV * N
-		else Unsold = Unsold or R end
+		else
+			MatCrafts = math.min(MatCrafts, math.floor(Listed(E.info(R)) / N))
+			if SellV then Mats = Mats + SellV * N else Unsold = Unsold or R end
+		end
 	end
+	Row.matCrafts = MatCrafts
 	Row.vendorCost = Vend
 	Row.matsValue = Mats
-	Row.added = Sale - Mats - Vend
-	Row.self = Sale - Vend
+	local Best = math.max(Sale or 0, VS and VS * Row.makes or 0)
+	if VS and VS * Row.makes > (Sale or 0) and Sale then
+		Row.notes[#Row.notes + 1] = "the product earns more at a vendor than posted on the AH"
+	end
+	Row.sale = Best
+	Row.added = Best - Mats - Vend
+	Row.self = Best - Vend
 	if Unsold then Row.notes[#Row.notes + 1] = "a mat has no AH price (counted as 0 in value added): " .. Unsold end
 	if Missing then
 		Row.buyExcluded = "no price for reagent " .. Missing
+		Row.route = Sale and "AH" or "Vendor"
 	else
 		Row.cost = Cost
-		Row.profit = Net - Cost
-		Row.expected = Sale - Cost
-		if Row.expected <= 0 then Row.buyExcluded = "expected loss buying the mats" end
+		if Sale then Row.ahProfit, Row.ahExpected = Net - Cost, Sale - Cost end
+		if VS and MatCrafts >= 1 then Row.vendorProfit = VS * Row.makes - Cost end
+		if Row.vendorProfit and (not Row.ahExpected or Row.vendorProfit > Row.ahExpected) then
+			Row.route, Row.profit, Row.expected = "Vendor", Row.vendorProfit, Row.vendorProfit
+		elseif Row.ahExpected then
+			Row.route, Row.profit, Row.expected = "AH", Row.ahProfit, Row.ahExpected
+		end
+		if not Row.expected then Row.buyExcluded = AHWhy or "not enough mats listed"
+		elseif Row.expected <= 0 then Row.buyExcluded = "expected loss buying the mats" end
 	end
-	if not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
-	StatusNotes(Row, S, I, "product ")
+	if not Row.expected and not Sale then Row.excluded = AHWhy return Row end
+	if Row.route == "Vendor" then Row.vendorRoute = true end
+	if Sale and not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
+	if Sale then StatusNotes(Row, S, I, "product ") end
 	return Row
 end
 

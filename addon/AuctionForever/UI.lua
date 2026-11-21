@@ -160,15 +160,16 @@ local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|
 L.StatusText = StatusText
 
 -- Farm tab ---------------------------------------------------------------------------------------------------------
--- Three views from Farm.lua: Gather (items nobody crafts, to farm and sell; gear left out), Craft (every recipe in
--- Recipes.lua) and All (both in one list: a crafted item shows as its craft rows only).
+-- Four views from Farm.lua: Gather (herbs, ore, leather, gems, fish nobody crafts), Drop (everything else nobody
+-- crafts: Uncommon+ items, and trade goods at any quality), Craft (every recipe in Recipes.lua) and All (all of them
+-- in one list: a crafted item shows once, as its best craft row, or as a plain sell row when no craft pays).
 -- Worked out when the view opens and reused until the data or a scan changes (thousands of items: never per redraw).
 -- Ranked by expected gold a unit (or a craft): what it gets when it sells x its sell rate - the deposit lost when it
 -- doesn't, so a high price that rarely sells doesn't come first.
 local Farm = AF.Farm
-L.FarmView = "all"      -- or "gather" / "craft"
+L.FarmView = "all"      -- or "gather" / "drop" / "craft"
 L.CraftAll = false      -- false: only your professions (when the game tells us which you have)
-local RawCache, GatherCache, CraftCache, AllCache
+local RawCache, GatherCache, DropCache, CraftCache, AllCache
 local function DataKey()
 	local D = AuctionForeverData
 	return string.format("%d:%d", AF.Scan and AF.Scan.Version or 0, type(D) == "table" and D.time or 0)
@@ -181,6 +182,16 @@ local function KnownVendor(id)
 	local I = Shipped(id)
 	return I and I[1] or nil
 end
+-- Item quality without asking the game: the names cache, then the shipped data; 1 (common) when not known.
+local function QualityOf(id)
+	local C = NameCache()[id]
+	if C and C[2] then return C[2] end
+	local I = Shipped(id)
+	return I and I[2] or 1
+end
+L.QualityOf = QualityOf
+-- Crafted items get a gray "(c)" after their name in the lists.
+function L.CraftedMark(id) return (AF_Recipes and AF_Recipes[id]) and " |cff9d9d9d(c)|r" or "" end
 -- Deposit estimate for the farm lists (the same share of the vendor price as EstimatedDeposit); nil = not known.
 local function FarmDeposit(I, H, Qty)
 	local V = I and I.id and KnownVendor(I.id)
@@ -274,31 +285,49 @@ local function SortName(id)
 	return N or ("Item " .. id)
 end
 L.SortName = SortName
--- Every item with auction data except gear, best expected first; excluded ones (warming up, no sales...) are left
--- out. The quick scan list and the name preload use the top of it (crafted items too).
-function L.FarmRows()
+-- Every item with auction data (gear too), best expected first, each with its source (Gather / Drop / Crafted);
+-- excluded ones (warming up, no sales...) are left out.
+local function RawAll()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
 	local Key = DataKey()
 	if not (RawCache and RawCache.key == Key) then
 		local Ids = {}
-		for id in pairs(D.items) do if not IsGear(id) then Ids[#Ids + 1] = id end end
+		for id in pairs(D.items) do Ids[#Ids + 1] = id end
 		table.sort(Ids)
-		RawCache = { key = Key, rows = (Farm.RawFarms(Ids, FarmEnv())) }
+		local Rows = Farm.RawFarms(Ids, FarmEnv())
+		local NoGear = {}
+		for _, R in ipairs(Rows) do
+			R.gear = IsGear(R.id)
+			if not R.gear then NoGear[#NoGear + 1] = R end
+		end
+		RawCache = { key = Key, rows = Rows, noGear = NoGear }
 	end
-	return RawCache.rows
+	return RawCache.rows, RawCache.noGear
 end
--- Gather view: the items no recipe makes (gathered or dropped), tiered within this list.
-function L.GatherRows()
-	local Raw = L.FarmRows()
-	if not (GatherCache and GatherCache.src == Raw) then
+-- The quick scan list and the name preload use the top of this: every item but gear (crafted ones too).
+function L.FarmRows() return select(2, RawAll()) or {} end
+-- Uncommon or better, or a trade good (cloth, meat, elemental, enchanting mats...: farmed at any quality).
+local function DropWorthy(R)
+	if QualityOf(R.id) >= 2 then return true end
+	local Class = Farm.ClassOf(R.id)
+	return Class == 7
+end
+L.DropWorthy = DropWorthy
+local function SourceRows(Cache, Source, Keep)
+	local Raw = RawAll()
+	if not (Cache and Cache.src == Raw) then
 		local Rows = {}
-		for _, R in ipairs(Raw) do if not R.crafted then Rows[#Rows + 1] = R end end
+		for _, R in ipairs(Raw) do if R.source == Source and (not Keep or Keep(R)) then Rows[#Rows + 1] = R end end
 		MarkTiers(Rows, function(R) return R.expected end)
-		GatherCache = { src = Raw, rows = Rows }
+		Cache = { src = Raw, rows = Rows }
 	end
-	return GatherCache.rows
+	return Cache
 end
+-- Gather view: herbs, ore and stone, leather and hides, mining gems and fish that no recipe makes.
+function L.GatherRows() GatherCache = SourceRows(GatherCache, "Gather") return GatherCache.rows end
+-- Drop view: what's left (gear too), Uncommon+ or trade goods.
+function L.DropRows() DropCache = SourceRows(DropCache, "Drop", DropWorthy) return DropCache.rows end
 
 -- Forever's professions come with a second skill line each (SkillLine.ParentSkillLineID): either may be the known one.
 local PROF_CHILD = { [171] = 2937, [164] = 2938, [185] = 2939, [333] = 2940, [202] = 2941, [129] = 2942, [165] = 2945,
@@ -349,24 +378,37 @@ function L.CraftRows()
 	L.CraftFiltered = Filtered
 	return CraftCache.rows
 end
--- All view: the Gather rows and the Craft rows in one list (no item twice: Gather has no crafted items), tiered over
--- the combined list. Each row is a view of the cached row with its own tier (the same row has another tier in its
--- own view).
+-- All view: Gather + Drop + one row per crafted item (its best craft row; a plain sell row, Kind "Crafted", when no
+-- craft pays or its profession is filtered out: nothing you hold goes missing; common crafted gear left out), tiered
+-- over the combined list. Each row is a view of the cached row with its own tier (the same row has another tier in
+-- its own view).
 local function AllScore(R) if R.spell then return not R.buyExcluded and R.expected or nil end return R.expected end
 function L.AllRows()
-	local G, C = L.GatherRows(), L.CraftRows()
-	if not (AllCache and AllCache.g == G and AllCache.c == C) then
-		local Rows = {}
+	local G, Dr, C = L.GatherRows(), L.DropRows(), L.CraftRows()
+	local Raw = RawAll()
+	if not (AllCache and AllCache.g == G and AllCache.d == Dr and AllCache.c == C and AllCache.raw == Raw) then
+		local Rows, BestCraft = {}, {}
 		for _, R in ipairs(G) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
-		for _, R in ipairs(C) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
+		for _, R in ipairs(Dr) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
+		for _, R in ipairs(C) do
+			local B = BestCraft[R.id]
+			if not B or (AllScore(R) or -math.huge) > (AllScore(B) or -math.huge) then BestCraft[R.id] = R end
+		end
+		for _, R in pairs(BestCraft) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
+		for _, R in ipairs(Raw) do
+			if R.source == "Crafted" and not BestCraft[R.id] and not (R.gear and QualityOf(R.id) < 2) then
+				Rows[#Rows + 1] = setmetatable({}, { __index = R })
+			end
+		end
 		SortBy(Rows, AllScore)
 		MarkTiers(Rows, AllScore)
-		AllCache = { g = G, c = C, rows = Rows }
+		AllCache = { g = G, d = Dr, c = C, raw = Raw, rows = Rows }
 	end
 	return AllCache.rows
 end
 function L.FarmData()
-	if L.FarmView == "craft" then return L.CraftRows() elseif L.FarmView == "gather" then return L.GatherRows() end
+	local V = L.FarmView
+	if V == "craft" then return L.CraftRows() elseif V == "gather" then return L.GatherRows() elseif V == "drop" then return L.DropRows() end
 	return L.AllRows()
 end
 function L.SetFarmView(View) L.FarmView = View; L.Load() end
@@ -381,55 +423,26 @@ function L.RateText(Rate)
 	local Color = Pct >= 70 and "|cff1eff00" or Pct >= 40 and "|cffffd100" or Pct >= 20 and "|cffff4040" or "|cff9d9d9d"
 	return Color .. Pct .. "%|r"
 end
-local function RateLine(E)
-	if type(E.rate) == "number" then
-		return string.format("Sell rate %d%% (sold / (sold + expired))", math.floor(E.rate * 100 + 0.5))
-	end
-	return string.format("Sell rate not measured yet: counted as %d%%", math.floor((E.chance or 0.5) * 100 + 0.5))
-end
--- Tooltip lines for a Farm row (added under the item's own tooltip).
+-- Tooltip lines for a Farm row (added under the item's own tooltip): short labels only.
 function L.FarmTooltip(E, Tip)
 	Tip = Tip or GameTooltip
-	local function Line(T, R, G, B) Tip:AddLine(T, R or 1, G or 1, B or 1, true) end
+	local function Line(Label, Value) Tip:AddLine(Label .. ": " .. Value, 1, 1, 1, true) end
 	Tip:AddLine(" ")
-	-- Without Shift: just the tier and the expected earnings; the full breakdown is behind Shift (like the item
-	-- tooltip's "Shift: details").
-	if not IsShiftKeyDown() then
-		local T = E.tier and TIER_INFO[E.tier]
-		Tip:AddLine(string.format("%sExpected %s %s, sells %s", T and (T[3] .. "Tier " .. E.tier .. "|r: ") or "",
-			E.spell and "per craft" or "each", Money(E.expected), L.RateText(E.rate)), 1, 1, 1, true)
-		Tip:AddLine("|cff808080Shift: details|r")
-		return
+	Tip:AddLine("AuctionForever", 1, 0.82, 0)
+	if E.tier then local T = TIER_INFO[E.tier] Line("Tier", T[3] .. E.tier .. "|r") end
+	local Craft = E.spell ~= nil
+	Line("Expected", Craft and Core.MoneyDelta(E.expected) or Money(E.expected))
+	Line("Sell rate", E.vendorRoute and "|cff1eff00vendor|r" or L.RateText(E.rate))
+	Line("Sales/day", string.format("%.0f", E.salesDay or 0))
+	Line("Source", Craft and ("Crafted (" .. ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") .. ")") or (E.source or "?"))
+	if not Craft then return end
+	for _, Rg in ipairs(E.reagents or {}) do
+		local Src = Rg.source == "vendor" and " (vendor)" or ""
+		Tip:AddLine(string.format("  %dx %s  %s%s", Rg.n, (ItemName(Rg.id)), Money(Rg.each), Src), 0.8, 0.8, 0.8)
 	end
-	if E.spell then
-		local Prof = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
-		local Need = (E.req and E.req > 0) and ("needs " .. E.req) or "needed rank not in the game data"
-		Tip:AddLine("AuctionForever craft: " .. Prof, 1, 0.82, 0)
-		Line(string.format("%s; yellow %d, grey %d%s", Need, E.yellow or 0, E.grey or 0, E.myRank and (" (you: " .. E.myRank .. ")") or ""))
-		Line(E.teach and ("Learned from " .. (ItemName(E.teach))) or "Learned from a trainer (or automatically)")
-		Line(string.format("Makes %d; AF posts at %s each (%d h), %s after the cut", E.makes or 1, Money(E.price), E.hours or 0, Money(E.net)))
-		Line(RateLine(E) .. string.format("; market sells %.0f a day", E.salesDay or 0))
-		for _, Rg in ipairs(E.reagents or {}) do
-			local Src = Rg.source == "vendor" and "vendor" or (Rg.source == "ah" and "AH" or "no price")
-			Line(string.format("  %dx %s: %s each (%s)", Rg.n, (ItemName(Rg.id)), Money(Rg.each), Src), 0.8, 0.8, 0.8)
-		end
-		if E.buyExcluded then Line("Buy mats: " .. E.buyExcluded, 1, 0.5, 0.25)
-		else Line(string.format("Buy mats: cost %s; profit %s a craft if it sells, expected %s", Money(E.cost), Money(E.profit), Money(E.expected))) end
-		Line(string.format("Your own mats: they'd earn %s posted (or vendored); crafting adds %s a craft (%s with vendor goods only)",
-			Money(E.matsValue), Money(E.added), Money(E.self)))
-	else
-		Tip:AddLine("AuctionForever farm", 1, 0.82, 0)
-		Line(string.format("AF posts at %s (%d h); you get %s when it sells (after the cut)", Money(E.price), E.hours or 0, Money(E.net)))
-		Line(RateLine(E) .. string.format("; market sells %.0f a day", E.salesDay or 0))
-		Line("Expected each: " .. Money(E.expected) .. " (when it sells x sell rate - deposit lost when it doesn't)")
-		if E.crafted then Line("Also craftable: see the Craft view") end
-	end
-	if E.tier then
-		local T = TIER_INFO[E.tier]
-		local Why = (not E.score or E.score <= 0) and "expected earnings at or below zero" or (T[4] .. " by expected earnings (price x sell rate)")
-		Tip:AddLine(string.format("%sTier %s|r: %s; sells %.0f/day", T[3], E.tier, Why, E.salesDay or 0), 1, 1, 1, true)
-	end
-	for _, N in ipairs(E.notes or {}) do Line(N, 1, 0.5, 0.25) end
+	if E.buyExcluded then Line("Profit/craft", "-") else Line("Profit/craft", Core.MoneyDelta(E.profit) .. " (" .. (E.route or "AH") .. ")") end
+	if (E.vendorProfit or 0) > 0 then Line("Sell to vendor", Core.MoneyDelta(E.vendorProfit) .. " a craft") end
+	if E.matCrafts and E.matCrafts < math.huge then Line("Mats on AH", E.matCrafts .. " crafts") end
 end
 
 -- Lists ----------------------------------------------------------------------------------------------------------
@@ -799,6 +812,8 @@ local Columns = {
 	-- Gather: Expected each (net each x sell rate - deposit lost) is the default sort; Sales/day = the whole market's.
 	gather = { { "Item", 196, "name" }, { "Tier", 28, "tier" }, { "Net each", 66, "net" }, { "Sell rate", 50, "rate" },
 		{ "Expected each", 74, "expected" }, { "Sales/day", 54, "salesDay" }, { "Your gold/hr", 66, "mine" }, { "Status", 56, "status" } },
+	drop = { { "Item", 196, "name" }, { "Tier", 28, "tier" }, { "Net each", 66, "net" }, { "Sell rate", 50, "rate" },
+		{ "Expected each", 74, "expected" }, { "Sales/day", 54, "salesDay" }, { "Your gold/hr", 66, "mine" }, { "Status", 56, "status" } },
 	-- Craft: Expected/craft (products x sell rate - deposit lost - mats bought) is the default sort.
 	craft = { { "Item", 180, "name" }, { "Tier", 28, "tier" }, { "Profession", 66, "skill" }, { "Profit/craft", 68, "profit" },
 		{ "Sell rate", 50, "rate" }, { "Expected/craft", 78, "expected" }, { "Sales/day", 54, "salesDay" }, { "Added each", 68, "added" } },
@@ -818,16 +833,16 @@ end
 
 -- Column sort per list for this session (default: expected, highest first). Click a header: highest first; again:
 -- lowest first.
-local FarmSort = { all = { key = "expected" }, gather = { key = "expected" }, craft = { key = "expected" } }
+local FarmSort = { all = { key = "expected" }, gather = { key = "expected" }, drop = { key = "expected" }, craft = { key = "expected" } }
 local SORT_GET = {
 	name = function(R) return SortName(R.id) end,
 	net = function(R) return R.net end,
-	rate = function(R) return R.chance end, -- not measured: sorts at the rate it's counted at
+	rate = function(R) if R.vendorRoute then return 1 end return R.chance end, -- not measured: sorts at the rate it's counted at
 	expected = function(R) return not R.buyExcluded and R.expected or nil end,
 	tier = function(R) return R.score end, -- the tier's score: expected earnings
 	salesDay = function(R) return R.salesDay end,
 	mine = function(R) if R.spell then return nil end return MyGoldPerHour(R.id) end,
-	kind = function(R) if R.spell then return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "?" end return "Gather" end,
+	kind = function(R) if R.spell then return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "?" end return R.source or "?" end,
 	gold = function(R) if R.spell then return not R.buyExcluded and R.profit or nil end return R.net end,
 	status = function(R) return R.status end,
 	skill = function(R) return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "" end,
@@ -920,30 +935,33 @@ function L.Refresh()
 			R.Icon:SetTexture(Icon(E.id))
 			R.id = E.id
 			local I = E.info
-			local NameText = (Color and Color.hex or "|cffffffff") .. L.ShortName(Name) .. "|r"
+			local NameText = (Color and Color.hex or "|cffffffff") .. L.ShortName(Name) .. "|r" .. L.CraftedMark(E.id)
 			R.entry = E
+			-- Craft rows sold to a vendor: a yellow "V" before the profession, "vendor" as the sell rate.
+			local function Prof(E2)
+				return (E2.vendorRoute and "|cffffd100V|r " or "") .. ((AF_RecipeSkills and AF_RecipeSkills[E2.skill]) or "?")
+			end
+			local RateCell = E.vendorRoute and "|cff1eff00vendor|r" or L.RateText(E.rate)
 			if Tab == 1 and L.FarmView == "all" then
 				local Craft = E.spell ~= nil
 				local Buy = Craft and not E.buyExcluded and E.profit
 				local Mine = not Craft and MyGoldPerHour(E.id)
-				SetCells(R, { NameText, L.TierText(E.tier), Craft and ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") or "Gather",
-					Craft and (Buy and Core.MoneyColor(E.profit) or "-") or Core.MoneyColor(E.net), L.RateText(E.rate),
-					(not Craft or Buy) and Core.MoneyColor(E.expected) or "-", string.format("%.0f", E.salesDay or 0),
+				SetCells(R, { NameText, L.TierText(E.tier), Craft and Prof(E) or (E.source or "?"),
+					Craft and (Buy and Core.MoneyDelta(E.profit) or "-") or Core.MoneyColor(E.net), RateCell,
+					Craft and (Buy and Core.MoneyDelta(E.expected) or "-") or Core.MoneyColor(E.expected), string.format("%.0f", E.salesDay or 0),
 					Mine and Core.MoneyColor(Mine) or "-" })
 			elseif Tab == 1 and E.spell then
-				local Short = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
 				local Buy = not E.buyExcluded and E.profit
-				SetCells(R, { NameText, L.TierText(E.tier), Short, Buy and Core.MoneyColor(E.profit) or "-", L.RateText(E.rate),
-					Buy and Core.MoneyColor(E.expected) or "-", string.format("%.0f", E.salesDay or 0),
-					(E.added or 0) > 0 and Core.MoneyColor(E.added) or "-" })
+				SetCells(R, { NameText, L.TierText(E.tier), Prof(E), Buy and Core.MoneyDelta(E.profit) or "-", RateCell,
+					Buy and Core.MoneyDelta(E.expected) or "-", string.format("%.0f", E.salesDay or 0),
+					(E.added or 0) > 0 and Core.MoneyDelta(E.added) or "-" })
 			elseif Tab == 1 then
 				local Mine = MyGoldPerHour(E.id)
-				if E.crafted then NameText = NameText .. " |cff9d9d9d(crafted)|r" end
 				SetCells(R, { NameText, L.TierText(E.tier), Core.MoneyColor(E.net), L.RateText(E.rate), Core.MoneyColor(E.expected),
 					string.format("%.0f", E.salesDay or 0), Mine and Core.MoneyColor(Mine) or "-", StatusText(E.status) })
 			else
 				local F = E.flip
-				SetCells(R, { NameText, Core.MoneyColor(F.profit), F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo),
+				SetCells(R, { NameText, Core.MoneyDelta(F.profit), F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo),
 					Core.MoneyColor(F.resell), string.format("%.0f", I.perHour or 0), F.hours .. " h", StatusText("good") })
 			end
 		end
@@ -952,7 +970,7 @@ function L.Refresh()
 	if #Data == 0 then
 		local Text = "Nothing to show yet."
 		if Tab == 2 then Text = L.FlipEmptyReason()
-		elseif Tab == 1 and L.FarmView ~= "gather" and L.CraftFiltered then
+		elseif Tab == 1 and (L.FarmView == "craft" or L.FarmView == "all") and L.CraftFiltered then
 			Text = "No paying crafts for your professions in the data yet. Click \"My professions\" to see all." end
 		Frame.Empty:SetText(Text)
 	end
@@ -1006,13 +1024,14 @@ function L.RefreshFarmBar()
 	FB:SetShown(Tab == 1)
 	if Tab ~= 1 then return end
 	local View = L.FarmView
-	local Craft = View ~= "gather" -- craft rows shown: the professions filter applies
+	local Craft = View == "craft" or View == "all" -- craft rows shown: the professions filter applies
 	FB.All:SetEnabled(View ~= "all")
 	FB.Gather:SetEnabled(View ~= "gather")
+	FB.Drop:SetEnabled(View ~= "drop")
 	FB.Craft:SetEnabled(View ~= "craft")
 	FB.Prof:SetShown(Craft)
 	FB.Prof:SetText(L.CraftAll and "All professions" or "My professions")
-	local Note = "Expected = what you get when it sells x sell rate - deposit lost when it doesn't. Click a column to sort."
+	local Note = "Expected = sale x sell rate - lost deposits. Click a column to sort."
 	if Craft and not L.CraftAll and not L.ProfessionsKnown then Note = "Professions not known yet: showing all. " .. Note end
 	FB.Note:SetText(Note)
 end
@@ -1089,12 +1108,8 @@ function L.CreateWindow()
 			GameTooltip:SetItemByID(self.id)
 			if Tab == 1 and self.entry then L.FarmTooltip(self.entry) end
 			GameTooltip:Show()
-			self:RegisterEvent("MODIFIER_STATE_CHANGED") -- pressing or releasing Shift redraws it
 		end)
-		R:SetScript("OnEvent", function(self)
-			if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
-		end)
-		R:SetScript("OnLeave", function(self) self:UnregisterEvent("MODIFIER_STATE_CHANGED"); GameTooltip:Hide() end)
+		R:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		Rows[r] = R
 	end
 	Frame.Rows = Rows
@@ -1126,13 +1141,14 @@ function L.CreateWindow()
 		B:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		return B
 	end
-	FB.All = FarmBtn("All", 0, 46, function() L.SetFarmView("all") end, "Gather and Craft in one list, ranked by expected earnings.")
-	FB.Gather = FarmBtn("Gather", 50, 64, function() L.SetFarmView("gather") end, "Items nobody crafts (gathered or dropped; gear left out), ranked by what one is expected to earn when you post it.")
-	FB.Craft = FarmBtn("Craft", 118, 56, function() L.SetFarmView("craft") end, "Every recipe: expected earnings when you buy the mats, and what crafting adds over selling mats you gathered.")
-	FB.Prof = FarmBtn("My professions", 178, 116, function() L.ToggleCraftAll() end, "Only recipes of the professions you have, or every recipe in the game (to see what to learn).")
+	FB.All = FarmBtn("All", 0, 40, function() L.SetFarmView("all") end, "Everything in one list, ranked by expected earnings.")
+	FB.Gather = FarmBtn("Gather", 44, 60, function() L.SetFarmView("gather") end, "Herbs, ore, leather, gems and fish.")
+	FB.Drop = FarmBtn("Drop", 108, 50, function() L.SetFarmView("drop") end, "Mob drops: Uncommon+ items and trade goods.")
+	FB.Craft = FarmBtn("Craft", 162, 52, function() L.SetFarmView("craft") end, "Recipes: profit buying the mats (AH or vendor sale).")
+	FB.Prof = FarmBtn("My professions", 218, 110, function() L.ToggleCraftAll() end, "Your professions' recipes, or all.")
 	FB.Note = FB:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	FB.Note:SetPoint("LEFT", FB, "LEFT", 300, 0)
-	FB.Note:SetWidth(388)
+	FB.Note:SetPoint("LEFT", FB, "LEFT", 334, 0)
+	FB.Note:SetWidth(354)
 	FB.Note:SetJustifyH("LEFT")
 
 	-- Sessions pane
@@ -1520,55 +1536,14 @@ function L.TooltipLines(id)
 	local I = Core.Info(id)
 	local V = Vendor(id)
 	if not I and V <= 0 then return nil end
-	local Lines = {}
-	-- Always: vendor price, AH price and which one to use (per item, in coin colors).
-	Lines[#Lines + 1] = { "Vendor", V > 0 and Core.MoneyColor(V) or "-" }
 	local Target = TargetPrice(I)
-	Lines[#Lines + 1] = { "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" }
-	local R = Core.Recommend(I, V, Target)
-	local RecText = R == "Auction" and "|cff1eff00Auction|r" or R == "Vendor" and "|cffffd100Vendor|r" or "-"
-	Lines[#Lines + 1] = { "Rec", RecText }
-	-- On the AH: what you make per item there after the 5% cut, over what the vendor pays (its own line).
-	if R == "Auction" and Target then
-		Lines[#Lines + 1] = { "Over vendor", "+" .. Core.MoneyColor(math.max(0, math.floor(Target * (1 - Core.Cut)) - V)) .. " each after the cut" }
-	end
-	if I and (I.mySold or I.myExpired) then
-		local Parts = {}
-		if I.mySold then Parts[#Parts + 1] = string.format("You sold %d (%s)", I.mySold, Core.MoneyColor(I.mySoldValue)) end
-		if I.myExpired then Parts[#Parts + 1] = string.format("%d expired", I.myExpired) end
-		Lines[#Lines + 1] = { "Your auctions, " .. Core.MySalesDays .. " days", table.concat(Parts, ", ") }
-	end
-	if not IsShiftKeyDown() then
-		Lines[#Lines + 1] = { "|cff808080Shift: details|r", "" }
-		return Lines
-	end
-	if not I then return Lines end
-	local S = Core.Status(I)
-	Lines[#Lines + 1] = { "Sells", string.format("~%.0f per hour", I.perHour or 0) .. ((I.scanHours and I.scanHours > 0) and " (incl. your scans)" or "") }
-	Lines[#Lines + 1] = { "Lowest listed", (I.low and Core.MoneyColor(I.low) or "-") .. string.format(" (%d listed)", I.qty or 0) }
-	if S == "good" then
-		-- The same price and duration AF Sell suggests (capped at what buyers have recently paid).
-		local Price, H = Core.SellPrice(I, 1)
-		if Price and H then Lines[#Lines + 1] = { "Post at", Core.MoneyColor(Price) .. ", " .. H .. " h" } end
-	else
-		Lines[#Lines + 1] = { "Status", StatusText(S) }
-	end
-	-- Selling everything in your bags: the vendor total, and AF Sell's suggestion with its expected result.
-	local N = C_Item.GetItemCount and C_Item.GetItemCount(id) or 0
-	if N > 0 then
-		Lines[#Lines + 1] = { "All " .. N .. " to a vendor", Core.MoneyColor(V * N) }
-		local G = AF.Trade and AF.Trade.SuggestFor and AF.Trade.SuggestFor(id, N)
-		if G and G.price and G.qty then
-			local H = Core.Durations[G.durIdx or 1] or Core.Durations[1]
-			local Dep = Core.Deposit and Core.Deposit(I, H, G.qty) or 0
-			local E, Ch = Core.ExpectedPost(I, G.price, G.qty, Dep, G.cost)
-			Lines[#Lines + 1] = { "All " .. N .. " on the AH", string.format("post %d at %s, %d h: %s after the cut%s", G.qty,
-				Core.MoneyColor(G.price), H, Core.MoneyColor(math.floor(G.price * G.qty * (1 - Core.Cut))), G.qty < N and " (rest later)" or "") }
-			Lines[#Lines + 1] = { "Expected", (E < 0 and "|cffff4040-|r" or "") .. Core.MoneyColor(math.abs(E)) ..
-				string.format(" (%d%% sell, deposit %s)", math.floor(Ch * 100 + 0.5), Core.MoneyColor(Dep)) }
-		end
-	end
-	return Lines
+	return {
+		{ "Vendor", V > 0 and Core.MoneyColor(V) or "-" },
+		{ "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" },
+		-- Per unit: the AH price after the 5% cut minus what a vendor pays.
+		{ "Profit", Target and Core.MoneyDelta(math.floor(Target * (1 - Core.Cut)) - V) or "-" },
+		{ "Source", AF.Farm.Source(id) },
+	}
 end
 -- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
 function L.BagAdvice(id)

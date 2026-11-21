@@ -110,11 +110,8 @@ X(f'INIT = {w}.onInit({{ CreateTexture = function() return {{ SetSize = function
 ok(L('INIT.w == 15 and INIT.h == 15'), 'icon is 15x15')
 ok(L('JUNK.auctionforever.label') == 'AuctionForever', 'Baganator junk source named "AuctionForever"')
 
-# Same recommendation as the tooltip's "Rec" line.
+# The bag icons keep Core.Recommend's advice (the tooltip no longer has a Rec line: Vendor / AH / Profit / Source).
 ok(L('(AF_NS.UI.BagAdvice(9001))') == 'Auction' and L('(AF_NS.UI.BagAdvice(9002))') == 'Vendor' and L('(AF_NS.UI.BagAdvice(9007))') is None, 'BagAdvice: Auction / Vendor / nil')
-for i in (9001, 9002, 9006):
-    tip = ' '.join(str(v) for v in L(f'(function() local t = {{}} for _, l in ipairs(AF_NS.UI.TooltipLines({i})) do if l[1] == "Rec" then t[1] = l[2] end end return t[1] end)()') .split())
-    ok(L(f'(AF_NS.UI.BagAdvice({i}))') in tip, f'item {i}: bag advice matches the tooltip Rec line ({tip})')
 
 # AF draws both icons itself: the chosen purse for vendor items, the chosen auction icon.
 ok(L('Icon(9001)') == 'auction', 'Rec Auction: auction icon')

@@ -762,6 +762,12 @@ function Core.MoneyColor(C)
 	else P[#P + 1] = COPPER .. Cp .. "c|r" end
 	return table.concat(P, " ")
 end
+-- A gain or loss: a green "+" before a gain, a red "-" before a loss (from MoneyColor).
+function Core.MoneyDelta(C)
+	if not C then return "-" end
+	if math.floor(C + 0.5) > 0 then return "|cff1eff00+|r" .. Core.MoneyColor(C) end
+	return Core.MoneyColor(C)
+end
 
 -- Sell to the vendor or on the auction house? Returns "Auction" or "Vendor" (nil when neither has a price).
 -- Auction only when posting one earns more on average than vendoring it now: the chance it sells x (after the cut

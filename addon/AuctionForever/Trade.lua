@@ -57,7 +57,7 @@ end
 local function NameText(id, Short)
 	local Name, Quality = UI().ItemName(id)
 	local Color = ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[Quality or 1]
-	return (Color and Color.hex or "|cffffffff") .. (Short and UI().ShortName(Name) or Name) .. "|r"
+	return (Color and Color.hex or "|cffffffff") .. (Short and UI().ShortName(Name) or Name) .. "|r" .. (Short and UI().CraftedMark(id) or "")
 end
 local function Text(Parent, Font, X, Y, W)
 	local FS = Parent:CreateFontString(nil, "OVERLAY", Font or "GameFontHighlight")
@@ -268,14 +268,14 @@ function T.DrawBuy()
 			R.Cells[3]:SetText(UI().RateText(Rate(E)))
 			R.Cells[4]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
 			R.Cells[5]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
-			R.Cells[6]:SetText(Core.MoneyColor(F.profit))
+			R.Cells[6]:SetText(Core.MoneyDelta(F.profit))
 			local Status
 			if Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
 			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
 			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
 			R.Cells[7]:SetText(Status)
-			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ShortName((UI().ItemName(E.id))) .. "|r") end -- not affordable yet: name greyed
+			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ShortName((UI().ItemName(E.id))) .. "|r" .. UI().CraftedMark(E.id)) end -- not affordable yet: name greyed
 			R.Sel:SetShown(i + Off == Buy.sel)
 		end
 	end
@@ -293,11 +293,11 @@ function T.DrawBuy()
 		local F = Shown(E)
 		if F.vendor then
 			BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s) and sell them to a vendor for %s each: %s profit, no AH cut.%s",
-				NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyColor(F.profit),
+				NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), Core.MoneyDelta(F.profit),
 				Need and ("\n" .. "Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Core.MoneyColor(Core.MinKeep) .. " always kept).") or ""))
 		else
 		BuyP.Detail:SetText(string.format("%s   %s\nBuy %d at up to %s each (about %s), resell at %s over %d h: %s profit after the 5%% cut.%s%s",
-			NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyColor(F.profit),
+			NameText(E.id), TierLine(F) .. ", " .. SellsText(E), F.buyQty, Core.MoneyColor(F.buyUpTo), Core.MoneyColor(F.cost), Core.MoneyColor(F.resell), F.hours, Core.MoneyDelta(F.profit),
 			F.slow and ("\n" .. "|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r") or "",
 			Need and ("\n" .. "A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Core.MoneyColor(Core.MinKeep) .. "; one item may use only part of it).") or ""))
 		end
@@ -310,7 +310,7 @@ function T.DrawBuy()
 	local P = UI().LastPlan
 	local Line = "Flip Budget: " .. Core.MoneyColor(UI().FlipBudget())
 	if P and P.count > 0 then
-		Line = Line .. string.format("     Plan: %d items, cost %s, profit %s", P.count, Core.MoneyColor(P.cost), Core.MoneyColor(P.profit))
+		Line = Line .. string.format("     Plan: %d items, cost %s, profit %s", P.count, Core.MoneyColor(P.cost), Core.MoneyDelta(P.profit))
 	end
 	BuyP.Budget:SetText(Line)
 	local Min = T.TargetGold()
@@ -649,8 +649,8 @@ function T.UpdateDeposit()
 	local Exp = ""
 	if Price and Qty > 0 and G.info then
 		local E, Ch = Core.ExpectedPost(G.info, Price, Qty, D, G.cost)
-		Exp = string.format("     Expected %s: %s%s (%d%% sell)", G.cost and "profit" or "earnings",
-			E < 0 and "|cffff4040-|r" or "", Core.MoneyColor(math.abs(E)), math.floor(Ch * 100 + 0.5))
+		Exp = string.format("     Expected %s: %s (%d%% sell)", G.cost and "profit" or "earnings",
+			G.cost and Core.MoneyDelta(E) or Core.MoneyColor(E), math.floor(Ch * 100 + 0.5))
 	end
 	SellP.Deposit:SetText(string.format("Deposit: %s     You get after the cut: %s%s", D and Core.MoneyColor(D) or "-", Net and Core.MoneyColor(Net) or "-", Exp))
 end

@@ -746,52 +746,37 @@ ok(int(L('#AuctionForeverDB.mysales')) == 4 and L('AuctionForeverDB.mailfix1'), 
 X('AuctionForeverDB.mysales = SavedSales')
 I = L('AF_NS.Core.Info(2589)')
 ok(I.mySold == 40 and I.mySoldValue == 1000, f'Info: you sold {I.mySold} for {I.mySoldValue}c in the last 3 days')
-tl = ' | '.join(' '.join(str(x) for x in v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values())
-ok('You sold 40' in tl, 'tooltip shows your own sales: ' + tl)
 X("time = function() return 1800000000 + 4 * 86400 end")
-ok(L('AF_NS.Core.Info(2589).mySold') in (None, 0), 'own sales older than 3 days drop out of the tooltip count')
+ok(L('AF_NS.Core.Info(2589).mySold') in (None, 0), 'own sales older than 3 days drop out of the Info count')
 
-# Tooltip: Vendor, AH and Rec first, money in gold/silver/copper colors; details only with Shift.
+# Item tooltip: just Vendor, AH, Profit (AH after the 5% cut - vendor, green + / red -) and Source; no Shift details.
 mc = L('AF_NS.Core.MoneyColor(10203)')
 ok('|cffffd7001g|r' in mc and '|cffc7c7cf02s|r' in mc and '|cffeda55f03c|r' in mc, 'money in coin colors: ' + mc)
 ok(L('AF_NS.Core.MoneyColor(5)') == '|cffeda55f5c|r' and L('AF_NS.Core.MoneyColor(nil)') == '-', 'copper only; no price shows "-"')
+md = [L(f'AF_NS.Core.MoneyDelta({c})') for c in ('150', '-150', '0', 'nil')]
+ok(md == ['|cff1eff00+|r|cffeda55f1s|r |cffeda55f50c|r'.replace('|cffeda55f1s|r', '|cffc7c7cf1s|r'), '|cffff4040-|r|cffc7c7cf1s|r |cffeda55f50c|r', '|cffeda55f0c|r', '-'],
+   f'MoneyDelta: green + for a gain, red - for a loss: {md}')
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok([r[0] for r in tl[:3]] == ['Vendor', 'AH', 'Rec'], 'first three lines: Vendor, AH, Rec: ' + str([r[0] for r in tl[:3]]))
-ok('Auction' in str(tl[2][1]), 'Linen (sells for far more than 5c vendor): Rec Auction: ' + str(tl[2][1]))
-ok(tl[3][0] == 'Over vendor' and '+' in str(tl[3][1]) and ' each' in str(tl[3][1]) and '+' not in str(tl[2][1]),
-   'the profit over the vendor is its own line under Rec: ' + str(tl[3]))
-# The AH price after the 5% cut, minus the vendor price (e.g. 30c -> 28c - 13c = +15c).
+ok([r[0] for r in tl] == ['Vendor', 'AH', 'Profit', 'Source'], 'tooltip lines: exactly Vendor, AH, Profit, Source: ' + str([r[0] for r in tl]))
 v = L('AF_NS.UI.Vendor(2589)'); ah = L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
 exp = int(ah * 0.95) - v
-ok(L(f'AF_NS.Core.MoneyColor({exp})') in str(tl[3][1]), f'profit = AH price after the 5% cut - vendor price ({ah}c, vendor {v}c -> +{exp}c)')
-ok(len(tl) == 5 and 'Shift' in str(tl[4][0]), 'without Shift: the four lines and a Shift hint')
-X('IsShiftKeyDown = function() return true end')
+ok(str(tl[2][1]) == L(f'AF_NS.Core.MoneyDelta({exp})') and str(tl[2][1]).startswith('|cff1eff00+|r'),
+   f'Profit = AH after the 5% cut - vendor, green plus ({ah}c, vendor {v}c -> {tl[2][1]})')
+ok(str(tl[3][1]) in ('Gather', 'Drop', 'Crafted'), 'Source line: ' + str(tl[3][1]))
+X('IsShiftKeyDown = function() return true end; RealGIC = C_Item.GetItemCount; C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end')
 tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok(len(tl2) > 5 and any('Sells' == r[0] for r in tl2), 'with Shift: details shown too')
-# Post at: the same price and duration as AF Sell (capped), not the deepest listing a long post could reach.
-pa = [r for r in tl2 if r[0] == 'Post at']
-sp = L('(AF_NS.Core.SellPrice(AF_NS.Core.Info(2589), 1))')
-ok(L('AF_NS.Core.Status(AF_NS.Core.Info(2589))') != 'good' or (pa and L(f'AF_NS.Core.MoneyColor({sp})') in str(pa[0][1])),
-   f"Post at = AF Sell's price ({pa and pa[0][1]} vs {sp})")
-# With Shift: what selling all you hold would bring (vendor total, AF Sell's post and expected result).
-X('RealGIC = C_Item.GetItemCount; C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end')
-tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-names = [r[0] for r in tl3]
-ok('All 24 to a vendor' in names and L(f"AF_NS.Core.MoneyColor({24 * v})") in str(tl3[names.index('All 24 to a vendor')][1]), 'Shift: all 24 to a vendor, total: ' + str(tl3[names.index('All 24 to a vendor')] if 'All 24 to a vendor' in names else names))
-ok('All 24 on the AH' in names and 'Expected' in names and 'sell, deposit' in str(tl3[names.index('Expected')][1]),
-   'Shift: all 24 on the AH (post, price, duration) and the expected result: ' + str([tl3[names.index(k)] for k in ('All 24 on the AH', 'Expected') if k in names]))
-X('C_Item.GetItemCount = function() return 0 end')
-ok(not any(str(r[0]).startswith('All ') for r in [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]), 'none in your bags: no "All" lines')
-X('C_Item.GetItemCount = RealGIC')
-X('IsShiftKeyDown = function() return false end')
-# Vendor wins when the AH, after the 5% cut, pays no more than the vendor.
+ok([r[0] for r in tl2] == ['Vendor', 'AH', 'Profit', 'Source'] and not any('Shift' in str(r) for r in tl + tl2),
+   'no Shift hint and nothing more with Shift held or the item in your bags')
+X('C_Item.GetItemCount = RealGIC; IsShiftKeyDown = function() return false end')
+# A vendor pays more than the AH after the cut: a red minus.
 X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')
 tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok('Vendor' in str(tl3[2][1]), 'vendor pays more: Rec Vendor: ' + str(tl3[2][1]))
+ok(str(tl3[2][1]).startswith('|cffff4040-|r'), 'vendor pays more: Profit with a red minus: ' + str(tl3[2][1]))
 X('C_Item.GetItemInfo = OldInfo')
-# An item with no AH data at all still shows its vendor price and Rec Vendor.
+# An item with no AH data still shows its vendor price; Profit "-".
 tl4 = L('AF_NS.UI.TooltipLines(424242)')
-ok(tl4 is not None and 'Vendor' in str(list(tl4[3].values())[1]), 'no AH data: vendor price shown, Rec Vendor')
+ok(tl4 is not None and list(tl4[2].values())[1] == 'no data' and list(tl4[3].values())[1] == '-', 'no AH data: vendor price shown, AH no data, Profit -')
+ok(L('AF_NS.UI.TooltipLines(2996)[4][2]') == 'Crafted', 'Source: Crafted for an item a recipe makes')
 
 # /af selftest runs end to end in the mock (auction house open), saves results, and finds no problems.
 X('AuctionHouseFrame:Show(); AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.selftest = nil')
@@ -1035,6 +1020,10 @@ X("""BuyId = AF_NS.Trade.Rows()[1].id; RealGII3 = C_Item.GetItemInfo
   AF_NS.UI.ItemName(BuyId); AF_NS.Trade.SelectBuy(1)""")
 bc, bd = str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')), str(L('AuctionForeverBuyPanel.Detail:GetText()'))
 ok('Ench Something Long' in bc and 'Pattern' not in bc and 'Pattern: Enchant Something Long' in bd, f'AF Buy: short name in the row ({bc}), full in the detail')
+X('RealRecipes = AF_Recipes; AF_Recipes = setmetatable({ [BuyId] = {} }, { __index = RealRecipes }); AF_NS.Trade.DrawBuy()')
+bcc = str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()'))
+X('AF_Recipes = RealRecipes; AF_NS.Trade.DrawBuy()')
+ok(bcc.endswith(' |cff9d9d9d(c)|r') and not str(L('AuctionForeverBuyPanel.Rows[1].Cells[1]:GetText()')).endswith('(c)|r'), f'AF Buy rows: "(c)" after crafted items ({bcc})')
 X('C_Item.GetItemInfo = RealGII3; AF_NS.UI.ItemName(BuyId); AF_NS.Trade.DrawBuy()')
 X('AF_NS.Trade.SetBuySort("plan")')
 tg = L('AF_NS.Trade.TargetGold()')
@@ -1063,6 +1052,8 @@ cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AuctionFor
       for i in range(1, min(14, int(L('#AF_NS.Trade.Rows()'))) + 1)]
 coin = str(L('AF_NS.Core.MoneyColor(1)')).split('1c')[0]
 ok(len(cr) > 0 and all(coin in str(b) and coin in str(p) for b, p, _ in cr), f'AF Buy amounts in coin colors ({cr[0][0]!r} / {cr[0][1]!r})')
+ok(all(str(p) == L(f'AF_NS.Core.MoneyDelta({(r.best or r.flip).profit if L("(AF_NS.Trade.BuySort())") == "profit" else r.flip.profit})') for _, p, r in cr)
+   and any(str(p).startswith('|cff1eff00+|r') for _, p, _ in cr), f'AF Buy profit cells: green + (red - for a loss) ({cr[0][1]!r})')
 # Scroll bars: shown when a list is longer than its 14 rows; dragging scrolls; "1-14 of N" under it.
 X('''SB = AF_NS.Trade.Rows(); SBn = #SB
   for k = 1, 30 do SB[#SB + 1] = SB[((k - 1) % SBn) + 1] end
@@ -1198,14 +1189,26 @@ X("""SavedData, SavedDB, SavedVer = AuctionForeverData, AuctionForeverDB, AF_NS.
   Items[2996] = Good(1000, 5)     -- Bolt of Linen Cloth (2 Linen): a paying craft
   Items[118] = Good(2000, 5)      -- Minor Healing Potion (First Aid in Forever): vial + spice from vendors, 1 Peacebloom
   Items[2447] = Good(50, 30)      -- Peacebloom
-  Items[880100] = Good(900000, 5) -- gear: left out of Gather
+  Items[880100] = Good(900000, 5) -- gear (rare): Drop
+  Items[880101] = Good(5000, 5)   -- gear (common): left out
+  Items[880102] = Good(4000, 5)   -- junk (common, not a trade good): left out
+  Items[880103] = Good(3000, 5)   -- cloth (common trade good): Drop
+  Items[880104] = Good(2500, 5)   -- an Uncommon drop: Drop
   for k = 1, 20 do Items[880200 + k] = Good(1000 + k * 100, 2) end
   for id in pairs(Items) do Info[id] = { 10, 1, 1 } end
-  Info[880100] = { 10, 3, 0 }
+  Info[880100] = { 10, 3, 0 }; Info[880101] = { 10, 1, 0 }; Info[880104] = { 10, 2, 0 }
+  -- Classes (GetItemInfoInstant): herbs for the gathered ones, cloth for Linen's craft, gear, junk.
+  FixClass = { [2589] = { 7, 9 }, [2447] = { 7, 9 }, [880100] = { 4, 2 }, [880101] = { 4, 1 }, [880102] = { 15, 0 }, [880103] = { 7, 5 },
+    [880104] = { 15, 0 } }
+  for k = 1, 20 do FixClass[880200 + k] = { 7, 9 } end
   AuctionForeverData = { v = 1, time = os.time(), hours = 24, fields = F, items = Items, info = Info, names = {} }
   AF_NS.Scan.Version = (AF_NS.Scan.Version or 0) + 1
   RealInstant = C_Item.GetItemInfoInstant
-  C_Item.GetItemInfoInstant = function(id) if id == 880100 then return id, "Armor", "", "", 134400, 4, 0 end return RealInstant(id) end
+  C_Item.GetItemInfoInstant = function(id) local c = FixClass[id] if c then return id, "", "", "", 134400, c[1], c[2] end return RealInstant(id) end
+  -- Quality as the shipped data says (the mock's GetItemInfo says common for everything).
+  BaseGII = C_Item.GetItemInfo
+  C_Item.GetItemInfo = function(id) local r = { BaseGII(id) } local I = AuctionForeverData.info and AuctionForeverData.info[id]
+    if I and r[1] then r[3] = I[2] end return unpack(r, 1, 11) end
   RealSkill = C_SkillInfo
   C_SkillInfo = nil
   RealGII = C_Item.GetItemInfo
@@ -1217,10 +1220,15 @@ X("""SavedData, SavedDB, SavedVer = AuctionForeverData, AuctionForeverDB, AF_NS.
   C_Item.GetItemInfo = RealGII""")
 gr = L('GatherRows')
 gids = [gr[i].id for i in range(1, len(gr) + 1)]
-ok(880100 not in gids and 2589 in gids and 2447 in gids and len(gids) == 22, f'Gather: every item class except gear ({len(gids)} rows)')
+ok(880100 not in gids and 880103 not in gids and 2589 in gids and 2447 in gids and len(gids) == 22, f'Gather: the gathered items only ({len(gids)} rows)')
+ok(all(gr[i].source == 'Gather' for i in range(1, len(gr) + 1)), 'Gather rows all have source Gather')
+dr = L('AF_NS.UI.DropRows()')
+dids = sorted(dr[i].id for i in range(1, len(dr) + 1))
+ok(dids == [880100, 880103, 880104], f'Drop: Uncommon+ (gear too) and trade goods at any quality; common gear and junk left out: {dids}')
 ok(2996 not in gids and 118 not in gids and all(not gr[i].crafted for i in range(1, len(gr) + 1)),
    'Gather: crafted items (Bolt of Linen Cloth, the potion) left out: only what nobody crafts')
-ok(any(L(f'AF_NS.UI.FarmRows()[{i}].id') == 2996 for i in range(1, int(L('#AF_NS.UI.FarmRows()')) + 1)), 'the quick scan list still has crafted items')
+fr_ids = [L(f'AF_NS.UI.FarmRows()[{i}].id') for i in range(1, int(L('#AF_NS.UI.FarmRows()')) + 1)]
+ok(2996 in fr_ids and 880100 not in fr_ids, 'the quick scan list still has crafted items, still no gear')
 vals = [gr[i].expected for i in range(1, len(gr) + 1)]
 ok(vals == sorted(vals, reverse=True), 'Gather: best expected each first')
 ok(L('ComputeInfoCalls') == 0, f'working out both lists asks the game for no item info (no server flood): {L("ComputeInfoCalls")} calls')
@@ -1253,15 +1261,15 @@ def py_tiers(scores):
     return out
 # All view: the default; Gather and Craft rows together, no item twice, tiers over the combined list.
 FB = 'AuctionForeverFrame.FarmBar'
-ok(L('AF_NS.UI.FarmView') == 'all' and not L(f'{FB}.All:IsEnabled()') and L(f'{FB}.Gather:IsEnabled()') and L(f'{FB}.Craft:IsEnabled()')
+ok(L('AF_NS.UI.FarmView') == 'all' and not L(f'{FB}.All:IsEnabled()') and L(f'{FB}.Gather:IsEnabled()') and L(f'{FB}.Craft:IsEnabled()') and L(f'{FB}.Drop:IsEnabled()')
    and L(f'{FB}.Prof:IsShown()'), 'default view All: its button greyed, professions button shown (craft rows in it)')
 ok(heads() == ['Item', 'Tier', 'Kind', 'Gold each', 'Sell rate', 'Expected v', 'Sales/day', 'Your gold/hr'], f'All columns, sorted by expected: {heads()}')
 n_all = int(L('#AF_NS.UI.ShownRows()'))
 rows_all = [(L(f'AF_NS.UI.ShownRows()[{i}].id'), L(f'AF_NS.UI.ShownRows()[{i}].spell')) for i in range(1, n_all + 1)]
 g_ids = {i for i, sp in rows_all if sp is None}
 c_ids = {i for i, sp in rows_all if sp is not None}
-ok(n_all == len(gr) + len(cr) and g_ids == set(gids) and {(i, sp) for i, sp in rows_all if sp} == set(cids) and not (g_ids & c_ids),
-   f'All = Gather rows + Craft rows, no item both ways ({n_all} = {len(gr)} + {len(cr)})')
+ok(n_all == len(gr) + len(dr) + len(cr) and g_ids == set(gids) | set(dids) and {(i, sp) for i, sp in rows_all if sp} == set(cids) and not (g_ids & c_ids)
+   and len(set(i for i, sp in rows_all)) == n_all, f'All = Gather + Drop + Craft rows, one row per item ({n_all} = {len(gr)} + {len(dr)} + {len(cr)})')
 ok(2996 in c_ids and 118 in c_ids and 2996 not in g_ids and 118 not in g_ids, 'a crafted item shows in All as its craft row only')
 sc = [L(f'(function(R) if R.spell then return not R.buyExcluded and R.expected or nil end return R.expected end)(AF_NS.UI.ShownRows()[{i}])')
       for i in range(1, n_all + 1)]
@@ -1269,26 +1277,36 @@ ok([x for x in sc if x is not None] == sorted([x for x in sc if x is not None], 
 at = [L(f'AF_NS.UI.ShownRows()[{i}].tier') for i in range(1, n_all + 1)]
 ok(at == py_tiers(sc), f'All: tiers by percentile over the combined list: {"".join(at)}')
 gtier = {L(f'AF_NS.UI.GatherRows()[{i}].id'): L(f'AF_NS.UI.GatherRows()[{i}].tier') for i in range(1, len(gr) + 1)}
-diff = [(rid, gtier[rid], at[k]) for k, (rid, sp) in enumerate(rows_all) if sp is None and gtier[rid] != at[k]]
+diff = [(rid, gtier[rid], at[k]) for k, (rid, sp) in enumerate(rows_all) if sp is None and rid in gtier and gtier[rid] != at[k]]
 ok(len(diff) > 0, f'All rows carry their own tier (the Gather view keeps its own): {diff}')
 cells = {}
 for i in range(1, min(n_all, 14) + 1):
     rid, sp = L(f'AuctionForeverFrame.Rows[{i}].entry.id'), L(f'AuctionForeverFrame.Rows[{i}].entry.spell')
     cells[(rid, sp)] = [str(L(f'AuctionForeverFrame.Rows[{i}].Cells[{c}]:GetText()')) for c in (3, 8)]
 kinds = {k: v[0] for k, v in cells.items()}
-ok(any(v == 'Gather' for k, v in kinds.items() if k[1] is None) and all(v != 'Gather' for k, v in kinds.items() if k[1] is not None)
-   and all(cells[k][1] == '-' for k in cells if k[1] is not None), f'All rows: Kind = Gather or the profession; gold/hr only for gather rows: {kinds}')
+ok(all(v in ('Gather', 'Drop', 'Crafted') for k, v in kinds.items() if k[1] is None) and all(v not in ('Gather', 'Drop') for k, v in kinds.items() if k[1] is not None)
+   and all(cells[k][1] == '-' for k in cells if k[1] is not None), f'All rows: Kind = Gather / Drop / the profession; gold/hr only for sell rows: {kinds}')
+allnames = [str(L(f'AuctionForeverFrame.Rows[{i}].Cells[1]:GetText()')) for i in range(1, min(n_all, 14) + 1)]
+mark = {L(f'AuctionForeverFrame.Rows[{i}].entry.id'): ('(c)' in allnames[i - 1]) for i in range(1, min(n_all, 14) + 1)}
+ok(all(v == (k in (2996, 118)) for k, v in mark.items()), f'no "(c)" on items nobody crafts: {mark}')
+ok(L('AF_NS.UI.CraftedMark(2996)') == ' |cff9d9d9d(c)|r' and L('AF_NS.UI.CraftedMark(2589)') == '', 'the "(c)" mark (gray, ASCII) for crafted items only')
 X('Click(AuctionForeverFrame.Headers[4])')
 go = [L(f'(function(R) if R.spell then return not R.buyExcluded and R.profit or nil end return R.net end)(AF_NS.UI.ShownRows()[{i}])') for i in range(1, n_all + 1)]
 gk = [x for x in go if x is not None]
 ok(heads()[3] == 'Gold each v' and gk == sorted(gk, reverse=True) and go[:len(gk)] == gk, 'All: Gold each sorts (net each / profit a craft)')
 X('Click(AuctionForeverFrame.Headers[3])')
-kd = shown('kind') if False else [str(L(f'(function(R) if R.spell then return AF_RecipeSkills[R.skill] end return "Gather" end)(AF_NS.UI.ShownRows()[{i}])')) for i in range(1, n_all + 1)]
+kd = [str(L(f'(function(R) if R.spell then return AF_RecipeSkills[R.skill] end return R.source end)(AF_NS.UI.ShownRows()[{i}])')) for i in range(1, n_all + 1)]
 ok(heads()[2] == 'Kind v' and kd == sorted(kd, reverse=True), f'All: Kind sorts {sorted(set(kd))}')
 X('Click(AuctionForeverFrame.Headers[2])')
 ok(heads()[1] == 'Tier v' and L('AF_NS.UI.ShownRows()[1].tier') == 'S', 'All: Tier sorts')
 X('Click(AuctionForeverFrame.Headers[6])')
 ok(heads()[5] == 'Expected v', 'All: back to expected')
+X(f'Click({FB}.Drop)')
+ok(heads() == ['Item', 'Tier', 'Net each', 'Sell rate', 'Expected each v', 'Sales/day', 'Your gold/hr', 'Status'] and not L(f'{FB}.Drop:IsEnabled()')
+   and sorted(shown('id')) == dids and not L(f'{FB}.Prof:IsShown()'), f'Drop view: the drop rows, sell columns: {sorted(shown("id"))}')
+X('Click(AuctionForeverFrame.Headers[3])')
+n = shown('net')
+ok(n == sorted(n, reverse=True) and heads()[2] == 'Net each v', 'Drop view: headers sort')
 X(f'Click({FB}.Gather)')
 ok(heads() == ['Item', 'Tier', 'Net each', 'Sell rate', 'Expected each v', 'Sales/day', 'Your gold/hr', 'Status'], f'Gather columns, sorted by expected each (marked): {heads()}')
 ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'sell rate' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')) and 'market room' not in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
@@ -1348,19 +1366,37 @@ ok(L('AuctionForeverFrame.FarmBar.Prof:IsShown()') and 'not known' in str(L('Auc
 X('''Tip = { lines = {} }
   function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
   for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
-short = [str(v) for v in L('Tip.lines').values()]
-ok(any('Shift: details' in t for t in short) and any('Tier ' in t and 'Expected per craft' in t for t in short)
-   and not any('First Aid' in t or '(vendor)' in t for t in short),
-   f'farm row tooltip without Shift: tier, expected and sell rate only, details behind Shift: {short}')
-X('''IsShiftKeyDown = function() return true end; Tip = { lines = {} }
-  function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
-  for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end
-  IsShiftKeyDown = function() return false end''')
 tip = [str(v) for v in L('Tip.lines').values()]
-ok(any('First Aid' in t for t in tip) and any('yellow 55' in t for t in tip) and any('(vendor)' in t for t in tip)
-   and any('(AH)' in t for t in tip) and any('Sell rate 90%' in t for t in tip) and any('Tier ' in t and 'by expected earnings (price x sell rate); sells 120/day' in t for t in tip)
-   and all(all(ord(c) < 128 for c in t) for t in tip),
-   f'craft tooltip: profession, ranks, reagents with source, sell rate, tier line (ASCII): {tip}')
+labels = [t.split(':')[0] for t in tip if ':' in t and not t.startswith('  ')]
+ok(labels == ['Tier', 'Expected', 'Sell rate', 'Sales/day', 'Source', 'Profit/craft', 'Mats on AH'] and any(t.startswith('  ') and '(vendor)' in t for t in tip)
+   and any(t.startswith('  1x') for t in tip) and not any('Shift' in t for t in tip) and all(all(ord(c) < 128 for c in t) for t in tip)
+   and all(len(t) < 80 for t in tip), f'craft row tooltip: short labels, reagents with prices, profit a craft, no Shift block: {tip}')
+X('''Tip = { lines = {} }
+  function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
+  AF_NS.UI.FarmTooltip(AF_NS.UI.GatherRows()[1], Tip)''')
+tip = [str(v) for v in L('Tip.lines').values()]
+ok([t.split(':')[0] for t in tip if ':' in t] == ['Tier', 'Expected', 'Sell rate', 'Sales/day', 'Source'] and 'Source: Gather' in tip,
+   f'gather row tooltip: Tier, Expected, Sell rate, Sales/day, Source: {tip}')
+# A craft whose product a vendor pays more for than the mats cost: route Vendor, shown as "V" and "vendor".
+X('''AuctionForeverData.info[2996][1] = 5000; AuctionForeverDB.names[2996] = nil
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.UI.Load()''')
+vr = L('(function() for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 2996 then return R end end end)()')
+ok(vr is not None and vr.route == 'Vendor' and abs(vr.expected - (5000 - 200)) < 1 and vr.matCrafts == 5,
+   f'Bolt of Linen Cloth vendors for 50s: route Vendor, +48s a craft, 10 Linen listed = 5 crafts ({vr and vr.route}, {vr and vr.expected}, {vr and vr.matCrafts})')
+cellsv = None
+for i in range(1, 15):
+    if L(f'AuctionForeverFrame.Rows[{i}].entry and AuctionForeverFrame.Rows[{i}].entry.id') == 2996:
+        cellsv = [str(L(f'AuctionForeverFrame.Rows[{i}].Cells[{c}]:GetText()')) for c in (3, 4, 5, 6, 1)]
+ok(cellsv and cellsv[0].startswith('|cffffd100V|r ') and 'vendor' in cellsv[2] and cellsv[1].startswith('|cff1eff00+|r') and cellsv[4].endswith(' |cff9d9d9d(c)|r'),
+   f'Craft row: "V" before the profession, sell rate "vendor", green + profit: {cellsv}')
+X('''Tip = { lines = {} }
+  function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
+  for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 2996 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
+tip = [str(v) for v in L('Tip.lines').values()]
+ok(any(t.startswith('Sell to vendor: |cff1eff00+|r') and 'a craft' in t for t in tip) and 'Sell rate: |cff1eff00vendor|r' in tip
+   and any(t.startswith('Profit/craft') and '(Vendor)' in t for t in tip), f'tooltip: Sell to vendor +X a craft: {tip}')
+X('''AuctionForeverData.info[2996][1] = 10; AuctionForeverDB.names[2996] = nil
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.UI.Load()''')
 # Short names in list rows: recipe prefix dropped (start only), "Enchant " -> "Ench "; Libram etc. kept.
 sn = {n: L(f'AF_NS.UI.ShortName({n!r})') for n in ('Formula: Enchant Gloves - Greater Agility', 'Pattern: Wicked Leather Headband',
       'Plans: Thorium Belt', 'Recipe: Flask of the Titans', 'Schematic: Gnomish Cloaking Device', 'Blueprint: Spinning Wheel',
@@ -1407,6 +1443,16 @@ cr = L('AF_NS.UI.CraftRows()')
 skills = sorted(set(cr[i].skill for i in range(1, len(cr) + 1)))
 ok(L('AF_NS.UI.CraftFiltered') and skills == [129, 197], f'My professions: only Tailoring and First Aid recipes ({skills})')
 ok(L('(function() for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.skill == 197 then return R.myRank end end end)()') == 75, 'your rank kept for the tooltip')
+X('''RealSkill2 = C_SkillInfo
+  C_SkillInfo = { GetSkillLineInfoByID = function(id) if id == 197 then return { skillID = 197, rank = 75 } end return nil end }
+  AF_NS.UI.SetFarmView("all")''')
+ar = L('AF_NS.UI.ShownRows()')
+r118 = [ar[i] for i in range(1, len(ar) + 1) if ar[i].id == 118]
+ok(len(r118) == 1 and r118[0].spell is None and r118[0].source == 'Crafted',
+   f'First Aid not yours: the potion stays in All as a sell row (Kind Crafted), once ({[(r.spell, r.source) for r in r118]})')
+kc = [str(L(f'AuctionForeverFrame.Rows[{i}].Cells[3]:GetText()')) for i in range(1, 15) if L(f'AuctionForeverFrame.Rows[{i}].entry and AuctionForeverFrame.Rows[{i}].entry.id') == 118]
+ok(kc == ['Crafted'], f'its Kind cell: {kc}')
+X('C_SkillInfo = RealSkill2; AF_NS.UI.SetFarmView("craft")')
 X('Click(AuctionForeverFrame.FarmBar.Prof)')
 ok(L('AF_NS.UI.CraftAll') and L('AuctionForeverFrame.FarmBar.Prof:GetText()') == 'All professions' and not L('AF_NS.UI.CraftFiltered'), 'All professions button shows every recipe')
 X('Click(AuctionForeverFrame.FarmBar.Prof)')
@@ -1423,7 +1469,7 @@ ql = L('AF_NS.UI.QuickList()')
 ok(2589 in [ql[i] for i in range(1, len(ql) + 1)], 'quick scan list still includes good Gather items')
 X('Click(AuctionForeverFrame.FarmBar.Gather); AuctionForeverFrame:Hide()')
 X("""AuctionForeverData, AuctionForeverDB, AF_NS.Scan.Version = SavedData, SavedDB, SavedVer + 100
-  C_Item.GetItemInfoInstant = RealInstant; C_SkillInfo = RealSkill""")
+  C_Item.GetItemInfoInstant = RealInstant; C_SkillInfo = RealSkill; C_Item.GetItemInfo = BaseGII""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

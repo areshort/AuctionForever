@@ -220,7 +220,31 @@ ok(near(R.matsValue, 250 + 80) and R.reagents[1].sell == 250 and R.reagents[2].s
    f'mats sold instead: the better of expected and vendor price ({R.matsValue}); unlisted mat priced at the vendor')
 X('MakeItem(402, { med = 100, med24 = 100, medAll = 100, perHour = 1, newHour = 1, sellThrough = 1 })')
 R = L(f'{F}.Craft(402, {{ 5008, 171, 50, 1, {{ 200, 1 }}, 0, 60, 80 }}, Env({{ vendorSell = function(id) return id == 402 and 5000 or nil end }}))')
-ok(R.net == 5000 and any('vendor' in R.notes[i] for i in range(1, len(R.notes) + 1)), 'product: vendor price used when it beats the AH, noted')
+ok(R.route == 'Vendor' and R.vendorProfit == 4000 and R.expected == 4000 and R.profit == 4000 and R.matCrafts == 110
+   and any('vendor' in R.notes[i] for i in range(1, len(R.notes) + 1)),
+   f'product a vendor pays more for than the AH earns: route Vendor, profit = 5000 - mats 1000 ({R.route}, {R.vendorProfit}, mats for {R.matCrafts} crafts)')
+# Vendor route: a product with no auction data at all still shows when vendoring it pays (sure sale, no cut/deposit).
+R = L(f'{F}.Craft(403, {{ 5009, 171, 50, 2, {{ 200, 1, 300, 1 }}, 0, 60, 80 }}, Env({{ vendor = {{ [300] = 100 }}, vendorSell = function(id) return id == 403 and 800 or nil end }}))')
+ok(R.excluded is None and R.buyExcluded is None and R.route == 'Vendor' and near(R.expected, 2 * 800 - 1000 - 100) and R.salesDay == 0,
+   f'no AH data, vendors for more than the mats: route Vendor, profit {R.expected} (want 500)')
+# AH beats the vendor: route AH.
+R = L(f'{F}.Craft(100, Rec, Env({{ vendor = {{ [300] = 100 }}, vendorSell = function(id) return id == 100 and 1000 or nil end }}))')
+ok(R.route == 'AH' and near(R.expected, 2507.5) and R.vendorProfit is not None and R.vendorProfit < R.expected, f'AH beats the vendor: route AH ({R.route})')
+# Capped by the mats listed now: only 1 of reagent 201 listed and the recipe needs 2 -> no vendor route (AH route stays).
+X('MakeItem(201, { med = 100, med24 = 100, medAll = 100, hi = 100, ladder = { {100, 1} } })')
+R = L(f'{F}.Craft(403, {{ 5010, 171, 50, 1, {{ 201, 2 }}, 0, 60, 80 }}, Env({{ vendorSell = function(id) return id == 403 and 5000 or nil end }}))')
+ok(R.matCrafts == 0 and R.vendorProfit is None and R.excluded == 'product: no auction data', f'mats listed now cover no craft: no vendor route ({R.matCrafts})')
+X('MakeItem(204, { med = 100, med24 = 100, medAll = 100, hi = 100, ladder = { {100, 7} } })')
+R = L(f'{F}.Craft(403, {{ 5011, 171, 50, 1, {{ 204, 2, 300, 1 }}, 0, 60, 80 }}, Env({{ vendor = {{ [300] = 100 }}, vendorSell = function(id) return id == 403 and 5000 or nil end }}))')
+ok(R.matCrafts == 3 and R.route == 'Vendor', f'crafts the listed mats allow: 7 listed / 2 a craft = 3 ({R.matCrafts})')
+# Where items come from.
+X('''ClassTbl = { [2447] = { 7, 9 }, [2770] = { 7, 7 }, [2318] = { 7, 6 }, [774] = { 7, 11 }, [6291] = { 7, 8 },
+    [2589] = { 7, 5 }, [769] = { 7, 8 }, [5500] = { 4, 2 } }
+  EnvS = Env({ recipes = { [2996] = { Rec } }, classOf = function(id) local c = ClassTbl[id] if c then return c[1], c[2] end end })''')
+src = {i: L(f'{F}.Source({i}, EnvS)') for i in (2996, 2447, 2770, 2318, 774, 6291, 2589, 769, 5500, 99999)}
+ok(src == {2996: 'Crafted', 2447: 'Gather', 2770: 'Gather', 2318: 'Gather', 774: 'Gather', 6291: 'Gather', 2589: 'Drop', 769: 'Drop',
+           5500: 'Drop', 99999: 'Drop'}, f'sources: crafted; herbs, ore, leather, mining gems and fish = Gather; cloth, mob meat, gear = Drop: {src}')
+ok(L(f'{F}.Raw(1, Env()).source') == 'Drop', 'raw rows carry their source')
 # Crafts(): rankings and filter.
 X('''E2 = Env({ vendor = { [300] = 100 }, recipes = { [100] = { Rec, { 5005, 171, 50, 1, { 200, 5 }, 0, 60, 80 } },
   [101] = { Rec }, [102] = { { 5006, 164, 1, 1, { 200, 1 }, 0, 1, 2 } } } })
