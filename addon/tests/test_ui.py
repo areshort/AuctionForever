@@ -698,12 +698,12 @@ if real:
                        + [bool(L(f'{W}.Btn:IsShown()')), bool(L(f'{W}.Btn:IsEnabled()')), str(L(f'{W}.Btn:GetText()')), plain(L(f'{W}.Note:GetText()'))])
         return out
     pl = pane()
-    want = [[str(2 * n), 'Item 990102', 'AH', 'up to ' + money(L('CF.mats[1].upTo')), '120', money(L('CF.mats[1].cost')), True, True, 'Buy', ''],
-            [str(n), 'Item 990103', 'AH', 'up to ' + money(L('CF.mats[2].upTo')), '50', money(L('CF.mats[2].cost')), True, True, 'Buy', ''],
+    want = [[str(2 * n), 'Item 990102', 'AH', money(L('CF.mats[1].upTo')), '1s 00c', money(L('CF.mats[1].cost')), True, True, 'Buy', ''],
+            [str(n), 'Item 990103', 'AH', money(L('CF.mats[2].upTo')), '3s 00c', money(L('CF.mats[2].cost')), True, True, 'Buy', ''],
             [str(n), 'Item 2320', 'Vendor', money(L('CF.list[3].each')), '-', money(L('CF.vendorCost')), False, True, 'Buy', 'buy from a vendor']]
     ok([r[:6] + r[8:] for r in pl if r[6]] == [r[:6] + r[8:] for r in want if r[6]] and [r[:6] + r[9:] for r in pl if not r[6]] == [r[:6] + r[9:] for r in want if not r[6]]
        and [r[6] for r in pl] == [True, True, False] and pl[0][7] and pl[1][7],
-       f'panel lines: need, reagent, source, pay up to, listed now, cost, a Buy button on AH lines: {pl}')
+       f'panel lines: need, reagent, source, pay up to (a price, no "up to"), listed now (cheapest price each), cost, a Buy button on AH lines: {pl}')
     src = [str(L(f'AuctionForeverBuyPanel.Lines[{i}].Cells[3]:GetText()')) for i in (1, 3)]
     ok('|TInterface\\Icons\\INV_Misc_Coin_02:' in src[0] and '|TInterface\\Icons\\Inv_misc_bag_08:' in src[1] and '|c' not in src[0] + src[1]
        and all(ord(ch) < 128 for ch in src[0] + src[1]), f'source column: an icon and the plain word for AH and Vendor: {src}')
@@ -1373,7 +1373,7 @@ fl = [plain(L(f'AuctionForeverBuyPanel.Lines[1].Cells[{c}]:GetText()')) for c in
 fs = [plain(x) for x in str(L('AuctionForeverBuyPanel.Summary:GetText()')).split(chr(10))]
 fm = lambda x: plain(L(f'AF_NS.Core.MoneyColor({x})'))
 fvis = L('AF_NS.Trade.BuyVisible()')
-ok(fl[0] == str(L('FF.buyQty')) and fl[2] == 'AH' and fl[3] == 'up to ' + fm(L('FF.buyUpTo')) and fl[4] == str(L('AF_NS.Farm.Listed(FE.info)')) and fl[5] == fm(L('FF.cost'))
+ok(fl[0] == str(L('FF.buyQty')) and fl[2] == 'AH' and fl[3] == fm(L('FF.buyUpTo')) and fl[4] == fm(L('AF_NS.Trade.Cheapest(FE.info)')) and fl[4].endswith('c') and fl[5] == fm(L('FF.cost'))
    and not L('AuctionForeverBuyPanel.Lines[2]:IsShown()') and L('AuctionForeverBuyPanel.Buy:IsShown()') and L('AuctionForeverBuyPanel.Buy._parent == AuctionForeverBuyPanel.Lines[1]') == True
    and str(L('AuctionForeverBuyPanel.PaneHead[2]:GetText()')) == 'Item'
    and fs[0].startswith('Then: Auction at ' + fm(L('FF.resell')) + ' each over ') and fs[1].startswith('Cost ' + fm(L('FF.cost')) + '   Profit +') and fs[2].startswith('Leaves you ')

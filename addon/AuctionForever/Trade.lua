@@ -1105,17 +1105,24 @@ function T.PaneText(E)
 end
 -- One line per source line of the plan (AH, Vendor, Owned, Bank order); a flip: one line, the item.
 -- { kind ("flip" / "AH" / "Vendor" / "Owned" / "Bank"), id, qty, source, upTo (AH: pay up to; Vendor: price each),
--- listed (units listed now), cost, mat (AH: index in plan.mats), bought (AH: units bought so far), have }.
+-- listed (the cheapest price listed now, each), cost, mat (AH: index in plan.mats), bought (AH: units bought so far),
+-- have }.
+local function Cheapest(I)
+	local L = I and I.ladder
+	if type(L) == "table" and L[1] then return L[1][1] end
+	return I and I.qty and I.qty > 0 and I.low or nil
+end
+T.Cheapest = Cheapest
 function T.PaneLines(E)
 	local F, R = PlanOf(E)
 	if not E.craft then
-		return { { kind = "flip", id = E.id, qty = F.buyQty, source = "AH", upTo = F.buyUpTo, listed = AF.Farm.Listed(E.info or Core.Info(E.id)), cost = F.cost } }
+		return { { kind = "flip", id = E.id, qty = F.buyQty, source = "AH", upTo = F.buyUpTo, listed = Cheapest(E.info or Core.Info(E.id)), cost = F.cost } }
 	end
 	local Out, Bags = {}, nil
 	for _, X in ipairs(UI().BySource(F.list or {})) do
 		local L = { kind = X.source, id = X.id, qty = X.qty, source = X.source, cost = X.cost }
 		if X.source == "AH" then
-			L.upTo, L.listed = X.upTo, AF.Farm.Listed(Core.Info(X.id))
+			L.upTo, L.listed = X.upTo, Cheapest(Core.Info(X.id))
 			for m, M in ipairs(F.mats) do if M.id == X.id then L.mat = m end end
 			L.bought = R and R.bought and R.bought[L.mat] or 0
 		elseif X.source == "Vendor" then
@@ -1295,8 +1302,8 @@ function T.DrawPane(E, M)
 				W.Cells[1]:SetText(tostring(L.qty))
 				W.Cells[2]:SetText(NameText(L.id))
 				W.Cells[3]:SetText(UI().SourceText(L.source))
-				W.Cells[4]:SetText(Owned(L.kind) and "-" or L.kind == "Vendor" and Money(L.upTo) or ("up to " .. Money(L.upTo)))
-				W.Cells[5]:SetText(L.listed and tostring(L.listed) or "-")
+				W.Cells[4]:SetText(Owned(L.kind) and "-" or Money(L.upTo))
+				W.Cells[5]:SetText(L.listed and Money(L.listed) or "-")
 				W.Cells[6]:SetText(Owned(L.kind) and "-" or Money(L.cost))
 				if L.kind == "AH" then
 					W.mat = L.mat
