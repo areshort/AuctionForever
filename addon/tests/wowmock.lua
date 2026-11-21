@@ -139,7 +139,7 @@ function Methods:SetValue(v)
 	if Old ~= v and self._scripts.OnValueChanged then self._scripts.OnValueChanged(self, v, true) end
 end
 function Methods:GetValue() return self._value end
-function Methods:HookScript(k, fn) self._hooks[k] = self._hooks[k] or {}; table.insert(self._hooks[k], fn) end
+function Methods:HookScript(k, fn) local H = rawget(self, "_hooks") or {}; rawset(self, "_hooks", H); H[k] = H[k] or {}; table.insert(H[k], fn) end
 function Methods:ClearAllPoints() self._points = {} end
 function Click(f, ...)
 	local s = f._scripts.OnClick

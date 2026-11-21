@@ -1222,11 +1222,52 @@ exp = int(ah * 0.95) - v
 ok(str(tl[2][1]) == L(f'AF_NS.Core.MoneyDelta({exp})') and (exp <= 0 or str(tl[2][1]).startswith('|cff1eff00+|r')),
    f'Profit = AH after the 5% cut - vendor, green plus ({ah}c, vendor {v}c -> {tl[2][1]})')
 ok(str(tl[3][1]) in ('Gather', 'Drop', 'Crafted'), 'Source line: ' + str(tl[3][1]))
-X('IsShiftKeyDown = function() return true end; RealGIC = C_Item.GetItemCount; C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end')
-tl2 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok([r[0] for r in tl2] == ['Vendor', 'AH', 'Profit', 'Source'] and not any('Shift' in str(r) for r in tl + tl2),
-   'no Shift hint and nothing more with Shift held or the item in your bags')
-X('C_Item.GetItemCount = RealGIC; IsShiftKeyDown = function() return false end')
+ok(not any('Shift' in str(r) for r in tl), 'no Shift hint')
+# Shift held: Vendor, AH and Profit for the hovered stack ("(x20)"), the same lines times the count; released: one.
+X("""ShiftDown = false; IsShiftKeyDown = function() return ShiftDown end
+  StackN = 20; RealGIC, RealCCI = C_Item.GetItemCount, C_Container.GetContainerItemInfo
+  C_Item.GetItemCount = function(id) return id == 2589 and 24 or 0 end
+  C_Container.GetContainerItemInfo = function(b, sl) if b == 0 and sl == 3 then return { itemID = 2589, stackCount = StackN } end return RealCCI(b, sl) end
+  TipGetter = { getterName = "GetBagItem", getterArgs = { 0, 3 } }
+  GameTooltip.GetPrimaryTooltipInfo = function() return TipGetter end
+  GameTooltip.GetItem = function() return "Linen Cloth", "|cffffffff|Hitem:2589::::::::|h[Linen Cloth]|h|r" end
+  Refreshes = 0
+  GameTooltip.RefreshData = function(self) Refreshes = Refreshes + 1; TipLines = {}; TooltipPostCalls[1](self, { id = 2589 }) end
+  function ShowTip() GameTooltip:Show(); TipLines = {}; TooltipPostCalls[1](GameTooltip, { id = 2589 }) end""")
+
+
+def tip():
+    return [plain(x).rstrip() for x in L('TipLines').values()][2:]
+
+
+v1, ah1 = L('AF_NS.UI.Vendor(2589)'), L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
+m = lambda c: plain(L(f'AF_NS.Core.MoneyColor({c})'))
+d = lambda c: plain(L(f'AF_NS.Core.MoneyDelta({c})'))
+one = [f'Vendor: {m(v1)}', f'AH: {m(ah1)}', f'Profit: {d(int(ah1 * 0.95) - v1)}']
+X('ShowTip()')
+t0 = tip()
+X('ShiftDown = true; ShowTip()')
+t20 = tip()
+ok(t0[:3] == one and t20[:3] == [f'Vendor (x20): {m(v1 * 20)}', f'AH (x20): {m(ah1 * 20)}', f'Profit (x20): {d((int(ah1 * 0.95) - v1) * 20)}']
+   and len(t20) == len(t0) and t20[3] == t0[3], f'Shift on a bag stack of 20: the stack\'s values, no extra lines: {t20} (without Shift {t0})')
+X('ShiftDown = false; Refreshes = 0; FireEvent("MODIFIER_STATE_CHANGED", "LSHIFT", 0)')
+ok(L('Refreshes') == 1 and tip()[:3] == one, f'Shift released while hovering: the tooltip refreshes to one item: {tip()}')
+X('ShiftDown = true; FireEvent("MODIFIER_STATE_CHANGED", "RSHIFT", 1)')
+ok(L('Refreshes') == 2 and tip()[0] == f'Vendor (x20): {m(v1 * 20)}', 'Shift pressed while hovering: back to the stack')
+X('FireEvent("MODIFIER_STATE_CHANGED", "LCTRL", 1); GameTooltip.GetItem = function() return "Other", "|Hitem:4306::|h" end; FireEvent("MODIFIER_STATE_CHANGED", "LSHIFT", 1)')
+ok(L('Refreshes') == 2, 'other keys, or the tooltip now showing another item: no refresh')
+X('GameTooltip.GetItem = function() return "Linen Cloth", "|Hitem:2589::|h" end; for _, f in ipairs((rawget(GameTooltip, "_hooks") or {}).OnHide or {}) do f(GameTooltip) end')
+ok(L('AF_NS.UI.ShiftWatch._events.MODIFIER_STATE_CHANGED') is None, 'tooltip hidden: stops listening for Shift')
+X('StackN = 1; ShowTip()')
+ok(tip()[:3] == one, f'a single item with Shift: unchanged: {tip()}')
+X('TipGetter = nil; ShowTip()')
+ok(tip()[:3] == [f'Vendor (x24 in bags): {m(v1 * 24)}', f'AH (x24 in bags): {m(ah1 * 24)}', f'Profit (x24 in bags): {d((int(ah1 * 0.95) - v1) * 24)}'],
+   f'no stack to read: your bag count, labeled "in bags": {tip()}')
+X('GameTooltip.GetOwner = function() return { count = 7 } end; ShowTip()')
+ok(tip()[0] == f'Vendor (x7): {m(v1 * 7)}', 'an item button that keeps its count (loot, mail...): that stack')
+X("""C_Item.GetItemCount, C_Container.GetContainerItemInfo = RealGIC, RealCCI; IsShiftKeyDown = function() return false end
+  GameTooltip.GetPrimaryTooltipInfo, GameTooltip.GetItem, GameTooltip.RefreshData, GameTooltip.GetOwner = nil, nil, nil, nil
+  for _, f in ipairs((rawget(GameTooltip, "_hooks") or {}).OnHide or {}) do f(GameTooltip) end; TipLines = {}""")
 # A vendor pays more than the AH after the cut: a red minus.
 X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')
 tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]

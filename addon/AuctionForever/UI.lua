@@ -1777,18 +1777,58 @@ local function TargetPrice(I)
 end
 L.TargetPrice = TargetPrice
 
-function L.TooltipLines(id)
+-- Count (Shift held, a stack of more than one): Vendor, AH and Profit for the whole stack, labeled "(x20)", or
+-- "(x20 in bags)" when the count is what you carry (InBags).
+function L.TooltipLines(id, Count, InBags)
 	local I = Core.Info(id)
 	local V = Vendor(id)
 	if not I and V <= 0 then return nil end
 	local Target = TargetPrice(I)
+	local N = (Count and Count > 1) and math.floor(Count) or 1
+	local Tag = N > 1 and string.format(" (x%d%s)", N, InBags and " in bags" or "") or ""
 	return {
-		{ "Vendor", V > 0 and Core.MoneyColor(V) or "-" },
-		{ "AH", Target and (Core.MoneyColor(Target) .. StaleMark(CheckedAt(id))) or "no data" },
-		-- Per unit: the AH price after the 5% cut minus what a vendor pays.
-		{ "Profit", Target and Core.MoneyDelta(math.floor(Target * (1 - Core.Cut)) - V) or "-" },
+		{ "Vendor" .. Tag, V > 0 and Core.MoneyColor(V * N) or "-" },
+		{ "AH" .. Tag, Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data" },
+		-- Per unit: the AH price after the 5% cut minus what a vendor pays (times the stack).
+		{ "Profit" .. Tag, Target and Core.MoneyDelta((math.floor(Target * (1 - Core.Cut)) - V) * N) or "-" },
 		{ "Source", AF.Farm.Source(id) },
 	}
+end
+-- The hovered stack's size, from what the tooltip shows: the game's getter (a bag slot, loot, mail), else the
+-- tooltip owner (a bag button, or any item button that keeps its count). nil when it doesn't say.
+function L.TooltipStack(Tip)
+	local Ok, Info = pcall(function() return Tip.GetPrimaryTooltipInfo and Tip:GetPrimaryTooltipInfo() end)
+	local Get = Ok and type(Info) == "table" and Info.getterName
+	local Args = Ok and type(Info) == "table" and Info.getterArgs
+	local CC = rawget(_G, "C_Container")
+	if Get == "GetBagItem" and type(Args) == "table" and CC and CC.GetContainerItemInfo then
+		local Ok2, S = pcall(CC.GetContainerItemInfo, Args[1], Args[2])
+		if Ok2 and type(S) == "table" and S.stackCount then return S.stackCount end
+	elseif Get == "GetLootItem" and type(Args) == "table" and rawget(_G, "GetLootSlotInfo") then
+		local Ok2, _, _, Q = pcall(rawget(_G, "GetLootSlotInfo"), Args[1])
+		if Ok2 and type(Q) == "number" then return Q end
+	elseif Get == "GetInboxItem" and type(Args) == "table" and rawget(_G, "GetInboxItem") then
+		local Ok2, _, _, _, Q = pcall(rawget(_G, "GetInboxItem"), Args[1], Args[2])
+		if Ok2 and type(Q) == "number" then return Q end
+	end
+	local Ok3, Owner = pcall(function() return Tip.GetOwner and Tip:GetOwner() end)
+	if Ok3 and type(Owner) == "table" then
+		if Owner.GetBagID and Owner.GetID and CC and CC.GetContainerItemInfo then
+			local Ok4, S = pcall(function() return CC.GetContainerItemInfo(Owner:GetBagID(), Owner:GetID()) end)
+			if Ok4 and type(S) == "table" and S.stackCount then return S.stackCount end
+		end
+		if type(rawget(Owner, "count")) == "number" then return Owner.count end
+	end
+	return nil
+end
+-- With Shift held: the stack's count and whether it's your bag count instead (no stack to read); nil = one item.
+function L.TooltipCount(Tip, id)
+	if not IsShiftKeyDown() then return nil end
+	local N = L.TooltipStack(Tip)
+	if N then return N > 1 and N or nil, false end
+	local Ok, B = pcall(C_Item.GetItemCount, id)
+	if Ok and type(B) == "number" and B > 1 then return B, true end
+	return nil
 end
 -- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
 function L.BagAdvice(id)
@@ -1797,12 +1837,41 @@ function L.BagAdvice(id)
 	if not I and V <= 0 then return nil, V end
 	return Core.Recommend(I, V, TargetPrice(I)), V
 end
+-- Shift pressed or released while our tooltip shows an item: show it again (stack values on / off). Listened to only
+-- while such a tooltip is up.
+local ShiftWatch = CreateFrame("Frame")
+local Watched -- { tip, id }
+ShiftWatch:SetScript("OnEvent", function(_, _, Key)
+	if not (Key == "LSHIFT" or Key == "RSHIFT") or not Watched then return end
+	local Tip = Watched.tip
+	if not Tip:IsShown() then Watched = nil; ShiftWatch:UnregisterEvent("MODIFIER_STATE_CHANGED") return end
+	local _, Link = Tip:GetItem()
+	local id = Link and tonumber(Link:match("item:(%d+)"))
+	if id ~= Watched.id then return end
+	if Tip.RefreshData then pcall(Tip.RefreshData, Tip) return end
+	local Owner = Tip:GetOwner()
+	local Enter = Owner and Owner.GetScript and Owner:GetScript("OnEnter")
+	if Enter then pcall(Enter, Owner) end
+end)
+local HideHooked = {}
+local function WatchShift(Tip, id)
+	Watched = { tip = Tip, id = id }
+	ShiftWatch:RegisterEvent("MODIFIER_STATE_CHANGED")
+	if not HideHooked[Tip] then
+		HideHooked[Tip] = true
+		Tip:HookScript("OnHide", function(self)
+			if Watched and Watched.tip == self then Watched = nil; ShiftWatch:UnregisterEvent("MODIFIER_STATE_CHANGED") end
+		end)
+	end
+end
+L.ShiftWatch = ShiftWatch
 local function OnTooltip(Tip, TData)
 	if Tip ~= GameTooltip and Tip ~= ItemRefTooltip then return end
 	local id = TData and TData.id
 	if not id then return end
-	local Lines = L.TooltipLines(id)
+	local Lines = L.TooltipLines(id, L.TooltipCount(Tip, id))
 	if not Lines then return end
+	WatchShift(Tip, id)
 	Tip:AddLine(" ")
 	Tip:AddLine("AuctionForever", 1, 0.82, 0)
 	for _, Ln in ipairs(Lines) do Tip:AddDoubleLine(Ln[1], Ln[2], 0.8, 0.8, 0.8, 1, 1, 1) end
