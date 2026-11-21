@@ -88,6 +88,7 @@ def main():
         time.sleep(10)
         return 0
     os.system('title AuctionForever Sync')
+    disable_quick_edit()
     print('AuctionForever Sync')
     print(f'Add-on folder: {folder}')
     print('Checks for new auction data every 5 minutes. Close this window to stop.\n')
@@ -97,14 +98,51 @@ def main():
         input('\nPress Enter to close.')
         return 1
     while True:
-        stamp = datetime.now().strftime('%H:%M')
-        try:
-            print(f'[{stamp}] {once(folder)}')
-        except urllib.error.HTTPError as e:
-            print(f'[{stamp}] GitHub answered {e.code}; will try again in 5 minutes')
-        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError, ValueError) as e:
-            print(f'[{stamp}] could not update ({e}); will try again in 5 minutes')
-        time.sleep(CHECK_EVERY)
+        check(folder)
+        wait(CHECK_EVERY)
+
+
+def check(folder):
+    """One check with its status line. Never raises (except KeyboardInterrupt), so the loop can't die."""
+    stamp = datetime.now().strftime('%H:%M')
+    try:
+        print(f'[{stamp}] {once(folder)}', flush=True)
+    except urllib.error.HTTPError as e:
+        print(f'[{stamp}] GitHub answered {e.code}; will try again in 5 minutes', flush=True)
+    except (urllib.error.URLError, TimeoutError, OSError, RuntimeError, ValueError) as e:
+        print(f'[{stamp}] could not update ({e}); will try again in 5 minutes', flush=True)
+    except Exception as e:  # e.g. http.client.IncompleteRead, ssl errors: log and keep going
+        print(f'[{stamp}] could not update ({type(e).__name__}: {e}); will try again in 5 minutes', flush=True)
+
+
+def wait(seconds, step=5):
+    """Sleep until `seconds` of wall-clock time have passed, in short steps, so a PC resuming from sleep checks
+    promptly instead of finishing a long sleep that didn't count the time asleep."""
+    end = time.time() + seconds
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(step, left))
+
+
+def disable_quick_edit():
+    """Turn off the console's QuickEdit mode: with it on, a click in the window pauses the program at its next
+    print until a key is pressed, which silently stops the syncing."""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.GetStdHandle.restype = wintypes.HANDLE
+        h = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = wintypes.DWORD()
+        if not k32.GetConsoleMode(h, ctypes.byref(mode)):
+            return
+        k32.SetConsoleMode(h, (mode.value & ~0x0040) | 0x0080)  # clear ENABLE_QUICK_EDIT_MODE, keep EXTENDED_FLAGS
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
