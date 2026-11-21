@@ -1838,7 +1838,7 @@ L.TargetPrice = TargetPrice
 --   "Auction" / "Vendor"  Core.Recommend: the AH after the cut against the vendor price, weighed by the chance it
 --             sells and the deposit lost when it doesn't; a seller without steady data needs 1.5x the vendor price
 --   nil       the vendor price isn't known yet (item not loaded; asked for): decided once it is
--- AF Sell lists exactly the items this says "Auction" for.
+-- AF Sell lists what this says "Auction" for first, then "Vendor" (marked), then the rest (Trade.BuildQueue).
 function L.SellAdvice(id, Key, Bound)
 	local Keep = type(AuctionForeverDB) == "table" and type(AuctionForeverDB.keep) == "table" and AuctionForeverDB.keep
 	if Bound then return "Keep", nil, nil, "soulbound" end

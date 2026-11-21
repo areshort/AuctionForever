@@ -594,11 +594,37 @@ if real:
       LookupSpy = {}
       Click(AuctionForeverSellTab)""")
     ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
-    # AF Sell agrees with the tooltip: an item whose Rec is Vendor isn't in the queue.
+    # AF Sell agrees with the tooltip: an item whose Rec is Vendor is listed after the Auction ones, marked.
     X('RealRec = AF_NS.Core.Recommend; AF_NS.Core.Recommend = function(I, V, P) if I and I.id == 2589 then return "Vendor" end return RealRec(I, V, P) end')
     vq = L('AF_NS.Trade.BuildQueue()')
-    ok(not any(vq[i].id == 2589 for i in range(1, len(vq) + 1)), 'Rec says Vendor: not in the AF Sell list (same advice as the tooltip)')
+    vl = [(vq[i].id, vq[i].group, vq[i].flag) for i in range(1, len(vq) + 1)]
+    vg = [g for _, g, _ in vl]
+    ok((2589, 2, 'vendor') in vl and vg == sorted(vg) and vg[0] == 1 and vl[0][0] != 2589,
+       f'Rec says Vendor: still listed, after the Auction items, flagged vendor (same advice as the tooltip): {vl}')
+    ok(L('(function() for _, G in ipairs(AF_NS.Trade.BuildQueue()) do if G.id == 2589 then return G.price >= math.ceil(AF_NS.UI.Vendor(2589) / 0.95) end end end)()'),
+       'Rec says Vendor: still prefilled, never below the vendor price after the cut')
     X('AF_NS.Core.Recommend = RealRec')
+    # Tools, quest items and conjured items never listed; gear and recipes are.
+    X("""SavedBag = Bag
+      Bag = { { itemID = 7005, stackCount = 1, isBound = false }, { itemID = 2901, stackCount = 1, isBound = false },
+              { itemID = 6256, stackCount = 1, isBound = false }, { itemID = 6219, stackCount = 1, isBound = false },
+              { itemID = 10498, stackCount = 1, isBound = false }, { itemID = 5350, stackCount = 20, isBound = false },
+              { itemID = 990777, stackCount = 1, isBound = false }, { itemID = 2589, stackCount = 2, isBound = false },
+              { itemID = 990778, stackCount = 1, isBound = false }, { itemID = 990779, stackCount = 1, isBound = false } }
+      RealInst = C_Item.GetItemInfoInstant
+      C_Item.GetItemInfoInstant = function(id)
+        if id == 990777 then return id, "Quest", "", "", 134400, 12, 0 end
+        if id == 990778 then return id, "Armor", "", "INVTYPE_CHEST", 134400, 4, 2 end
+        if id == 990779 then return id, "Recipe", "", "", 134400, 9, 2 end
+        return RealInst(id) end
+      TQ = AF_NS.Trade.BuildQueue()
+      C_Item.GetItemInfoInstant = RealInst; Bag = SavedBag""")
+    tq = [L(f'TQ[{i}].id') for i in range(1, int(L('#TQ')) + 1)]
+    ok(not any(t in tq for t in (7005, 2901, 6256, 6219, 10498)), f'profession tools and fishing poles never listed (Skinning Knife, Mining Pick, Fishing Pole, Arclight Spanner, Micro-Adjustor): {tq}')
+    ok(5350 not in tq and 990777 not in tq, f'conjured and quest items never listed: {tq}')
+    ok(2589 in tq and 990778 in tq and 990779 in tq, f'trade goods, gear and recipes listed (gear/recipes with no data at the bottom): {tq}')
+    ok(L('AF_NoSell[7005] == "tool" and AF_NoSell[6948] == "tool" and AF_NoSell[5350] == "conjured" and AF_NoSell[2589] == nil'),
+       'AF_NoSell from the game data: tools, the hearthstone, conjured items; trade goods not')
     # Not a steady seller with the cheapest listing far above what buyers paid: priced at what buyers paid.
     X("""RealSt, RealSP = AF_NS.Core.Status, AF_NS.Core.SellPrice
       AF_NS.Core.Status = function() return "slow" end
@@ -615,8 +641,25 @@ if real:
     q = L('AF_NS.Trade.SellQueue()')
     ids = [q[i].id for i in range(1, len(q) + 1)] if q else []
     ok(2589 in ids and 14047 in ids, f'sell queue has the AH items from the bags: {ids}')
-    ok(999999 not in ids and 424242424 not in ids, 'bound items and items with no auction data left out')
-    ok(10620 not in ids, 'items worth more at the vendor left out')
+    ok(999999 not in ids, 'bound items left out')
+    ok(10620 in ids and 424242424 in ids and ids.index(10620) < ids.index(424242424) and ids[-1] == 424242424,
+       f'Vendor-advised items listed, then items with no auction data at the bottom: {ids}')
+    nd = [q[i] for i in range(1, len(q) + 1) if q[i].id == 424242424][0]
+    ok(nd.group == 3 and nd.flag == 'nodata' and nd.info is None, f'no auction data: group 3, flagged nodata ({nd.group}, {nd.flag})')
+    vd = [q[i] for i in range(1, len(q) + 1) if q[i].id == 10620][0]
+    ok(vd.group == 2 and vd.flag == 'vendor' and vd.price >= L('math.ceil(AF_NS.UI.Vendor(10620) / 0.95)'),
+       f'worth more at the vendor: group 2, flagged vendor, prefilled at or above the vendor price after the cut ({vd.price})')
+    X('AF_NS.Trade.SelectSell(1); AF_NS.Trade.DrawSell()')
+    cells = {L(f'AuctionForeverSellPanel.QueueRows[{i}].id'): str(L(f'AuctionForeverSellPanel.QueueRows[{i}].Cells[3]:GetText()')) for i in range(1, min(len(ids), 14) + 1)}
+    ok(cells.get(10620) == '|cff9d9d9dVendor|r' and cells.get(424242424) == '|cff9d9d9dno data|r',
+       f'price cell: gray "Vendor" for vendor-advised rows, gray "no data" for no-data rows: {cells}')
+    X('AF_NS.Trade.SelectSellId(10620)')
+    h = str(L('AuctionForeverSellPanel.Hint:GetText()'))
+    ok('Vendoring pays more or about the same' in h, 'vendor row selected: the hint says vendoring pays more or about the same: ' + h)
+    X('AF_NS.Trade.SelectSellId(424242424)')
+    h = str(L('AuctionForeverSellPanel.Hint:GetText()'))
+    ok('No auction data' in h and 'No auction data yet' in str(L('AuctionForeverSellPanel.Info:GetText()')), 'no-data row selected: says no auction data: ' + h)
+    X('AF_NS.Trade.SelectSell(1)')
     lin = [q[i] for i in range(1, len(q) + 1) if q[i].id == 2589]
     ok(lin and lin[0].count == 25, f'stacks of the same item grouped: {lin and lin[0].count}')
     ok(L('LookupSpy[1] == nil or #LookupSpy[1].ids == 1'), 'opening AF Sell checks at most the selected item, not the whole queue')
@@ -700,8 +743,9 @@ if real:
     # Price column: each row's suggested price each; the selected row shows the price in the boxes (your edit).
     X('AF_NS.Trade.SelectSell(1); AF_NS.Trade.DrawSell()')
     pc = [(str(L(f'AuctionForeverSellPanel.QueueRows[{i}].Cells[3] and AuctionForeverSellPanel.QueueRows[{i}].Cells[3]:GetText()')),
-           str(L(f'AF_NS.Core.MoneyColor(AF_NS.Trade.SellQueue()[{i}].price)'))) for i in range(1, min(n, 14) + 1)]
-    ok(n >= 2 and all(a == b for a, b in pc), f'AF Sell list: a Price column with each row suggested price each: {pc[:3]}')
+           str(L(f'AF_NS.Core.MoneyColor(AF_NS.Trade.SellQueue()[{i}].price)'))) for i in range(1, min(n, 14) + 1)
+          if L(f'AF_NS.Trade.SellQueue()[{i}].group') == 1]
+    ok(len(pc) >= 2 and all(a == b for a, b in pc), f'AF Sell list: a Price column with each Auction row suggested price each: {pc[:3]}')
     X("""AuctionForeverSellPanel.Gold:SetText("7"); AuctionForeverSellPanel.Silver:SetText("0"); AuctionForeverSellPanel.Copper:SetText("3")
       AuctionForeverSellPanel.Copper:GetScript("OnTextChanged")(AuctionForeverSellPanel.Copper, true)""")
     ok(plain(L('AuctionForeverSellPanel.QueueRows[1].Cells[3]:GetText()')) == '7g 00s 03c'
@@ -2325,7 +2369,8 @@ ok(L('AF_NS.Bags.Status(990647, false) == nil') and L('AF_NS.Bags.Status(990647,
 X("""C_Container.GetContainerNumSlots = function(b) return b == 0 and 1 or 0 end
   C_Container.GetContainerItemInfo = function(b, sl) if b == 0 and sl == 1 then return { itemID = 990647, stackCount = 5, hyperlink = "|Hitem:990647::::::::25:::::|h", isBound = false } end end
   UQ = AF_NS.Trade.BuildQueue()""")
-ok(L('#UQ') == 0, 'AF Sell: an item with an unknown vendor price waits (not judged against a vendor price of 0)')
+ok(L('#UQ') == 1 and L('UQ[1].group') == 3 and L('UQ[1].flag') == 'novendor',
+   'AF Sell: an item with an unknown vendor price is listed at the bottom, flagged (not judged against a vendor price of 0)')
 X('C_Item.GetItemInfo = UVSaved.gi; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; UQ = AF_NS.Trade.BuildQueue()')
 ok(L('AF_NS.UI.VendorKnown(990647)') == 5 and L('AF_NS.Bags.Status(990647, false)') is not None,
    'once the game knows the item, its own vendor price is used and the bag icon is decided')
@@ -2357,14 +2402,14 @@ X("""AgSaved = { gi = C_Item.GetItemInfo, CC = C_Container.GetContainerItemInfo,
     { itemID = 990802, stackCount = 1, hyperlink = "|Hitem:990802::|h", isBound = false } }
   C_Container.GetContainerNumSlots = function(b) return b == 0 and #BagItems or 0 end
   C_Container.GetContainerItemInfo = function(b, sl) if b == 0 then return BagItems[sl] end end
-  function AgQueue() local Q = AF_NS.Trade.BuildQueue(); local T = {} for _, G in ipairs(Q) do T[G.id] = true end return T end""")
+  function AgQueue() local Q = AF_NS.Trade.BuildQueue(); local T = {} for _, G in ipairs(Q) do T[G.id] = G.group end return T end""")
 def rec(id, bound='false'):
     r = [list(x.values()) for x in L(f'AF_NS.UI.TooltipLines({id}, nil, nil, nil, {bound})').values()]
     return plain(str(r[3][1]))
 r1, r2 = rec(990801), rec(990802)
 q = L('AgQueue()')
-ok(r1.startswith('Vendor  +') and r2.startswith('Auction  +') and not q[990801] and q[990802],
-   f'AH after the cut a bit over vendor, not a steady seller: Rec Vendor (with the + delta), not in AF Sell; well over: Auction, in AF Sell ({r1} / {r2})')
+ok(r1.startswith('Vendor  +') and r2.startswith('Auction  +') and q[990801] == 2 and q[990802] == 1,
+   f'AH after the cut a bit over vendor, not a steady seller: Rec Vendor (with the + delta), AF Sell lists it with the vendor items; well over: Auction, with the Auction items ({r1} / {r2})')
 ok(L('AF_NS.Bags.Status(990801, false)') == 'Vendor' and L('AF_NS.Bags.Status(990802, false)') == 'Auction', 'bag icons: the same answers')
 X('AuctionForeverDB.keep = { [990802] = true }; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
 ok(rec(990802) == 'Keep (keep list)' and not L('AgQueue()')[990802] and L('AF_NS.Bags.Status(990802, false)') == '',

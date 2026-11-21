@@ -774,14 +774,27 @@ function T.SuggestFor(id, Count)
 	return G
 end
 
--- Items in the bags that sell on the auction house, grouped by item, most valuable first.
+-- Can this bag item go on the auction house at all? Not soulbound, not a quest item, and not in AF_NoSell
+-- (Recipes.lua, from the game data: profession tools such as the Skinning Knife or Mining Pick, fishing poles,
+-- enchanting rods, the hearthstone, conjured items).
+function T.Postable(id, Bound)
+	if Bound then return false end
+	if AF_NoSell and AF_NoSell[id] then return false end
+	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
+	return ClassID ~= 12
+end
+
+-- Every bag item that can be posted, grouped by item. Order: what the tooltip's Rec line (UI.SellAdvice, also the
+-- bag icons) says "Auction" for, most valuable first; then what it says "Vendor" for (listed, marked: vendoring pays
+-- more or about the same); then items with no auction data yet (or whose vendor price isn't loaded) at the bottom.
+-- G.group = 1 / 2 / 3 in that order. Your keep list stays out.
 function T.BuildQueue()
 	local Groups, Order = {}, {}
 	for Bag = 0, LAST_BAG do
 		for Slot = 1, C_Container.GetContainerNumSlots(Bag) or 0 do
 			local Info = C_Container.GetContainerItemInfo(Bag, Slot)
 			local id = Info and Info.itemID
-			if id and not Info.isBound then
+			if id and T.Postable(id, Info.isBound) then
 				local K = Core.LinkKey(Info.hyperlink, id) -- (suffix versions apart: each its own market)
 				local G = Groups[K]
 				if not G then G = { id = id, key = K, count = 0, locs = {} }; Groups[K] = G; Order[#Order + 1] = G end
@@ -794,16 +807,31 @@ function T.BuildQueue()
 	for _, G in ipairs(Order) do
 		local I = Core.Info(G.key or G.id)
 		G.vendor = UI().VendorKnown(G.id)
-		-- The item tooltip's Rec line (UI.SellAdvice, also the bag icons): only what it says "Auction" for. Vendor
-		-- price not known yet (item not loaded): left out until it is, not judged against a vendor price of 0.
-		if I and G.vendor and UI().SellAdvice(G.id, G.key, false) == "Auction" then
-			G.info = I
-			Suggest(G)
-			G.value = G.price * G.count
+		local Rec = UI().SellAdvice(G.id, G.key, false)
+		if Rec ~= "Keep" then
+			G.rec = Rec
+			if I and G.vendor and Rec == "Auction" then G.group = 1
+			elseif I and G.vendor and Rec == "Vendor" then G.group = 2
+			else G.group = 3 end
+			if I then
+				G.info = I
+				Suggest(G)
+			else
+				-- No auction data: the vendor price after the cut when it's known, else no price.
+				G.held, G.cost = Core.Holding(SaveDB(), G.id)
+				G.price = (G.vendor or 0) > 0 and Floor(G) or nil
+				G.durIdx, G.qty = 1, G.count
+			end
+			if G.group == 2 then G.flag = "vendor"
+			elseif G.group == 3 then G.flag = I and "novendor" or "nodata" end
+			G.value = (G.price or 0) * G.count
 			Q[#Q + 1] = G
 		end
 	end
-	table.sort(Q, function(a, b) return a.value > b.value end)
+	table.sort(Q, function(a, b)
+		if a.group ~= b.group then return a.group < b.group end
+		return a.value > b.value
+	end)
 	return Q
 end
 
@@ -880,9 +908,13 @@ function T.DrawSell()
 			R.Icon:SetTexture(UI().Icon(G.id))
 			R.Cells[1]:SetText(NameText(G.key or G.id, true))
 			R.Cells[2]:SetText("x" .. G.count)
-			-- (the selected row: the price in the boxes, so your edit shows here too)
-			local Each = (i + Off == Sell.idx) and T.SellPrice() or G.price
-			R.Cells[3]:SetText(Each and Core.MoneyColor(Each) or "-")
+			-- (the selected row: the price in the boxes, so your edit shows here too; other rows the AF suggestion,
+			-- or a gray "Vendor" (the Rec line says vendor it) / "no data" (no auction data yet))
+			local Picked = i + Off == Sell.idx
+			local Each = Picked and T.SellPrice() or G.price
+			if not Picked and G.group == 2 then R.Cells[3]:SetText("|cff9d9d9dVendor|r")
+			elseif not Picked and not G.info then R.Cells[3]:SetText("|cff9d9d9dno data|r")
+			else R.Cells[3]:SetText(Each and Core.MoneyColor(Each) or "-") end
 			R.Sel:SetShown(i + Off == Sell.idx)
 		end
 	end
@@ -897,8 +929,9 @@ function T.DrawSell()
 	end
 	local I = G.info
 	SellP.Name:SetText(NameText(G.key or G.id))
-	local Line = string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
+	local Line = I and string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
 		G.count, Core.MoneyColor(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
+		or string.format("In your bags: %d     No auction data yet", G.count)
 	if G.cost then
 		local Price = T.SellPrice() or G.price
 		local Each = math.floor(Price * (1 - Core.Cut)) - G.cost
@@ -910,6 +943,9 @@ function T.DrawSell()
 		flooding = "|cffffd100More is being posted than sold: priced 1c under the cheapest; prices may keep falling.|r",
 		market = "|cffffd100Not a steady seller: priced at what buyers have recently paid, not under the (higher) cheapest listing.|r",
 		cutloss = "|cffff4040The market has stayed under what you paid (all day, or it expired twice): priced at the market to cut the loss. Or keep it and wait.|r",
+		vendor = "|cff9d9d9dRec: Vendor. Vendoring pays more or about the same. Prefilled anyway, never below the vendor price after the cut.|r",
+		nodata = "|cff9d9d9dNo auction data for this item yet: prefilled at the vendor price after the cut (if known). Refresh prices to check the auction house.|r",
+		novendor = "|cffffd100Vendor price not loaded yet: check this is more than the vendor pays before posting.|r",
 	}
 	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: 1c under the cheapest listing.")
 	SellP.Info:SetText(Line)
