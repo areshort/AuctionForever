@@ -2262,6 +2262,10 @@ ok(L('SfxFull[3]') is False and L('SfxGone') == 0, f"full scan without versions:
 X("""AuctionForeverData.sfx, AuctionForeverData.info[990201], AuctionForeverDB.fresh = SfxSaved.sfx, SfxSaved.info, SfxSaved.fresh
   C_Container.GetContainerItemInfo, C_Container.GetContainerNumSlots = SfxSaved.CC, SfxSaved.NS
   AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+# Volatile flips are marked in the AF Buy detail, with the range they're bought and resold within.
+X('VE = { id = 2589, info = { lowRange24 = { 400, 700, 1000 }, sellThrough = 1, perHour = 10 }, flip = { buyQty = 10, qty = 10, buyUpTo = 500, cost = 5000, resell = 700, profit = 1450, hours = 12, chance = 1, volatile = true } }')
+pt = plain(str(L('AF_NS.Trade.PaneText(VE)')))
+ok('Volatile' in pt and '4s 00c to 10s 00c' in pt and '(7s 00c)' in pt, 'AF Buy detail says volatile: ' + pt.replace(chr(10), ' / '))
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

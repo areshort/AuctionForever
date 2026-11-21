@@ -393,5 +393,20 @@ ok('-' not in str(L(f"{C}.MoneyColor(1194)")), 'positive amounts have no minus')
 X('''FDB = { buys = { { 1795164538, 248687, 40, 4937, 54.575 }, { 1795164671, 2319, 43, 3999, 35 } },
  mysales = { { 1795208902, 248687, 30, 2850, "sold" }, { 1795208902, 2319, 128, 12800, "sold" }, { 1795218499, 248687, 10, 1000, "sold" } } }''')
 ok(L(f"{C}.FlipResults(FDB, 1795220000, 7).profit") == -1194, 'flip results: real buys and sales come to -11s 94c')
+# ---- Volatile items (crates): the lowest price's 24 h range (10th/50th/90th percentile) is 1.6x or wider.
+# Range 4s-10s (2.5x): buy only up to 4s + 25% of 6s = 5s 50c; resell at no more than the middle, 7s.
+X(f"VI = MakeItem({{ sellThrough = 1, lowRange24 = {{ 400, 700, 1000 }} }}); VO = {C}.FlipOptions(VI, 500000)")
+ok(L(f"{C}.Volatile(VI)") and L(f"{C}.VolatileBuyMax(VI)") == 550, f"range 4s-10s: volatile, buy up to {L(f'{C}.VolatileBuyMax(VI)')}")
+ok(L('#VO') == 1 and L('VO[1].buyUpTo') == 500 and L('VO[1].resell') == 700 and L('VO[1].volatile') == True,
+   f"volatile: only the listings near the 24 h low, resold at the range's middle ({L('#VO')} options, resell {L('VO[1] and VO[1].resell')})")
+# The same item when its cheapest listing is already up the range (the Journeyman Ore crate: bought at 1s 23c
+# when the day's lows ran 50c-1s 80c, expected +55c, lost 28c each): no flip.
+X(f"VU = {C}.FlipOptions(MakeItem({{ sellThrough = 1, lowRange24 = {{ 400, 700, 1000 }}, ladder = {{ {{600, 10}}, {{950, 30}} }} }}), 500000)")
+ok(L('#VU') == 0, f"volatile, cheapest listing above the bottom quarter of its range: not a flip ({L('#VU')} options)")
+X(f"VC = {C}.FlipOptions(MakeItem({{ sellThrough = 1, lowRange24 = {{ 900, 1000, 1100 }} }}), 500000)")
+ok(not L(f"{C}.Volatile(MakeItem({{ lowRange24 = {{ 900, 1000, 1100 }} }}))") and L('VC[1].resell') == 949 and L('VC[1].volatile') is None
+   and not L(f"{C}.Volatile(MakeItem())"), 'a calm range (or none yet): no volatile rule, resale as before')
+ok(L(f"{C}.Resale(VI, 10, 6000) == nil") and L(f"{C}.Resale(VI, 10, 5000) ~= nil") and L(f"{C}.Resale(VI, 10, 5000).resell") == 700,
+   'live price check: a volatile item at more than its buy limit is cancelled; at the limit it resells at the middle')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

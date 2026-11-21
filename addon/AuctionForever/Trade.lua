@@ -358,8 +358,8 @@ function T.DrawBuy()
 				Status = T.CraftStatus(E)
 			elseif Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
-			elseif E.plan and F == E.flip then Status = F.slow and "|cff1eff00in plan|r |cffffd100(slow)|r" or "|cff1eff00in plan|r"
-			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") end
+			elseif E.plan and F == E.flip then Status = "|cff1eff00in plan|r" .. (F.slow and " |cffffd100(slow)|r" or "") .. (F.volatile and " |cffff8040(volatile)|r" or "")
+			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") .. (F.volatile and " |cffff8040(volatile)|r" or "") end
 			R.Cells[7]:SetText(Status)
 			if Need then R.Cells[1]:SetText("|cff808080" .. UI().ShortName((UI().ItemName(E.id))) .. "|r" .. UI().CraftedMark(E.id)) end -- not affordable yet: name greyed
 			R.Sel:SetShown(i + Off == Buy.sel)
@@ -1143,6 +1143,11 @@ function T.PaneText(E)
 		local Need = ShownNeed(E)
 		local Out = NameText(E.id) .. "\n" .. TierLine(F) .. (F.vendor and "" or (", " .. SellsText(E))) -- a vendor sale is sure
 		if F.slow then Out = Out .. "\n|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r" end
+		if F.volatile then
+			local R = E.info and E.info.lowRange24 or {}
+			Out = Out .. "\n|cffff8040Volatile: its lowest price ranged " .. Money(R[1] or 0) .. " to " .. Money(R[3] or 0)
+				.. " over 24 h. Bought only near the bottom, resold at no more than the middle (" .. Money(R[2] or 0) .. ").|r"
+		end
 		if Need then
 			Out = Out .. "\n" .. (F.vendor and ("Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Money(Core.MinKeep) .. " always kept).")
 				or ("A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Money(Core.MinKeep) .. "; one item may use only part of it)."))

@@ -126,6 +126,12 @@ nl = C.item_numbers('96', sl, {}, 1_000_000 + 23 * 3600)
 ok(nl['lows'] == [179, 178, 177] and nl['lowHi24'] == 200, f"lows {nl['lows']}, highest lowest over 24 h {nl['lowHi24']}")
 nl2 = C.item_numbers('96', {'hourly': {'96': rows[:5]}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 4 * 3600)
 ok(nl2['lowHi24'] is None, 'under a day of hours: no 24 h figure')
+ok(nl['lowRange24'] == [179, 189, 198], f"24 h range of the lowest price: 10th/50th/90th percentile ({nl['lowRange24']})")
+rows3 = [[1_000_000 + i * 3600, 100, 10, 0, 0, 0, 1.0, 0] for i in range(12)]
+rows3[5][1] = 5  # one stray cheap listing
+nl3 = C.item_numbers('96', {'hourly': {'96': rows3}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 11 * 3600)
+ok(nl3['lowRange24'] == [100, 100, 100] and nl2['lowRange24'] is None,
+   f"one stray cheap listing doesn't widen the range ({nl3['lowRange24']}); under 12 hours: none ({nl2['lowRange24']})")
 # ---- History counted the old way (cancels as sales) is dropped once, then kept.
 d2 = tempfile.mkdtemp()
 st4, out4 = os.path.join(d2, 's.gz'), os.path.join(d2, 'o.lua')

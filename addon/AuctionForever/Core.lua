@@ -621,11 +621,31 @@ end
 local function ResaleSpeed(I)
 	return (I.perHour or 0) * Core.PlanRateShare
 end
--- Highest resale price the data backs: what buyers paid in the last day and over the longer window (both).
+-- Volatile items: the lowest price's 24 h range (lowRange24 = its 10th, 50th, 90th percentile, from the cloud data)
+-- spans VolatileRange or more (90th / 10th). On real data 31% of watched items do (crates swing 5-10x in a day).
+-- Backtested on 26 h of hourly lows: for these, buying above the bottom quarter of the range and waiting 6 h left the
+-- lowest price at 0.975 of the buy (median; 93% didn't make 5%), against 1.00 (82%) when bought in the bottom
+-- quarter. So they're flipped only at up to VolatileBuyShare up the range, and resold at no more than the range's
+-- middle (the 24 h median of the lowest price), not at what buyers paid at its peaks.
+Core.VolatileRange, Core.VolatileBuyShare = 1.6, 0.25
+function Core.Volatile(I)
+	local R = I and I.lowRange24
+	if type(R) ~= "table" or not R[1] or not R[3] or R[1] <= 0 then return false end
+	return R[3] / R[1] >= Core.VolatileRange
+end
+-- Highest unit price a volatile item may be bought at (nil: not volatile, no limit).
+function Core.VolatileBuyMax(I)
+	if not Core.Volatile(I) then return nil end
+	local R = I.lowRange24
+	return math.floor(R[1] + Core.VolatileBuyShare * (R[3] - R[1]))
+end
+-- Highest resale price the data backs: what buyers paid in the last day and over the longer window (both); for a
+-- volatile item also no more than the 24 h median of the lowest price.
 function Core.ResaleCap(I)
 	local A, B = I.med24 or I.med, I.medAll or I.med
-	if A and B then return math.min(A, B) end
-	return A or B
+	local Cap = (A and B) and math.min(A, B) or A or B
+	if Cap and Core.Volatile(I) and I.lowRange24[2] then Cap = math.min(Cap, I.lowRange24[2]) end
+	return Cap
 end
 
 -- Reselling Qty bought for Cost, with Rest still listed after the purchase: 1c under what's left (you must be the
@@ -652,6 +672,8 @@ end
 function Core.Resale(I, Qty, Cost)
 	local St = I and Core.FlipStatus(I)
 	if St ~= "good" and St ~= "slow" then return nil end
+	local VMax = Core.VolatileBuyMax(I)
+	if VMax and Qty > 0 and Cost / Qty > VMax then return nil end -- volatile: not near its 24 h low any more
 	local Rest, Left = {}, Qty
 	for _, Step in ipairs(I.ladder or {}) do
 		local Q = Step[2]
@@ -709,11 +731,13 @@ function Core.FlipOptions(I, Cap, MinProfit, Relax)
 	for _, Step in ipairs(Ladder) do Known = Known + Step[2] end
 	local MoreAbove = (I.qty or 0) > Known
 	local J = setmetatable({ perHour = ResaleSpeed(I) }, { __index = I })
+	local VMax = Core.VolatileBuyMax(I) -- volatile: only listings near the bottom of its 24 h range
 	-- Never more than the cautious resale speed sells in FlipMaxHours, counting what you already hold of it.
 	local MaxQty = math.floor(J.perHour * Core.FlipMaxHours) - (I.held or 0)
 	local Qty, Cost = 0, 0
 	for Level = 1, #Ladder do
 		local P, Q = Ladder[Level][1], Ladder[Level][2]
+		if VMax and P > VMax then break end
 		local Take = math.min(Q, math.floor((Cap - Cost) / P), MaxQty - Qty)
 		if Take <= 0 then break end
 		Qty, Cost = Qty + Take, Cost + Take * P
@@ -726,7 +750,7 @@ function Core.FlipOptions(I, Cap, MinProfit, Relax)
 		local O = Evaluate(I, J, Qty, Cost, Rest)
 		local Need = Relax and math.max(0, math.ceil((Core.FlipReturn(St) - Relax) * Cost - 1e-9)) or Core.FlipNeed(Cost, MinProfit, St)
 		if O and O.profit >= Need then
-			O.buyUpTo, O.slow = P, St == "slow" or nil
+			O.buyUpTo, O.slow, O.volatile = P, St == "slow" or nil, VMax and true or nil
 			Out[#Out + 1] = O
 		end
 		if Take < Q then break end
