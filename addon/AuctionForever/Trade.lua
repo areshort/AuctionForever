@@ -224,11 +224,12 @@ T.FitCols = FitCols
 -- The details panel under the table (the selected row), pixel layout. The table starts at PANE_TOP; the panel ends
 -- above the Next button (at -420), 4 below the table. Panel, top down: 4 padding, the header and evidence lines (14
 -- each), 2, the column headers (14), one 20 px line per source line (its Buy button 18 tall), 4, three summary
--- lines (14 each), 2: 96 px with 2 text lines, + 20 a source line. With the table at 5 rows (110 px), 5 lines fit.
+-- lines (14 each), 2: 96 px with 2 text lines, + 20 a slot (a source line; an AH line takes 2, its Buy button under it). The table shrinks to 3 rows (66 px) when
+-- the panel needs the room: then 7 slots fit.
 -- (Over the table: the summary lines at -8 / -23 / -38, the filter bar at -58, the column headers at -82.)
 local FILTER_Y, HEAD_Y = -58, -82
 local PANE_TOP, PANE_SPACE = -100, 316 -- the table's top, and the height from there to just above the buttons
-local PANE_TEXT_H, PANE_LINE_H, PANE_MIN_ROWS, PANE_MAX_LINES = 14, 20, 5, 8
+local PANE_TEXT_H, PANE_LINE_H, PANE_MIN_ROWS, PANE_MAX_LINES = 14, 20, 3, 8
 local PANE_BASE = { 40, 190, 80, 110, 60, 100 }
 local PANE_MIN = { 30, 110, 60, 80, 55, 75 }
 local PANE_COLS = { 40, 190, 80, 110, 60, 100 } -- the current widths (T.LayoutBuy sets them)

@@ -793,11 +793,11 @@ if real:
     ok(L('GetMoney() - CF.cost') >= 5000 and L('CF.cost') == L('CF.mats[1].cost + CF.mats[2].cost + CF.vendorCost'),
        f'mats cost (AH and vendor) leaves at least 50s: {L("GetMoney() - CF.cost")}')
     ok(not L('AuctionForeverBuyPanel.Buy:IsShown()') and not L('AuctionForeverBuyPanel.Buy:IsEnabled()'), 'a craft row: no single Buy button (each mat has its own)')
-    # The table shrinks to make room for the panel (never under 5 rows) and the selected row stays in view.
+    # The table shrinks to make room for the panel (never under 3 rows) and the selected row stays in view.
     vis = L('AF_NS.Trade.BuyVisible()')
     shown = sum(1 for r in range(1, 15) if L(f'AuctionForeverBuyPanel.Rows[{r}]:IsShown()'))
     pt = L('AuctionForeverBuyPanel.Pane._points[#AuctionForeverBuyPanel.Pane._points][5]')
-    ok(5 <= vis < 14 and vis == L('AF_NS.Trade.PaneModel(CE).rows') and pt == -100 - vis * 22 - 4
+    ok(3 <= vis < 14 and vis == L('AF_NS.Trade.PaneModel(CE).rows') and pt == -100 - vis * 22 - 4
        and L('AF_NS.Trade.PaneModel(CE).height') <= 316 - 4 - vis * 22, f'table shrinks to {vis} rows, panel under it at {pt} ({shown} rows shown)')
     # Each AH mat has its own Buy: exactly its quantity, its own price check and Confirm.
     X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[1].Btn)')
@@ -870,6 +870,9 @@ if real:
     pl = pane()
     raw = [str(L(f'AuctionForeverBuyPanel.Lines[{i}].Cells[3]:GetText()')) for i in (2, 3)]
     X('AF_NS.Trade.PaneLines = SavePL2; AF_NS.Trade.DrawBuy()')
+    full = pane()
+    ok([r[2] for r in full] == ['AH', 'AH', 'Vendor', 'Owned', 'Bank'] and L('AF_NS.Trade.BuyVisible()') >= 3,
+       f'2 AH mats (with Buy lines), vendor, owned and bank all fit: the table shrinks (to {L("AF_NS.Trade.BuyVisible()")} rows) instead of "+N more"')
     pl = [pl[0], None, None] + pl[1:]
     ok([r[2] for r in pl if r] == ['AH', 'Owned', 'Bank'] and pl[3][9] == 'you have 4' and pl[4][9] == 'you have 3' and pl[3][3] == '-' and pl[3][5] == '-'
        and all('UI-CheckBox-Check' in r and ':30:255:0|t' in r for r in raw) and raw[0].endswith('|cff1eff00Owned|r') and raw[1].endswith('|cff1eff00Bank|r'),
@@ -886,16 +889,17 @@ if real:
       AF_NS.Trade.PaneLines = SavePL""")
     k1 = [L(f'PM1.lines[{i}].kind') for i in range(1, L('#PM1.lines') + 1)]
     k2 = [L(f'PM2.lines[{i}].kind') for i in range(1, L('#PM2.lines') + 1)]
-    # (an AH line takes two slots: the line and its Buy button under it; 5 slots fit with the table at 5 rows)
-    X('''PM3L = { { kind = "AH", id = 1, qty = 1, cost = 1, upTo = 1, bought = 0 }, { kind = "Vendor", id = 2, qty = 1, cost = 1, upTo = 1 },
+    # (an AH line takes two slots: the line and its Buy button under it; 7 slots fit with the table at 3 rows)
+    X('''PM3L = { { kind = "AH", id = 1, qty = 1, cost = 1, upTo = 1, bought = 0 }, { kind = "AH", id = 6, qty = 1, cost = 1, upTo = 1, bought = 0 },
+        { kind = "Vendor", id = 2, qty = 1, cost = 1, upTo = 1 },
         { kind = "Owned", id = 3, qty = 1 }, { kind = "Bank", id = 4, qty = 1 }, { kind = "Owned", id = 5, qty = 1 } }
       AF_NS.Trade.PaneLines = function() return PM3L end
       PM3 = AF_NS.Trade.PaneModel(AF_NS.Trade.SelectedBuy())
       AF_NS.Trade.PaneLines = SavePL''')
     k3 = [L(f'PM3.lines[{i}].kind') for i in range(1, L('#PM3.lines') + 1)]
-    ok(L('PM1.fit') == 5 and k1 == ['AH'] * 2 + ['more'] and L('PM1.lines[3].n') == 3 and L('PM1.slots') == 5 and L('PM1.rows') == 5
-       and k2 == ['AH'] * 2 + ['more'] and L('PM2.lines[3].n') == 7 and L('PM2.rows') == 5
-       and k3 == ['AH', 'Vendor', 'held'] and L('#PM3.lines[3].parts') == 3 and L('PM3.slots') == 4,
+    ok(L('PM1.fit') == 7 and k1 == ['AH'] * 3 + ['more'] and L('PM1.lines[4].n') == 2 and L('PM1.slots') == 7 and L('PM1.rows') == 3
+       and k2 == ['AH'] * 3 + ['more'] and L('PM2.lines[4].n') == 6 and L('PM2.rows') == 3
+       and k3 == ['AH', 'AH', 'Vendor', 'held'] and L('#PM3.lines[4].parts') == 3 and L('PM3.slots') == 6,
        f'overflow (AH lines take 2 slots): Owned/Bank collapse first ({k3}), then +N more ({k1}, {k2})')
     # A product too cheap for any craft to pay: not listed; with Show all, one craft greyed "over target" with each
     # mat's target (under today's listing), no Buy.
