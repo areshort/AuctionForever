@@ -483,12 +483,23 @@ function L.SpellCooldownLeft(Spell)
 	end)
 	return Ok and Left or 0
 end
--- Units of each item in your bags (backpack and four bags), plus a signature that changes when they do.
+-- The last bag you carry: the backpack is 0, the four bags 1-4, then the reagent (crafting) bag, 5 on Forever
+-- (NUM_TOTAL_EQUIPPED_BAG_SLOTS = NUM_BAG_SLOTS + NUM_REAGENTBAG_SLOTS; Enum.BagIndex.ReagentBag). C_Container
+-- reads it like any other bag.
+function L.LastBag()
+	local N = rawget(_G, "NUM_TOTAL_EQUIPPED_BAG_SLOTS")
+	if type(N) == "number" and N >= 4 then return N end
+	local E = rawget(_G, "Enum")
+	local R = type(E) == "table" and type(E.BagIndex) == "table" and E.BagIndex.ReagentBag
+	return type(R) == "number" and R or 4
+end
+-- Units of each item in your bags (backpack, four bags and the reagent bag), plus a signature that changes when
+-- they do.
 function L.BagCounts()
 	local Out, Sig = {}, 0
 	local C = rawget(_G, "C_Container")
 	if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return Out, Sig end
-	for Bag = 0, 4 do
+	for Bag = 0, L.LastBag() do
 		for Slot = 1, C.GetContainerNumSlots(Bag) or 0 do
 			local Info = C.GetContainerItemInfo(Bag, Slot)
 			if Info and Info.itemID then
@@ -975,7 +986,7 @@ function L.QuickList()
 	C = { 0 }
 	local NumSlots = C_Container and C_Container.GetContainerNumSlots
 	if NumSlots then
-		for Bag = 0, 4 do
+		for Bag = 0, L.LastBag() do
 			for Slot = 1, NumSlots(Bag) or 0 do
 				local Info = C_Container.GetContainerItemInfo(Bag, Slot)
 				if Info and Info.itemID and not Info.isBound and Core.Info(Info.itemID) then Add(Info.itemID, 15, C) end

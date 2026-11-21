@@ -594,13 +594,14 @@ if real:
       LookupSpy = {}
       Click(AuctionForeverSellTab)""")
     ok(L('AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and AuctionForeverSellTab._selected and not AuctionForeverBuyTab._selected'), 'AF Sell shows its panel only')
-    # AF Sell agrees with the tooltip: an item whose Rec is Vendor is listed after the Auction ones, marked.
+    # AF Sell agrees with the tooltip: an item whose Rec is Vendor is still listed, marked, valued at the vendor price.
     X('RealRec = AF_NS.Core.Recommend; AF_NS.Core.Recommend = function(I, V, P) if I and I.id == 2589 then return "Vendor" end return RealRec(I, V, P) end')
     vq = L('AF_NS.Trade.BuildQueue()')
-    vl = [(vq[i].id, vq[i].group, vq[i].flag) for i in range(1, len(vq) + 1)]
-    vg = [g for _, g, _ in vl]
-    ok((2589, 2, 'vendor') in vl and vg == sorted(vg) and vg[0] == 1 and vl[0][0] != 2589,
-       f'Rec says Vendor: still listed, after the Auction items, flagged vendor (same advice as the tooltip): {vl}')
+    vl = [(vq[i].id, vq[i].group, vq[i].flag, vq[i].value) for i in range(1, len(vq) + 1)]
+    lv = [r for r in vl if r[0] == 2589]
+    ok(lv and lv[0][1] == 2 and lv[0][2] == 'vendor' and lv[0][3] == 25 * L('AF_NS.UI.Vendor(2589)'),
+       f'Rec says Vendor: still listed, flagged vendor, sell value = vendor price x count (same advice as the tooltip): {vl}')
+    ok([r[3] for r in vl] == sorted([r[3] for r in vl], reverse=True), f'one list by sell value, highest first: {vl}')
     ok(L('(function() for _, G in ipairs(AF_NS.Trade.BuildQueue()) do if G.id == 2589 then return G.price >= math.ceil(AF_NS.UI.Vendor(2589) / 0.95) end end end)()'),
        'Rec says Vendor: still prefilled, never below the vendor price after the cut')
     X('AF_NS.Core.Recommend = RealRec')
@@ -625,6 +626,17 @@ if real:
     ok(2589 in tq and 990778 in tq and 990779 in tq, f'trade goods, gear and recipes listed (gear/recipes with no data at the bottom): {tq}')
     ok(L('AF_NoSell[7005] == "tool" and AF_NoSell[6948] == "tool" and AF_NoSell[5350] == "conjured" and AF_NoSell[2589] == nil'),
        'AF_NoSell from the game data: tools, the hearthstone, conjured items; trade goods not')
+    # The reagent (crafting) bag, bag 5 on Forever, is read too: AF Sell and the bag counts (shopping lists' Owned).
+    X("""SavedCC = C_Container
+      C_Container = { GetContainerNumSlots = function(b) return (b == 0 or b == 5) and 1 or 0 end,
+        GetContainerItemInfo = function(b, s)
+          if b == 0 and s == 1 then return { itemID = 14047, stackCount = 2, isBound = false } end
+          if b == 5 and s == 1 then return { itemID = 2589, stackCount = 30, isBound = false } end end }
+      RQ = AF_NS.Trade.BuildQueue(); RB = AF_NS.UI.BagCounts()
+      C_Container = SavedCC""")
+    rq = {L(f'RQ[{i}].id'): L(f'RQ[{i}].count') for i in range(1, int(L('#RQ')) + 1)}
+    ok(L('AF_NS.UI.LastBag()') == 5 and rq.get(2589) == 30 and 14047 in rq and L('RB[2589]') == 30,
+       f'reagent bag (5) read: AF Sell lists its items, bag counts include them ({rq}, counts {L("RB[2589]")})')
     # Not a steady seller with the cheapest listing far above what buyers paid: priced at what buyers paid.
     X("""RealSt, RealSP = AF_NS.Core.Status, AF_NS.Core.SellPrice
       AF_NS.Core.Status = function() return "slow" end
@@ -642,14 +654,15 @@ if real:
     ids = [q[i].id for i in range(1, len(q) + 1)] if q else []
     ok(2589 in ids and 14047 in ids, f'sell queue has the AH items from the bags: {ids}')
     ok(999999 not in ids, 'bound items left out')
-    ok(10620 in ids and 424242424 in ids and ids.index(10620) < ids.index(424242424) and ids[-1] == 424242424,
-       f'Vendor-advised items listed, then items with no auction data at the bottom: {ids}')
+    qv = [q[i].value for i in range(1, len(q) + 1)]
+    ok(10620 in ids and 424242424 in ids and ids[0] == 10620 and ids[-1] == 424242424 and qv == sorted(qv, reverse=True),
+       f'by sell value: the vendor item worth the most (7 x its vendor price) first, no data and no vendor price (0) last: {ids} {qv}')
     nd = [q[i] for i in range(1, len(q) + 1) if q[i].id == 424242424][0]
     ok(nd.group == 3 and nd.flag == 'nodata' and nd.info is None, f'no auction data: group 3, flagged nodata ({nd.group}, {nd.flag})')
     vd = [q[i] for i in range(1, len(q) + 1) if q[i].id == 10620][0]
     ok(vd.group == 2 and vd.flag == 'vendor' and vd.price >= L('math.ceil(AF_NS.UI.Vendor(10620) / 0.95)'),
        f'worth more at the vendor: group 2, flagged vendor, prefilled at or above the vendor price after the cut ({vd.price})')
-    X('AF_NS.Trade.SelectSell(1); AF_NS.Trade.DrawSell()')
+    X('AF_NS.Trade.SelectSellId(14047); AF_NS.Trade.DrawSell()') # (the selected row shows the price in the boxes)
     cells = {L(f'AuctionForeverSellPanel.QueueRows[{i}].id'): str(L(f'AuctionForeverSellPanel.QueueRows[{i}].Cells[3]:GetText()')) for i in range(1, min(len(ids), 14) + 1)}
     ok(cells.get(10620) == '|cff9d9d9dVendor|r' and cells.get(424242424) == '|cff9d9d9dno data|r',
        f'price cell: gray "Vendor" for vendor-advised rows, gray "no data" for no-data rows: {cells}')
@@ -746,10 +759,11 @@ if real:
            str(L(f'AF_NS.Core.MoneyColor(AF_NS.Trade.SellQueue()[{i}].price)'))) for i in range(1, min(n, 14) + 1)
           if L(f'AF_NS.Trade.SellQueue()[{i}].group') == 1]
     ok(len(pc) >= 2 and all(a == b for a, b in pc), f'AF Sell list: a Price column with each Auction row suggested price each: {pc[:3]}')
+    row2 = str(L('AuctionForeverSellPanel.QueueRows[2].Cells[3]:GetText()'))
     X("""AuctionForeverSellPanel.Gold:SetText("7"); AuctionForeverSellPanel.Silver:SetText("0"); AuctionForeverSellPanel.Copper:SetText("3")
       AuctionForeverSellPanel.Copper:GetScript("OnTextChanged")(AuctionForeverSellPanel.Copper, true)""")
     ok(plain(L('AuctionForeverSellPanel.QueueRows[1].Cells[3]:GetText()')) == '7g 00s 03c'
-       and str(L('AuctionForeverSellPanel.QueueRows[2].Cells[3]:GetText()')) == pc[1][1],
+       and str(L('AuctionForeverSellPanel.QueueRows[2].Cells[3]:GetText()')) == row2,
        f"edited price shows on the selected row only: {plain(L('AuctionForeverSellPanel.QueueRows[1].Cells[3]:GetText()'))}")
     ok(L('AuctionForeverSellPanel.QueueRows[1]._width') + 14 + 4 + 16 <= L('AuctionForeverSellPanel.Name._points[1][2]')
        and L('AuctionForeverSellPanel.Name._points[1][2]') + L('AuctionForeverSellPanel.Name._width') <= 790 - 4

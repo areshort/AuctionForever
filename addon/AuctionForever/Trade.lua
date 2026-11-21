@@ -8,7 +8,6 @@ AF.Trade = T
 local STALE = 120           -- seconds: older item data is re-checked when the item is selected
 local ROWS = 14
 local ROW_H = 22
-local LAST_BAG = 4          -- backpack (0) and four bags
 local Status = Enum and Enum.ItemCommodityStatus
 local COMMODITY = Status and Status.Commodity or 2
 local ITEM = Status and Status.Item or 1
@@ -784,13 +783,13 @@ function T.Postable(id, Bound)
 	return ClassID ~= 12
 end
 
--- Every bag item that can be posted, grouped by item. Order: what the tooltip's Rec line (UI.SellAdvice, also the
--- bag icons) says "Auction" for, most valuable first; then what it says "Vendor" for (listed, marked: vendoring pays
--- more or about the same); then items with no auction data yet (or whose vendor price isn't loaded) at the bottom.
--- G.group = 1 / 2 / 3 in that order. Your keep list stays out.
+-- Every bag item that can be posted (reagent bag included), grouped by item, by sell value, highest first.
+-- G.group: 1 the tooltip's Rec line (UI.SellAdvice, also the bag icons) says "Auction"; 2 it says "Vendor"
+-- (listed, marked: vendoring pays more or about the same); 3 no auction data yet (or the vendor price isn't
+-- loaded). Your keep list stays out.
 function T.BuildQueue()
 	local Groups, Order = {}, {}
-	for Bag = 0, LAST_BAG do
+	for Bag = 0, UI().LastBag() do -- (the reagent bag too)
 		for Slot = 1, C_Container.GetContainerNumSlots(Bag) or 0 do
 			local Info = C_Container.GetContainerItemInfo(Bag, Slot)
 			local id = Info and Info.itemID
@@ -824,13 +823,15 @@ function T.BuildQueue()
 			end
 			if G.group == 2 then G.flag = "vendor"
 			elseif G.group == 3 then G.flag = I and "novendor" or "nodata" end
-			G.value = (G.price or 0) * G.count
+			-- Sell value: the stack by its recommended route (AH: the suggested price; vendor and no data: the
+			-- vendor price; not known: 0).
+			G.value = (G.group == 1 and (G.price or 0) or (G.vendor or 0)) * G.count
 			Q[#Q + 1] = G
 		end
 	end
 	table.sort(Q, function(a, b)
-		if a.group ~= b.group then return a.group < b.group end
-		return a.value > b.value
+		if a.value ~= b.value then return a.value > b.value end
+		return a.group < b.group
 	end)
 	return Q
 end

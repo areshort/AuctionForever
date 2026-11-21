@@ -102,7 +102,10 @@ C_Item = {
 }
 TooltipPostCalls = {}
 TooltipDataProcessor = { AddTooltipPostCall = function(_, fn) TooltipPostCalls[#TooltipPostCalls + 1] = fn end }
-Enum = { TooltipDataType = { Item = 0 } }
+Enum = { TooltipDataType = { Item = 0 }, BagIndex = { Backpack = 0, ReagentBag = 5 } }
+-- Forever's FrameXMLBase Constants.lua: backpack 0, bags 1-4, the reagent bag 5.
+NUM_BAG_SLOTS, NUM_REAGENTBAG_SLOTS = 4, 1
+NUM_TOTAL_EQUIPPED_BAG_SLOTS = NUM_BAG_SLOTS + NUM_REAGENTBAG_SLOTS
 TipLines = {}
 function GameTooltip:AddLine(t) table.insert(TipLines, t) end
 function GameTooltip:AddDoubleLine(a, b) table.insert(TipLines, a .. ": " .. b) end
