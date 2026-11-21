@@ -1406,6 +1406,8 @@ ok('50s' in er or 'budget' in er.lower(), 'empty flip message states the budget:
 # Budget plan in AF Buy: best combination for your budget first (buying order), the rest greyed out below.
 X("""AF_NS.UI.FlipRows, AF_NS.UI.FlipTargets = RealFlipRows, RealFlipTargets
   OldOpts, OldFlippable, OldMoney3, OldStatus = AF_NS.Core.FlipOptions, AF_NS.UI.Flippable, GetMoney, AF_NS.Core.Status
+  -- (no vendor buys from the real data here: a live listing under its vendor price would join the planned rows)
+  OldVendorDeal = AF_NS.Core.VendorDeal; AF_NS.Core.VendorDeal = function() return nil end
   Gold = 19981
   GetMoney = function() return Gold end
   local Opts = {
@@ -1612,7 +1614,8 @@ X(f'{SP}.Bar:SetValue(3)')
 ok(L(f'{SP}.QueueRows[1].id') == L('SQ[4].id'), 'AF Sell: dragging the bar scrolls the list')
 X('for k = #SQ, SQn + 1, -1 do SQ[k] = nil end; AF_NS.Trade.DrawSell()')
 # A listing under the vendor price (any item): an AF Buy row with "vendor it", no sales data needed.
-X('''local Row = {}
+X('''AF_NS.Core.VendorDeal = OldVendorDeal
+  local Row = {}
   for i, N in ipairs(AuctionForeverData.fields) do
     if N == "low" then Row[i] = 500 elseif N == "qty" then Row[i] = 4 elseif N == "ladder" then Row[i] = { { 500, 3 }, { 2000, 1 } } end
   end
