@@ -273,9 +273,10 @@ SORTS = {
 	tier = function(E) return T.Return(Shown(E)) end,
 	rate = function(E) return Rate(E) end,
 	name = function(E) return UI().SortName(E.id) end,
-	cost = function(E) return Shown(E).cost end,
+	-- craft rows by one craft (mats a craft, profit a craft, as their cells show); flips by the whole purchase
+	cost = function(E) local F = Shown(E) return F.craft and F.craftCost or F.cost end,
 	resell = function(E) return Shown(E).resell end,
-	profit = function(E) return (E.best or E.flip).profit end,
+	profit = function(E) local F = E.best or E.flip return F.craft and F.craftProfit or F.profit end,
 	status = StatusRank,
 }
 local BUY_NAMES = { "Item", "Tier", "Sell rate", "Buy", "Resell at", "Profit", "Status" }
@@ -312,7 +313,8 @@ function T.DrawBuy()
 			local Status
 			if F.craft then
 				R.Cells[3]:SetText(F.route == "Vendor" and "vendor" or UI().RateText(Rate(E)))
-				R.Cells[4]:SetText("mats for " .. F.crafts .. ": " .. Core.MoneyColor(F.cost))
+				R.Cells[4]:SetText("mats " .. Core.MoneyColor(F.craftCost or 0))
+				R.Cells[6]:SetText(Core.MoneyDelta(F.craftProfit or 0)) -- a craft (the panel shows the N crafts' totals)
 				R.Cells[5]:SetText(F.route == "Vendor" and ("vendor " .. Core.MoneyColor(F.resell)) or ("AH " .. Core.MoneyColor(F.resell) .. " each"))
 				Status = T.CraftStatus(E)
 			elseif Need then Status = "at " .. GoldText(Need)
@@ -1097,6 +1099,10 @@ function T.PaneText(E)
 	end
 	if F.blocked == "flooded" then
 		Ev = Ev .. "\n|cffffd100Flooded: far more is being posted than sold, so AF doesn't plan to sell it on the AH (shown because Show all recipes is on).|r"
+	elseif F.blocked == "over budget" then
+		Ev = Ev .. "\n|cffffd100One craft's mats cost more than this item's share of your flip budget (shown because Show all recipes is on).|r"
+	elseif F.blocked == "over target" then
+		Ev = Ev .. "\n|cffffd100Listed mats cost more than the Pay up to prices: no profit today (shown because Show all recipes is on). Buy under them, or wait.|r"
 	elseif F.blocked then
 		Ev = Ev .. "\n|cffffd100Product " .. F.blocked .. ": not sold on the AH by a craft plan (shown because Show all recipes is on).|r"
 	end
@@ -1122,7 +1128,7 @@ function T.PaneLines(E)
 	for _, X in ipairs(UI().BySource(F.list or {})) do
 		local L = { kind = X.source, id = X.id, qty = X.qty, source = X.source, cost = X.cost }
 		if X.source == "AH" then
-			L.upTo, L.listed = X.upTo, Cheapest(Core.Info(X.id))
+			L.upTo, L.listed = X.target or X.upTo, Cheapest(Core.Info(X.id))
 			for m, M in ipairs(F.mats) do if M.id == X.id then L.mat = m end end
 			L.bought = R and R.bought and R.bought[L.mat] or 0
 		elseif X.source == "Vendor" then
@@ -1162,8 +1168,13 @@ function T.PaneSummary(E)
 		ToPay = F.vendorCost or 0
 		for m, M in ipairs(F.mats) do ToPay = ToPay + M.cost * math.max(0, 1 - (R.bought[m] or 0) / math.max(1, M.qty)) end
 	end
-	return Then .. "\n" .. string.format("%s %s   Profit %s (%s%s|r, %d%% return)", F.craft and "Mats" or "Cost", Money(F.cost), Core.MoneyDelta(F.profit),
-		Color, Tier, math.floor((Ret or 0) * 100 + 0.5)) .. "\n" .. "Leaves you " .. Money(math.floor(GetMoney() - ToPay))
+	local Out = Then .. "\n" .. string.format("%s %s   Profit %s (%s%s|r, %d%% return)   Leaves you %s", F.craft and "Mats" or "Cost", Money(F.cost),
+		Core.MoneyDelta(F.profit), Color, Tier, math.floor((Ret or 0) * 100 + 0.5), Money(math.floor(GetMoney() - ToPay)))
+	if F.craft then
+		Out = Out .. "\n" .. string.format("Per craft: mats %s, sells %s (%s), profit %s", Money(F.craftCost or 0), Money(F.craftSale or 0),
+			F.route == "Vendor" and "Vendor" or "Auction", Core.MoneyDelta(F.craftProfit or 0))
+	end
+	return Out
 end
 local function TextLines(S) local N = 1 for _ in S:gmatch("\n") do N = N + 1 end return N end
 -- The panel for a row: its text, lines and summary, its height, and the table rows that fit above it. Lines that
@@ -1381,34 +1392,26 @@ function T.BuyMat(m)
 	local Left = M.qty - (Run.bought[m] or 0)
 	if Left <= 0 then return end
 	Buy.state = "price"
-	Buy.pending = { id = M.id, qty = Left, max = M.upTo or 0, craft = true, mat = m }
+	-- The most to pay is the mat's target (one craft still clears its bar), not the listing the plan was priced at.
+	local Max = M.target or M.upTo or 0
+	Buy.pending = { id = M.id, qty = Left, max = Max, craft = true, mat = m }
 	C_AuctionHouse.StartCommoditiesPurchase(M.id, Left)
-	SayBuy(string.format("Getting the current price of %d %s (pay up to %s each)...", Left, ItemName(M.id), Money(M.upTo or 0)))
+	SayBuy(string.format("Getting the current price of %d %s (pay up to %s each)...", Left, ItemName(M.id), Money(Max)))
 	T.DrawBuy()
 end
 CraftPrice = function(Pd, Unit, Total)
 	local P = Run and Run.plan
 	if not P then ResetPurchase(true); T.DrawBuy() return end
-	-- The craft at live prices: what's bought, this mat now, the other mats not bought yet at the plan's prices, the
-	-- vendor goods.
-	local Rest = 0
-	for m, M in ipairs(P.mats) do
-		if m ~= Pd.mat then Rest = Rest + M.cost * math.max(0, 1 - (Run.bought[m] or 0) / math.max(1, M.qty)) end
-	end
-	local Cost = Run.spent + Total + Rest + (P.vendorCost or 0)
-	local Profit = math.floor(P.saleEach * P.crafts - Cost + 1e-6)
+	-- Pd.max is the mat's target (one craft still clears its bar with the other mats at their planned price): only
+	-- the live price against it and your budget decide.
 	local Budget = UI().FlipBudget()
-	local Need = P.route == "Vendor" and Core.MinVendorProfit or Core.FlipNeed(Cost, Core.MinFlipProfitFor(Budget), Run.status)
 	if Unit > Pd.max then
 		ResetPurchase(true)
-		SayBuy(string.format("Price of %s went up: now %s each (pay up to %s). Not bought.", ItemName(Pd.id), Money(Unit), Money(Pd.max)))
+		SayBuy(string.format("Price of %s is over its target: now %s each (pay up to %s). Not bought.", ItemName(Pd.id), Money(Unit), Money(Pd.max)))
 		Recheck({ Pd.id }, function() T.RefreshBuy() end)
 	elseif Total > Budget then
 		ResetPurchase(true)
 		SayBuy(string.format("Costs %s, over your flip budget (%s). Not bought.", Money(Total), Money(Budget)))
-	elseif Profit < Need then
-		ResetPurchase(true)
-		SayBuy(string.format("At today's prices the craft would make %s (under %s). Not bought.", Core.MoneyDelta(Profit), Money(Need)))
 	else
 		Buy.state = "confirm"
 		Pd.total = Total

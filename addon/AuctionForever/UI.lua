@@ -538,6 +538,8 @@ function L.CraftTargets()
 		-- sold on the AH only when it's a steady seller, like a flip (not flooded, warming up...)
 		ahStatus = { good = true, slow = true },
 		cooldownLeft = function(Row) return L.SpellCooldownLeft(Row.spell) end,
+		-- the return one craft needs, for each mat's target price: like a flip's (the vendor route: any profit)
+		ret = function(Route, Row) return Route == "Vendor" and 0 or Core.FlipReturn(Row.status) end,
 		held = function(id) return Held[id] or 0 end,
 		bank = function(id) return L.BankCount(id) end,
 		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
@@ -548,7 +550,8 @@ function L.CraftTargets()
 	local Best = {}
 	local _, _, Rows = Farm.Crafts(Env)
 	for _, R in ipairs(Rows) do
-		if not R.excluded and not R.buyExcluded and (R.expected or 0) > 0 then
+		-- (with Show all, also recipes that lose money at today's listings: shown "over target" with each mat's target)
+		if not R.excluded and ((not R.buyExcluded and (R.expected or 0) > 0) or (All and R.buyExcluded == Farm.LOSS)) then
 			local Known, How, Rank = L.RecipeKnown(R.spell, R.skill, R.req, Mine)
 			if Known or All then
 				local Ok = true
@@ -563,6 +566,10 @@ function L.CraftTargets()
 					-- Not sold on the AH because of its status (flooded...): with Show all, the plan it would be (no Buy).
 					P = Farm.CraftPlan(R, setmetatable({ ahStatus = false }, { __index = Opts }), Env)
 					if P then P.blocked = Why end
+				elseif not P and All then
+					-- No craft pays at today's listings: with Show all, one craft and each mat's target (no Buy).
+					P = Farm.CraftPlan(R, setmetatable({ force = true }, { __index = Opts }), Env)
+					if P then P.blocked = P.overTarget or "over target" end
 				end
 				if P then
 					local B = Best[R.id]

@@ -207,6 +207,7 @@ local function Listed(I)
 	return N
 end
 Farm.Listed = Listed
+Farm.LOSS = "expected loss buying the mats"
 
 -- What a reagent would earn if you posted it instead of crafting (expected, sell-rate weighted) or vendored it,
 -- whichever is more; nil when neither is known.
@@ -303,7 +304,7 @@ function Farm.Craft(Product, Recipe, Env)
 			Row.route, Row.profit, Row.expected = "AH", Row.ahProfit, Row.ahExpected
 		end
 		if not Row.expected then Row.buyExcluded = AHWhy or "not enough mats listed"
-		elseif Row.expected <= 0 then Row.buyExcluded = "expected loss buying the mats" end
+		elseif Row.expected <= 0 then Row.buyExcluded = Farm.LOSS end
 	end
 	if not Row.expected and not Sale then Row.excluded = AHWhy return Row end
 	if Row.route == "Vendor" then Row.vendorRoute = true end
@@ -332,6 +333,13 @@ end
 -- order, only what must be bought), vendorGoods = { {id, qty, cost} }, vendorCost, list (the shopping list: one entry
 -- per reagent and source, { id, qty, source = "AH" / "Vendor" / "Owned" / "Bank", each (vendor price), upTo (AH: the
 -- most to pay each), cost }, grouped by source in that order, recipe order within a group) }.
+-- Per craft: craftSale (what one craft is expected to bring: the AH sale after the cut and sell rate, or the vendor
+-- price), craftCost (its mats at the plan's average price each; a mat you hold at today's cheapest listing),
+-- craftProfit. Each AH mat (mats and list) has a target: the most to pay per unit for one craft to still clear its
+-- bar (Opts.ret(route, Row): the return it needs; the AH route defaults to 10%, the vendor route to 0), with the
+-- other mats at their planned average price: (craftSale / (1 + return) - the other mats) / the count of this mat.
+-- Opts.force: a plan of at least one craft even when none fits today (to show what to pay); overTarget = why:
+-- "over budget" (one craft's mats cost more than your budget share) or "over target" (no craft clears its bar).
 -- Opts.held(id) / Opts.bank(id): units of a reagent in your bags / your bank. They're used first (bags, then bank):
 -- only the rest is bought, the plan's cost counts only what's bought, and the mats listed plus what you hold bound N.
 local function UpTo(I, Qty)
@@ -345,7 +353,8 @@ end
 function Farm.CraftPlan(Row, Opts, Env)
 	local E = Env and Env.cache and Env or Default(Env)
 	Opts = Opts or {}
-	if not Row or Row.excluded or Row.buyExcluded or not Row.expected or not Row.cost or not Row.route then return nil end
+	local Loss = Row and Row.buyExcluded == Farm.LOSS and Opts.force -- (forced: show the targets anyway)
+	if not Row or Row.excluded or (Row.buyExcluded and not Loss) or not Row.expected or not Row.cost or not Row.route then return nil end
 	local I = E.info(Row.id)
 	local VSum = (Row.matCrafts or 0) >= 1 and Row.vendorSell and Row.vendorSell * Row.makes or nil
 	local Vendor = Row.route == "Vendor"
@@ -411,7 +420,12 @@ function Farm.CraftPlan(Row, Opts, Env)
 		if Fits(Mid) then Lo = Mid else Hi = Mid - 1 end
 	end
 	local N = Lo
-	if N < 1 then return nil, Blocked end
+	local Forced
+	if N < 1 then
+		if not Opts.force then return nil, Blocked end
+		-- Why no craft fits: one craft's mats cost more than your budget share, or than it brings.
+		N, Forced = 1, Cost(1) > Cap and "over budget" or "over target"
+	end
 	local Mats, Goods, VCost = {}, {}, 0
 	local Group = { AH = {}, Vendor = {}, Owned = {}, Bank = {} }
 	for _, R in ipairs(Row.reagents) do
@@ -442,8 +456,33 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local Total = Cost(N)
 	local Profit = math.floor(Each * N - Total + 1e-6)
 	local Need = Opts.need and Opts.need(Total, Row) or 0
-	if Profit < Need then return nil, Blocked end
-	return { craft = true, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
+	if Profit < Need and not Opts.force then return nil, Blocked end
+	if Profit < Need and not Forced then Forced = "over target" end
+	-- Per craft, and each AH mat's target price.
+	local UnitP = {}
+	for _, R in ipairs(Row.reagents) do
+		if R.source == "vendor" then
+			UnitP[R.id] = R.each
+		else
+			local Q = Buy(R, N)
+			local RI = E.info(R.id)
+			if Q > 0 then UnitP[R.id] = Farm.BuyCost(RI, Q) / Q
+			else UnitP[R.id] = (RI and RI.ladder and RI.ladder[1] and RI.ladder[1][1]) or (RI and RI.low) or 0 end
+		end
+	end
+	local PerCraft = 0
+	for _, R in ipairs(Row.reagents) do PerCraft = PerCraft + UnitP[R.id] * R.n end
+	local Route = Vendor and "Vendor" or "AH"
+	local Ret = Opts.ret and Opts.ret(Route, Row) or (Vendor and 0 or 0.10)
+	local Allowed = Each / (1 + Ret)
+	local Target = {}
+	for _, R in ipairs(Row.reagents) do
+		if R.source ~= "vendor" then Target[R.id] = math.max(0, math.floor((Allowed - (PerCraft - UnitP[R.id] * R.n)) / R.n + 1e-6)) end
+	end
+	for _, M in ipairs(Mats) do M.target = Target[M.id] end
+	for _, X in ipairs(List) do if X.source == "AH" then X.target = Target[X.id] end end
+	return { craft = true, craftSale = math.floor(Each + 1e-6), craftCost = math.floor(PerCraft + 0.5), craftProfit = math.floor(Each - PerCraft + 1e-6),
+		overTarget = Forced, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
 		route = Vendor and "Vendor" or "AH", resell = Vendor and Row.vendorSell or Price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
 		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, list = List, buyQty = N, buyUpTo = 0, capped = Capped,
 		sales = I and I.sales, salesHours = I and I.hoursWithSales, cooldown = Row.cooldown, cooldownLeft = CdLeft }

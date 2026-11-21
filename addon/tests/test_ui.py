@@ -677,8 +677,8 @@ if real:
       CE = AF_NS.Trade.SelectedBuy(); CF = CE and CE.flip""")
     cells = [str(L(f'AuctionForeverBuyPanel.Rows[1].Cells[{c}]:GetText()')) for c in range(1, 8)]
     n = L('CF and CF.crafts')
-    ok(L('CE ~= nil and CE.craft ~= nil') and n and n > 0 and cells[3].startswith('mats for ' + str(n) + ': ') and 'craft: Tailoring 50' in cells[6]
-       and cells[4].startswith('AH ') and cells[4].endswith(' each') and '(c)' in cells[0], f'craft row: {cells}')
+    ok(L('CE ~= nil and CE.craft ~= nil') and n and n > 0 and cells[3] == 'mats ' + str(L('AF_NS.Core.MoneyColor(CF.craftCost)')) and cells[5] == str(L('AF_NS.Core.MoneyDelta(CF.craftProfit)')) and 'craft: Tailoring 50' in cells[6]
+       and cells[4].startswith('AH ') and cells[4].endswith(' each') and '(c)' in cells[0], f'craft row: mats a craft, profit a craft (resell per unit): {cells}')
     tier = L('(AF_NS.Trade.Tier(CF))')
     ret = L('CF.profit / CF.cost')
     ok(tier in cells[1] and ret > 0 and ('Tier ' + tier) in str(L('AuctionForeverBuyPanel.Detail:GetText()')), f'tier by expected return (profit / mats cost): {tier}, {ret:.0%}')
@@ -698,8 +698,8 @@ if real:
                        + [bool(L(f'{W}.Btn:IsShown()')), bool(L(f'{W}.Btn:IsEnabled()')), str(L(f'{W}.Btn:GetText()')), plain(L(f'{W}.Note:GetText()'))])
         return out
     pl = pane()
-    want = [[str(2 * n), 'Item 990102', 'AH', money(L('CF.mats[1].upTo')), '1s 00c', money(L('CF.mats[1].cost')), True, True, 'Buy', ''],
-            [str(n), 'Item 990103', 'AH', money(L('CF.mats[2].upTo')), '3s 00c', money(L('CF.mats[2].cost')), True, True, 'Buy', ''],
+    want = [[str(2 * n), 'Item 990102', 'AH', money(L('CF.mats[1].target')), '1s 00c', money(L('CF.mats[1].cost')), True, True, 'Buy', ''],
+            [str(n), 'Item 990103', 'AH', money(L('CF.mats[2].target')), '3s 00c', money(L('CF.mats[2].cost')), True, True, 'Buy', ''],
             [str(n), 'Item 2320', 'Vendor', money(L('CF.list[3].each')), '-', money(L('CF.vendorCost')), False, True, 'Buy', 'buy from a vendor']]
     ok([r[:6] + r[8:] for r in pl if r[6]] == [r[:6] + r[8:] for r in want if r[6]] and [r[:6] + r[9:] for r in pl if not r[6]] == [r[:6] + r[9:] for r in want if not r[6]]
        and [r[6] for r in pl] == [True, True, False] and pl[0][7] and pl[1][7],
@@ -713,8 +713,13 @@ if real:
     after = money(L('math.floor(CF.resell * 0.95) * CF.units'))
     tierw = L('(AF_NS.Trade.Tier(CF))')
     ok(len(sm) == 3 and sm[0] == f'Craft {n}, then Auction at {money(L("CF.resell"))} each (after cut {after})'
-       and sm[1].startswith(f'Mats {money(L("CF.cost"))}   Profit +') and f'({tierw}, ' in sm[1] and sm[1].endswith('% return)')
-       and sm[2] == 'Leaves you ' + money(L('GetMoney() - CF.cost')), f'summary says what to do, the money, what it leaves you: {sm}')
+       and sm[1].startswith(f'Mats {money(L("CF.cost"))}   Profit +') and f'({tierw}, ' in sm[1] and sm[1].endswith('% return)   Leaves you ' + money(L('GetMoney() - CF.cost')))
+       and sm[2] == f'Per craft: mats {money(L("CF.craftCost"))}, sells {money(L("CF.craftSale"))} (Auction), profit +{money(L("CF.craftProfit"))}',
+       f'summary says what to do, the money, what it leaves you, and per craft: {sm}')
+    # Per craft and each mat's target: one craft sells 13s 29c (after the cut and sell rate), needs a 10% return, so
+    # its mats may cost 1208c; mats at their planned average: 2 x 430c + 300c + 10c (vendor) = 11s 70c.
+    ok(L('CF.craftSale') == 1329 and L('CF.craftCost') == 1170 and L('CF.craftProfit') == 159 and L('CF.mats[1].target') == 449 and L('CF.mats[2].target') == 338
+       and L('CF.list[1].target') == 449, f"per craft and targets: sale {L('CF.craftSale')}, mats {L('CF.craftCost')}, targets {L('CF.mats[1].target')} / {L('CF.mats[2].target')}")
     ok(L('GetMoney() - CF.cost') >= 5000 and L('CF.cost') == L('CF.mats[1].cost + CF.mats[2].cost + CF.vendorCost'),
        f'mats cost (AH and vendor) leaves at least 50s: {L("GetMoney() - CF.cost")}')
     ok(not L('AuctionForeverBuyPanel.Buy:IsShown()') and not L('AuctionForeverBuyPanel.Buy:IsEnabled()'), 'a craft row: no single Buy button (each mat has its own)')
@@ -728,7 +733,7 @@ if real:
     X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[1].Btn)')
     c = L('LastCall("StartCommoditiesPurchase")')
     ok(c is not None and c[2] == 990102 and c[3] == L('CF.mats[1].qty'), f'line 1 Buy: that mat, the planned quantity ({c and c[2]} x {c and c[3]})')
-    X('FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].upTo, CF.mats[1].cost)')
+    X('FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].target, CF.mats[1].cost)')
     ok(str(L('AuctionForeverBuyPanel.Lines[1].Btn:GetText()')) == 'Confirm' and not L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()'),
        'price at or under its pay up to: Confirm on that line, the other lines wait')
     X('Click(AuctionForeverBuyPanel.Lines[1].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
@@ -737,16 +742,19 @@ if real:
        and pl[0][9] == 'bought' and not pl[0][7] and pl[1][7] and pl[1][8] == 'Buy' and L('AF_NS.Trade.CraftRun().bought[1]') == L('CF.mats[1].qty'),
        f'bought: the line says "bought", its button is off, the next line can buy: {pl}')
     ok('|cff1eff00bought|r' in str(L('AuctionForeverBuyPanel.Lines[1].Note:GetText()')), 'bought is green')
-    # Over its pay up to: cancelled, nothing bought, the line can try again.
-    X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo + 1, (CF.mats[2].upTo + 1) * CF.mats[2].qty)')
+    # Over its target (pay up to): cancelled, nothing bought, the line can try again.
+    X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].target + 1, (CF.mats[2].target + 1) * CF.mats[2].qty)')
     ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil') and L('AF_NS.Trade.CraftRun().bought[2] == nil')
-       and 'went up' in str(L('AuctionForeverBuyPanel.Status:GetText()')),
+       and 'over its target' in str(L('AuctionForeverBuyPanel.Status:GetText()')),
        'live price over its pay up to: cancelled, not bought: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     # (the re-check after it reads the test items as sold out: back to the test data; the run keeps its plan)
     X('AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
     ok(L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')) == 'Buy', 'the line can try again')
-    X("""Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo, CF.mats[2].cost)
-      Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")""")
+    # Above the listing the plan was priced at but under the target: fine.
+    X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo + 20, CF.mats[2].cost)')
+    ok(L('CF.mats[2].upTo + 20 < CF.mats[2].target') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')) == 'Confirm' and L('LastCall("CancelCommoditiesPurchase") == nil'),
+       'a live price over the planned listing but under the target: Confirm (only the target cancels)')
+    X('Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
     total = L('CF.mats[1].cost + CF.mats[2].cost + CF.vendorCost')
     ok(L('AF_NS.Trade.CraftRun() == nil') and L('#AuctionForeverDB.crafts') >= 1 and L('AuctionForeverDB.crafts[#AuctionForeverDB.crafts][2]') == 990101
        and L('AuctionForeverDB.crafts[#AuctionForeverDB.crafts][4]') == total, 'every AH mat bought: the craft is recorded (product, crafts, total cost)')
@@ -764,7 +772,7 @@ if real:
     # Bought part of a mat: "bought X of Y", and its Buy buys the rest. Leaving the auction house records what's bought.
     X("""FireEvent("AUCTION_HOUSE_CLOSED"); AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)
       CF = AF_NS.Trade.SelectedBuy().flip
-      Click(AuctionForeverBuyPanel.Lines[1].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].upTo, CF.mats[1].cost)
+      Click(AuctionForeverBuyPanel.Lines[1].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].target, CF.mats[1].cost)
       Click(AuctionForeverBuyPanel.Lines[1].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")
       AF_NS.Trade.CraftRun().bought[2] = 5; AF_NS.Trade.DrawBuy(); Calls = {}""")
     pl = pane()
@@ -807,6 +815,19 @@ if real:
     ok(L('PM1.fit') == 5 and k1 == ['AH'] * 4 + ['held'] and L('#PM1.lines[5].parts') == 3 and L('PM1.rows') == 5
        and k2 == ['AH'] * 4 + ['more'] and L('PM2.lines[5].n') == 5 and L('PM2.rows') == 5,
        f'overflow: Owned/Bank collapse first ({k1}), then +N more ({k2}, {L("PM2.lines[5].n")})')
+    # A product too cheap for any craft to pay: not listed; with Show all, one craft greyed "over target" with each
+    # mat's target (under today's listing), no Buy.
+    X("""CheapSaved = AuctionForeverData.items[990101]
+      AuctionForeverData.items[990101] = { 300, 30, 300, 300, 300, 300, 40, 40, 72, 70, 500, 1, 30, nil, nil, nil, { { 300, 30 } } }
+      AF_NS.UI.SetShowAllRecipes(false); AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()""")
+    ok(L('#AF_NS.Trade.BuyRows()') == 0, 'no craft pays: no plan')
+    X('AF_NS.UI.SetShowAllRecipes(true); AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1); OF = AF_NS.Trade.SelectedBuy().flip')
+    ot = pane()
+    ok(L('#AF_NS.Trade.BuyRows()') == 1 and L('OF.blocked') == 'over target' and L('OF.crafts') == 1 and 'over target' in str(L('AuctionForeverBuyPanel.Rows[1].Cells[7]:GetText()'))
+       and not any(r[7] for r in ot if r[6]) and L('OF.mats[1].target') < 100 and ot[0][3] == money(L('OF.mats[1].target'))
+       and 'Pay up to prices' in str(L('AuctionForeverBuyPanel.Detail:GetText()')),
+       f'Show all: shown greyed "over target", targets under the listings, no Buy: {ot}')
+    X('AuctionForeverData.items[990101] = CheapSaved; AF_NS.UI.SetShowAllRecipes(false); AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
     # Mixed flips and craft rows: every column sorts them (high first, low first, back to the plan), craft rows by
     # their own numbers (none is nil, so they don't just fall to the end).
     X("""MixF = {
@@ -819,6 +840,10 @@ if real:
     def keys(k): return [L(f'AF_NS.Trade.SortKey("{k}", AF_NS.Trade.Rows()[{i}])') for i in range(1, nrows + 1)]
     crafted = lambda: [bool(L(f'AF_NS.Trade.Rows()[{i}].craft ~= nil')) for i in range(1, int(L('#AF_NS.Trade.Rows()')) + 1)]
     ok(nrows == 4 and sum(crafted()) == 1, f'mixed list: 3 flips and the craft plan ({nrows})')
+    ci0 = crafted().index(True) + 1
+    ok(L(f'AF_NS.Trade.SortKey("profit", AF_NS.Trade.Rows()[{ci0}])') == L(f'AF_NS.Trade.Rows()[{ci0}].flip.craftProfit')
+       and L(f'AF_NS.Trade.SortKey("cost", AF_NS.Trade.Rows()[{ci0}])') == L(f'AF_NS.Trade.Rows()[{ci0}].flip.craftCost')
+       and L('AF_NS.Trade.SortKey("profit", AF_NS.Trade.Rows()[1])') is not None, 'craft rows sort by profit and mats a craft; flips by the whole purchase')
     names = ['name', 'tier', 'rate', 'cost', 'resell', 'profit', 'status']
     for c, k in enumerate(names, 1):
         X(f'Click(AuctionForeverBuyPanel.Headers[{c}])')
@@ -1376,7 +1401,7 @@ fvis = L('AF_NS.Trade.BuyVisible()')
 ok(fl[0] == str(L('FF.buyQty')) and fl[2] == 'AH' and fl[3] == fm(L('FF.buyUpTo')) and fl[4] == fm(L('AF_NS.Trade.Cheapest(FE.info)')) and fl[4].endswith('c') and fl[5] == fm(L('FF.cost'))
    and not L('AuctionForeverBuyPanel.Lines[2]:IsShown()') and L('AuctionForeverBuyPanel.Buy:IsShown()') and L('AuctionForeverBuyPanel.Buy._parent == AuctionForeverBuyPanel.Lines[1]') == True
    and str(L('AuctionForeverBuyPanel.PaneHead[2]:GetText()')) == 'Item'
-   and fs[0].startswith('Then: Auction at ' + fm(L('FF.resell')) + ' each over ') and fs[1].startswith('Cost ' + fm(L('FF.cost')) + '   Profit +') and fs[2].startswith('Leaves you ')
+   and fs[0].startswith('Then: Auction at ' + fm(L('FF.resell')) + ' each over ') and fs[1].startswith('Cost ' + fm(L('FF.cost')) + '   Profit +') and ' Leaves you ' in fs[1] and len(fs) == 2
    and fvis == 8, f'flip panel: one line {fl}, then: {fs}, table {fvis} rows')
 sp = L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points]')
 ok(sp is not None and sp[1] == 'LEFT' and L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points][2] == AuctionForeverBuyPanel.Skip') and sp[3] == 'RIGHT'

@@ -323,6 +323,27 @@ P = L('AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvV), { share = 0.75, 
 ok(P and P.route == 'Vendor' and P.crafts == 60 and P.resell == 1500 and P.profit == 1500 * 60 - 53600,
    f"vendor route: no sales limit, up to the mats listed (each craft still pays at 5s mats): {P and P.crafts} crafts, profit {P and P.profit}")
 X('Items[600].perHour = 2')
+# Per craft and each AH mat's target (the most to pay each for one craft to clear its bar, the other mats at their
+# planned average price). Vendor route (any profit): sells 15s; 601 averages 441.67c (53000c / 120), 602 is 10c:
+# target 601 = (1500 - 10) / 2 = 745.
+P = L('AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvV), { share = 0.75, hours = 8 }, CEnvV)')
+ok(P and P.craftSale == 1500 and P.craftCost == 893 and P.craftProfit == 606 and P.mats[1].target == 745 and P.list[1].target == 745,
+   f"vendor route target: {P and P.mats[1].target} (sale {P and P.craftSale}, mats a craft {P and P.craftCost}, profit {P and P.craftProfit})")
+X('Items[600].perHour = 0.5')
+# AH route, 10% return by default: one craft brings 921.5c, so its mats may cost 837.7c; 601 averages 150c (20 for
+# 3000c), 602 10c: target 601 = (837.7 - 10) / 2 = 413.
+X('Items[600].perHour = 2')
+P = L('CPlan({ share = 0.75, hours = 8 })')
+ok(P and P.craftSale == 921 and P.craftCost == 310 and P.craftProfit == 611 and P.mats[1].target == 413,
+   f"AH route target: {P and P.mats[1].target} (sale {P and P.craftSale}, mats {P and P.craftCost}, profit {P and P.craftProfit})")
+P = L('CPlan({ share = 0.75, hours = 8, ret = function(Route) return Route == "AH" and 0.25 or 0 end })')
+ok(P and P.mats[1].target == 363, f"the return it needs comes from Opts.ret: 25% -> (921.5 / 1.25 - 10) / 2 = 363 ({P and P.mats[1].target})")
+P = L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, { 7003, 171, 50, 1, { 601, 2 }, 0, 60, 80 }, CEnv))')
+ok(P and P.mats[1].target == 418 and P.craftCost == 2 * (P.cost // (2 * P.crafts)) + (0 if P.cost % (2 * P.crafts) == 0 else P.craftCost - 2 * (P.cost // (2 * P.crafts))),
+   f"one mat: target = 921.5 / 1.1 / 2 = 418 ({P and P.mats[1].target})")
+P = L('CPlan({ share = 0.75, hours = 8, need = function(c) return c * 10 end, force = true })')
+ok(P and P.overTarget == 'over target' and P.crafts >= 1 and P.mats[1].target == 413, f"force: a plan (marked over target) even when no craft clears the bar ({P and P.crafts})")
+ok(L('CPlan({ share = 0.75, hours = 8 }).overTarget') is None, 'a plan that pays: not over target')
 
 # Cooldown recipes: only the crafts the cooldown allows in the window (8 h); none when it won't be ready in time.
 X("""CRecCd = { 7002, 171, 50, 1, { 601, 2, 602, 1 }, 0, 60, 80, 172800, 0 }
