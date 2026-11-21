@@ -216,8 +216,13 @@ local function FarmEnv()
 		end,
 		deposit = FarmDeposit,
 		vendorSell = KnownVendor,
+		-- like AF Buy's craft plans: a sale is valued at most at what buyers paid (a lone high listing doesn't count),
+		-- and a crafted product needs a couple of hours with sales
+		priceCap = Core.ResaleCap,
+		minSalesHours = L.CraftMinSalesHours,
 	}
 end
+L.FarmEnv = FarmEnv
 -- Gear (weapons, armor) isn't something you farm to sell by the stack: left out of Gather.
 local function IsGear(id)
 	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)

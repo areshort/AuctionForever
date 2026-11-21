@@ -271,6 +271,21 @@ if real:
     Buy, Added, All = L(f'{F}.Crafts()')
     ok(len(Buy) > 0 and len(Added) > 0, f'real data: {len(Buy)} buy-mats crafts and {len(Added)} value-added crafts rank')
 
+# A lone listing far above what buyers pay (like Truesilver Rod: 1 listed at 49g 24s, 174 sales at 27s 49c) doesn't
+# set the value when the env gives a price cap; without one, the post price stands.
+X('''MakeItem(700, { med = 2749, med24 = 2749, medAll = 2749, sellThrough = 0.9, perHour = 3, sales = 174, hoursWithSales = 60,
+    ladder = { {492400, 1} }, qty = 1, low = 492400 })
+  RodEnv = Env({ postPrice = function(I) return I.low - 1, 2 end })
+  RodEnvCap = Env({ postPrice = function(I) return I.low - 1, 2 end, priceCap = function(I) return math.min(I.med24, I.medAll) end, minSalesHours = 2 })''')
+R0 = L('AF_NS.Farm.Raw(700, RodEnv)')
+R1 = L('AF_NS.Farm.Raw(700, RodEnvCap)')
+C1 = L('AF_NS.Farm.Craft(700, { 7700, 164, 1, 1, { 2589, 1 }, 0, 60, 80 }, RodEnvCap)')
+ok(R0.price == 492399 and R1.price == 2749 and R1.capped == True and C1.price == 2749 and C1.capped == True and C1.net < 2749,
+   f'price cap: a lone 49g listing is valued at what buyers paid ({R0.price} -> {R1.price}, craft {C1.price})')
+X('Items[700].hoursWithSales = 1')
+C2 = L('AF_NS.Farm.Craft(700, { 7700, 164, 1, 1, { 2589, 1 }, 0, 60, 80 }, RodEnvCap)')
+ok(C2.ahExpected is None and C2.price is None, 'minSalesHours: a product sold in 1 hour is not valued on the AH')
+
 # --- Craft plans (AF Buy): N crafts limited by the mats listed, the product's sales, the budget, and the last craft
 # still paying. Product 600 posts at 970 (sells 100%, no deposit): 921.5 expected a craft. Mats: 2 x 601 (10 at 1s,
 # 10 at 2s, 100 at 5s) + 1 x 602 from a vendor (10c).

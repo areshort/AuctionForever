@@ -828,6 +828,20 @@ if real:
        and 'Pay up to prices' in str(L('AuctionForeverBuyPanel.Detail:GetText()')),
        f'Show all: shown greyed "over target", targets under the listings, no Buy: {ot}')
     X('AuctionForeverData.items[990101] = CheapSaved; AF_NS.UI.SetShowAllRecipes(false); AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
+    # Farm view (like Truesilver Rod): one listing at 49g 24s, but 174 sales at 27s 49c. The value is what buyers paid,
+    # never the lone listing; a product with under 2 hours of sales isn't valued on the AH.
+    X("""RodSaved = AuctionForeverData.items[990101]
+      AuctionForeverData.items[990101] = { 492400, 1, 2749, 492400, 2749, 2749, 3, 3, 72, 60, 174, 0.9, 1, nil, nil, nil, { { 492400, 1 } } }
+      AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+      RodRow = AF_NS.Farm.Craft(990101, AF_Recipes[990101][1], AF_NS.UI.FarmEnv())
+      RodRaw = AF_NS.Farm.Raw(990101, AF_NS.UI.FarmEnv())""")
+    ok(L('RodRow.price') == 2749 and L('RodRow.capped') == True and L('RodRow.net') < 2749 and L('RodRaw.price') == 2749 and L('RodRaw.capped') == True
+       and any('what buyers paid' in str(v) for v in L('RodRow.notes').values()),
+       f"a lone high listing doesn't set the value: craft row priced {L('RodRow.price')}, item row {L('RodRaw.price')} (buyers paid 2749)")
+    X("""AuctionForeverData.items[990101][10] = 1; AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+      RodRow2 = AF_NS.Farm.Craft(990101, AF_Recipes[990101][1], AF_NS.UI.FarmEnv())""")
+    ok(L('RodRow2.ahExpected') is None and L('RodRow2.price') is None, 'product sold in under 2 hours: not valued on the AH in the Farm view')
+    X('AuctionForeverData.items[990101] = RodSaved; AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
     # Mixed flips and craft rows: every column sorts them (high first, low first, back to the plan), craft rows by
     # their own numbers (none is nil, so they don't just fall to the end).
     X("""MixF = {

@@ -8,6 +8,9 @@
 --                            nil when the item has no auction data. Default: AF.Core.Info.
 --   Env.status(I)         -> "good", "early", "slow", "flooded", "falling", "warming up", "no data". Default: AF.Core.Status.
 --   Env.postPrice(I, S)   -> the price and duration (hours) AF would post one at. Default: Farm.PostPrice.
+--   Env.priceCap(I)       -> optional: the most a sale is valued at (what buyers actually paid, e.g. Core.ResaleCap): a
+--                            lone listing far above the sales never sets the value. Default: none.
+--   Env.minSalesHours     -> optional: a crafted product needs this many hours with sales to be valued on the AH.
 --   Env.deposit(I, H, Q)  -> deposit in copper for Q units posted for H hours, or nil when not known. Default: AF.Core.Deposit.
 --   Env.vendor            -> { [item] = vendor price per unit } for reagents vendors sell. Default: AF_RecipeVendor.
 --   Env.vendorSell(id)    -> what a vendor pays for one (copper), or nil when not known. Used when that beats the AH.
@@ -35,6 +38,8 @@ local function Default(Env)
 		info = Env.info or (Core and Core.Info) or function() return nil end,
 		status = Env.status or (Core and Core.Status) or Farm.Status,
 		postPrice = Env.postPrice or Farm.PostPrice,
+		priceCap = Env.priceCap,
+		minSalesHours = Env.minSalesHours,
 		deposit = Env.deposit or (Core and Core.Deposit),
 		vendor = Env.vendor or AF_RecipeVendor or {},
 		recipes = Env.recipes or AF_Recipes or {},
@@ -101,17 +106,22 @@ function Farm.SellRate(I)
 end
 
 -- Expected result of posting Qty units: chance x (price after the cut) - (1 - chance) x the deposit lost.
--- Returns expected, net when sold (after the cut), chance, rate (nil = not measured), hours, price, deposit known.
+-- Returns expected, net when sold (after the cut), chance, rate (nil = not measured), hours, price, deposit known,
+-- capped (the price was cut to Env.priceCap: what buyers paid).
 function Farm.Expected(I, S, E, Qty)
 	Qty = Qty or 1
 	local P, H = E.postPrice(I, S)
 	if not P then return nil end
+	local Cap = E.priceCap and E.priceCap(I)
+	local Capped
+	if type(Cap) == "number" and Cap > 0 and P > Cap then P, Capped = Cap, true end
 	local Rate, Ch = Farm.SellRate(I)
 	local Dep = E.deposit and E.deposit(I, H, Qty)
 	local Known = type(Dep) == "number"
 	local Net = P * (1 - Farm.Cut) * Qty
-	return Ch * Net - (1 - Ch) * (Known and Dep or 0), Net, Ch, Rate, H, P, Known
+	return Ch * Net - (1 - Ch) * (Known and Dep or 0), Net, Ch, Rate, H, P, Known, Capped
 end
+local CAPPED_NOTE = "priced at what buyers paid (listed far higher)"
 
 local EXCLUDE = { ["no data"] = "no auction data", ["warming up"] = "warming up: too few sales seen yet" }
 local function StatusNotes(Row, S, I, Prefix)
@@ -134,8 +144,9 @@ function Farm.Raw(id, Env)
 	local S = E.status(I)
 	local Row = { id = id, status = S, notes = {} }
 	if not I or EXCLUDE[S] then Row.excluded = EXCLUDE[S] or "no auction data" return Row end
-	local Exp, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, 1)
+	local Exp, Net, Ch, Rate, H, P, DepKnown, Capped = Farm.Expected(I, S, E, 1)
 	if not Exp then Row.excluded = "no price" return Row end
+	if Capped then Row.capped = true; Row.notes[#Row.notes + 1] = CAPPED_NOTE end
 	Row.expected, Row.net, Row.chance, Row.rate, Row.hours, Row.price = Exp, Net, Ch, Rate, H, P
 	Row.salesDay = (I.perHour or 0) * 24
 	Row.crafted = E.recipes[id] ~= nil
@@ -244,11 +255,13 @@ function Farm.Craft(Product, Recipe, Env)
 	-- Selling on the AH: needs auction data with sales.
 	local AHWhy, Sale, Net, DepKnown
 	if not I or EXCLUDE[S] then AHWhy = "product: " .. (EXCLUDE[S] or "no auction data")
+	elseif E.minSalesHours and (I.hoursWithSales or 0) < E.minSalesHours then AHWhy = "product: too few hours with sales"
 	else
-		local Ch, Rate, H, P
-		Sale, Net, Ch, Rate, H, P, DepKnown = Farm.Expected(I, S, E, Row.makes)
+		local Ch, Rate, H, P, Capped
+		Sale, Net, Ch, Rate, H, P, DepKnown, Capped = Farm.Expected(I, S, E, Row.makes)
 		if not Sale then AHWhy = "product: no price"
 		else
+			if Capped then Row.capped = true; Row.notes[#Row.notes + 1] = "product " .. CAPPED_NOTE end
 			Row.price, Row.hours, Row.rate, Row.chance = P, H, Rate, Ch
 			Row.net = Net / Row.makes
 			Row.salesDay = (I.perHour or 0) * 24
@@ -359,7 +372,7 @@ function Farm.CraftPlan(Row, Opts, Env)
 	local VSum = (Row.matCrafts or 0) >= 1 and Row.vendorSell and Row.vendorSell * Row.makes or nil
 	local Vendor = Row.route == "Vendor"
 	local Each = Vendor and VSum or (Row.ahExpected + Row.cost)
-	local Price, Capped, Blocked = Row.price, nil, nil
+	local Price, Capped, Blocked = Row.price, Row.capped, nil
 	if not Vendor then
 		if Opts.ahStatus and not Opts.ahStatus[Row.status] then Each, Blocked = nil, Row.status end
 		if Opts.minSalesHours and (not I or (I.hoursWithSales or 0) < Opts.minSalesHours) then Each = nil end
