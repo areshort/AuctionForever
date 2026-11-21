@@ -160,14 +160,15 @@ local function StatusText(S) return (STATUS_COLOR[S] or "|cffffffff") .. S .. "|
 L.StatusText = StatusText
 
 -- Farm tab ---------------------------------------------------------------------------------------------------------
--- Two views from Farm.lua: Gather (items to farm and sell, gear left out) and Craft (every recipe in Recipes.lua).
+-- Three views from Farm.lua: Gather (items nobody crafts, to farm and sell; gear left out), Craft (every recipe in
+-- Recipes.lua) and All (both in one list: a crafted item shows as its craft rows only).
 -- Worked out when the view opens and reused until the data or a scan changes (thousands of items: never per redraw).
 -- Ranked by expected gold a unit (or a craft): what it gets when it sells x its sell rate - the deposit lost when it
 -- doesn't, so a high price that rarely sells doesn't come first.
 local Farm = AF.Farm
-L.FarmView = "gather"   -- or "craft"
+L.FarmView = "all"      -- or "gather" / "craft"
 L.CraftAll = false      -- false: only your professions (when the game tells us which you have)
-local GatherCache, CraftCache
+local RawCache, GatherCache, CraftCache, AllCache
 local function DataKey()
 	local D = AuctionForeverData
 	return string.format("%d:%d", AF.Scan and AF.Scan.Version or 0, type(D) == "table" and D.time or 0)
@@ -273,23 +274,31 @@ local function SortName(id)
 	return N or ("Item " .. id)
 end
 L.SortName = SortName
--- Gather view: every item with auction data except gear, best gold a day first; excluded ones (warming up, no
--- sales...) are left out.
-function L.GatherRows()
+-- Every item with auction data except gear, best expected first; excluded ones (warming up, no sales...) are left
+-- out. The quick scan list and the name preload use the top of it (crafted items too).
+function L.FarmRows()
 	local D = AuctionForeverData
 	if type(D) ~= "table" or type(D.items) ~= "table" then return {} end
 	local Key = DataKey()
-	if not (GatherCache and GatherCache.key == Key) then
+	if not (RawCache and RawCache.key == Key) then
 		local Ids = {}
 		for id in pairs(D.items) do if not IsGear(id) then Ids[#Ids + 1] = id end end
 		table.sort(Ids)
-		local Rows = Farm.RawFarms(Ids, FarmEnv())
+		RawCache = { key = Key, rows = (Farm.RawFarms(Ids, FarmEnv())) }
+	end
+	return RawCache.rows
+end
+-- Gather view: the items no recipe makes (gathered or dropped), tiered within this list.
+function L.GatherRows()
+	local Raw = L.FarmRows()
+	if not (GatherCache and GatherCache.src == Raw) then
+		local Rows = {}
+		for _, R in ipairs(Raw) do if not R.crafted then Rows[#Rows + 1] = R end end
 		MarkTiers(Rows, function(R) return R.expected end)
-		GatherCache = { key = Key, rows = Rows }
+		GatherCache = { src = Raw, rows = Rows }
 	end
 	return GatherCache.rows
 end
-L.FarmRows = L.GatherRows -- quick scan list and name preload use the top of it
 
 -- Forever's professions come with a second skill line each (SkillLine.ParentSkillLineID): either may be the known one.
 local PROF_CHILD = { [171] = 2937, [164] = 2938, [185] = 2939, [333] = 2940, [202] = 2941, [129] = 2942, [165] = 2945,
@@ -340,7 +349,26 @@ function L.CraftRows()
 	L.CraftFiltered = Filtered
 	return CraftCache.rows
 end
-function L.FarmData() return L.FarmView == "craft" and L.CraftRows() or L.GatherRows() end
+-- All view: the Gather rows and the Craft rows in one list (no item twice: Gather has no crafted items), tiered over
+-- the combined list. Each row is a view of the cached row with its own tier (the same row has another tier in its
+-- own view).
+local function AllScore(R) if R.spell then return not R.buyExcluded and R.expected or nil end return R.expected end
+function L.AllRows()
+	local G, C = L.GatherRows(), L.CraftRows()
+	if not (AllCache and AllCache.g == G and AllCache.c == C) then
+		local Rows = {}
+		for _, R in ipairs(G) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
+		for _, R in ipairs(C) do Rows[#Rows + 1] = setmetatable({}, { __index = R }) end
+		SortBy(Rows, AllScore)
+		MarkTiers(Rows, AllScore)
+		AllCache = { g = G, c = C, rows = Rows }
+	end
+	return AllCache.rows
+end
+function L.FarmData()
+	if L.FarmView == "craft" then return L.CraftRows() elseif L.FarmView == "gather" then return L.GatherRows() end
+	return L.AllRows()
+end
 function L.SetFarmView(View) L.FarmView = View; L.Load() end
 function L.ToggleCraftAll() L.CraftAll = not L.CraftAll; L.Load() end
 
@@ -764,6 +792,10 @@ local Frame
 local Rows = {}
 local Data, Offset, Tab = {}, 0, 1
 local Columns = {
+	-- All: gather and craft rows together. Kind = Gather or the profession; Gold each = net each (gather) or profit a
+	-- craft (buying the mats); Expected = expected each / expected a craft, the default sort.
+	all = { { "Item", 180, "name" }, { "Tier", 28, "tier" }, { "Kind", 74, "kind" }, { "Gold each", 68, "gold" },
+		{ "Sell rate", 50, "rate" }, { "Expected", 74, "expected" }, { "Sales/day", 54, "salesDay" }, { "Your gold/hr", 66, "mine" } },
 	-- Gather: Expected each (net each x sell rate - deposit lost) is the default sort; Sales/day = the whole market's.
 	gather = { { "Item", 196, "name" }, { "Tier", 28, "tier" }, { "Net each", 66, "net" }, { "Sell rate", 50, "rate" },
 		{ "Expected each", 74, "expected" }, { "Sales/day", 54, "salesDay" }, { "Your gold/hr", 66, "mine" }, { "Status", 56, "status" } },
@@ -786,7 +818,7 @@ end
 
 -- Column sort per list for this session (default: expected, highest first). Click a header: highest first; again:
 -- lowest first.
-local FarmSort = { gather = { key = "expected" }, craft = { key = "expected" } }
+local FarmSort = { all = { key = "expected" }, gather = { key = "expected" }, craft = { key = "expected" } }
 local SORT_GET = {
 	name = function(R) return SortName(R.id) end,
 	net = function(R) return R.net end,
@@ -794,7 +826,9 @@ local SORT_GET = {
 	expected = function(R) return not R.buyExcluded and R.expected or nil end,
 	tier = function(R) return R.score end, -- the tier's score: expected earnings
 	salesDay = function(R) return R.salesDay end,
-	mine = function(R) return MyGoldPerHour(R.id) end,
+	mine = function(R) if R.spell then return nil end return MyGoldPerHour(R.id) end,
+	kind = function(R) if R.spell then return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "?" end return "Gather" end,
+	gold = function(R) if R.spell then return not R.buyExcluded and R.profit or nil end return R.net end,
 	status = function(R) return R.status end,
 	skill = function(R) return AF_RecipeSkills and AF_RecipeSkills[R.skill] or "" end,
 	profit = function(R) return not R.buyExcluded and R.profit or nil end,
@@ -888,7 +922,15 @@ function L.Refresh()
 			local I = E.info
 			local NameText = (Color and Color.hex or "|cffffffff") .. L.ShortName(Name) .. "|r"
 			R.entry = E
-			if Tab == 1 and E.spell then
+			if Tab == 1 and L.FarmView == "all" then
+				local Craft = E.spell ~= nil
+				local Buy = Craft and not E.buyExcluded and E.profit
+				local Mine = not Craft and MyGoldPerHour(E.id)
+				SetCells(R, { NameText, L.TierText(E.tier), Craft and ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") or "Gather",
+					Craft and (Buy and Core.MoneyColor(E.profit) or "-") or Core.MoneyColor(E.net), L.RateText(E.rate),
+					(not Craft or Buy) and Core.MoneyColor(E.expected) or "-", string.format("%.0f", E.salesDay or 0),
+					Mine and Core.MoneyColor(Mine) or "-" })
+			elseif Tab == 1 and E.spell then
 				local Short = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
 				local Buy = not E.buyExcluded and E.profit
 				SetCells(R, { NameText, L.TierText(E.tier), Short, Buy and Core.MoneyColor(E.profit) or "-", L.RateText(E.rate),
@@ -910,7 +952,7 @@ function L.Refresh()
 	if #Data == 0 then
 		local Text = "Nothing to show yet."
 		if Tab == 2 then Text = L.FlipEmptyReason()
-		elseif Tab == 1 and L.FarmView == "craft" and L.CraftFiltered then
+		elseif Tab == 1 and L.FarmView ~= "gather" and L.CraftFiltered then
 			Text = "No paying crafts for your professions in the data yet. Click \"My professions\" to see all." end
 		Frame.Empty:SetText(Text)
 	end
@@ -963,9 +1005,11 @@ function L.RefreshFarmBar()
 	if not FB then return end
 	FB:SetShown(Tab == 1)
 	if Tab ~= 1 then return end
-	local Craft = L.FarmView == "craft"
-	FB.Gather:SetEnabled(Craft)
-	FB.Craft:SetEnabled(not Craft)
+	local View = L.FarmView
+	local Craft = View ~= "gather" -- craft rows shown: the professions filter applies
+	FB.All:SetEnabled(View ~= "all")
+	FB.Gather:SetEnabled(View ~= "gather")
+	FB.Craft:SetEnabled(View ~= "craft")
 	FB.Prof:SetShown(Craft)
 	FB.Prof:SetText(L.CraftAll and "All professions" or "My professions")
 	local Note = "Expected = what you get when it sells x sell rate - deposit lost when it doesn't. Click a column to sort."
@@ -1082,12 +1126,13 @@ function L.CreateWindow()
 		B:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		return B
 	end
-	FB.Gather = FarmBtn("Gather", 0, 70, function() L.SetFarmView("gather") end, "Items to farm and sell (gear left out), ranked by what one is expected to earn when you post it.")
-	FB.Craft = FarmBtn("Craft", 74, 70, function() L.SetFarmView("craft") end, "Every recipe: expected earnings when you buy the mats, and what crafting adds over selling mats you gathered.")
-	FB.Prof = FarmBtn("My professions", 152, 120, function() L.ToggleCraftAll() end, "Only recipes of the professions you have, or every recipe in the game (to see what to learn).")
+	FB.All = FarmBtn("All", 0, 46, function() L.SetFarmView("all") end, "Gather and Craft in one list, ranked by expected earnings.")
+	FB.Gather = FarmBtn("Gather", 50, 64, function() L.SetFarmView("gather") end, "Items nobody crafts (gathered or dropped; gear left out), ranked by what one is expected to earn when you post it.")
+	FB.Craft = FarmBtn("Craft", 118, 56, function() L.SetFarmView("craft") end, "Every recipe: expected earnings when you buy the mats, and what crafting adds over selling mats you gathered.")
+	FB.Prof = FarmBtn("My professions", 178, 116, function() L.ToggleCraftAll() end, "Only recipes of the professions you have, or every recipe in the game (to see what to learn).")
 	FB.Note = FB:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	FB.Note:SetPoint("LEFT", FB, "LEFT", 278, 0)
-	FB.Note:SetWidth(410)
+	FB.Note:SetPoint("LEFT", FB, "LEFT", 300, 0)
+	FB.Note:SetWidth(388)
 	FB.Note:SetJustifyH("LEFT")
 
 	-- Sessions pane

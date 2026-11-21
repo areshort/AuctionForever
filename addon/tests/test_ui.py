@@ -1217,7 +1217,10 @@ X("""SavedData, SavedDB, SavedVer = AuctionForeverData, AuctionForeverDB, AF_NS.
   C_Item.GetItemInfo = RealGII""")
 gr = L('GatherRows')
 gids = [gr[i].id for i in range(1, len(gr) + 1)]
-ok(880100 not in gids and 2589 in gids and 2996 in gids and 118 in gids and len(gids) == 24, f'Gather: every item class except gear ({len(gids)} rows)')
+ok(880100 not in gids and 2589 in gids and 2447 in gids and len(gids) == 22, f'Gather: every item class except gear ({len(gids)} rows)')
+ok(2996 not in gids and 118 not in gids and all(not gr[i].crafted for i in range(1, len(gr) + 1)),
+   'Gather: crafted items (Bolt of Linen Cloth, the potion) left out: only what nobody crafts')
+ok(any(L(f'AF_NS.UI.FarmRows()[{i}].id') == 2996 for i in range(1, int(L('#AF_NS.UI.FarmRows()')) + 1)), 'the quick scan list still has crafted items')
 vals = [gr[i].expected for i in range(1, len(gr) + 1)]
 ok(vals == sorted(vals, reverse=True), 'Gather: best expected each first')
 ok(L('ComputeInfoCalls') == 0, f'working out both lists asks the game for no item info (no server flood): {L("ComputeInfoCalls")} calls')
@@ -1227,35 +1230,86 @@ r = [gr[i] for i in range(1, len(gr) + 1) if gr[i].id == 2589][0]
 ok(abs(r.salesDay - 960) < 0.01 and r.rate == 0.9 and r.net > 0 and r.expected < r.net, f'Gather row: net each, sell rate, expected each, market sales ({r.net:.2f}, {r.expected:.2f}, {r.salesDay:.0f}/day)')
 cr = L('CraftRows')
 cids = [(cr[i].id, cr[i].spell) for i in range(1, len(cr) + 1)]
-ok((2996, 2963) in cids and (118, 1244431) in cids, f'Craft: recipes for items in the data (all professions while unknown): {cids}')
+ok((2996, 2963) in cids and (118, 1244431) in cids and all(cr[i].spell for i in range(1, len(cr) + 1)),
+   f'Craft: only recipe rows, for items in the data (all professions while unknown): {cids}')
 ok(L('AF_NS.UI.ProfessionsKnown') is False and not L('AF_NS.UI.CraftFiltered'), 'professions not known: all recipes shown')
 
 # The window: Gather view, columns, scroll bar, controls, honest per-day label.
-X('AF_NS.UI.FarmView = "gather"; AF_NS.UI.Toggle(1); if not AuctionForeverFrame:IsShown() then AF_NS.UI.Toggle(1) end')
+X('AF_NS.UI.Toggle(1); if not AuctionForeverFrame:IsShown() then AF_NS.UI.Toggle(1) end')
 def heads(): return [L(f'AuctionForeverFrame.Headers[{i}].Label:GetText()') for i in range(1, 9)]
 def shown(field):
     rows = L('AF_NS.UI.ShownRows()')
     return [rows[i][field] for i in range(1, len(rows) + 1)]
+def py_tiers(scores):
+    """The tier rule over a list already sorted highest first: S top 10%, A to 30%, B to 60%, C to 80%, D the rest or <= 0."""
+    out, prev, pt, n = [], None, None, len(scores)
+    for i, x in enumerate(scores):
+        if x is None or x <= 0: t = 'D'
+        elif x == prev: t = pt
+        else:
+            a = i / n
+            t = 'S' if a < 0.1 else 'A' if a < 0.3 else 'B' if a < 0.6 else 'C' if a < 0.8 else 'D'
+        out.append(t); prev, pt = x, t
+    return out
+# All view: the default; Gather and Craft rows together, no item twice, tiers over the combined list.
+FB = 'AuctionForeverFrame.FarmBar'
+ok(L('AF_NS.UI.FarmView') == 'all' and not L(f'{FB}.All:IsEnabled()') and L(f'{FB}.Gather:IsEnabled()') and L(f'{FB}.Craft:IsEnabled()')
+   and L(f'{FB}.Prof:IsShown()'), 'default view All: its button greyed, professions button shown (craft rows in it)')
+ok(heads() == ['Item', 'Tier', 'Kind', 'Gold each', 'Sell rate', 'Expected v', 'Sales/day', 'Your gold/hr'], f'All columns, sorted by expected: {heads()}')
+n_all = int(L('#AF_NS.UI.ShownRows()'))
+rows_all = [(L(f'AF_NS.UI.ShownRows()[{i}].id'), L(f'AF_NS.UI.ShownRows()[{i}].spell')) for i in range(1, n_all + 1)]
+g_ids = {i for i, sp in rows_all if sp is None}
+c_ids = {i for i, sp in rows_all if sp is not None}
+ok(n_all == len(gr) + len(cr) and g_ids == set(gids) and {(i, sp) for i, sp in rows_all if sp} == set(cids) and not (g_ids & c_ids),
+   f'All = Gather rows + Craft rows, no item both ways ({n_all} = {len(gr)} + {len(cr)})')
+ok(2996 in c_ids and 118 in c_ids and 2996 not in g_ids and 118 not in g_ids, 'a crafted item shows in All as its craft row only')
+sc = [L(f'(function(R) if R.spell then return not R.buyExcluded and R.expected or nil end return R.expected end)(AF_NS.UI.ShownRows()[{i}])')
+      for i in range(1, n_all + 1)]
+ok([x for x in sc if x is not None] == sorted([x for x in sc if x is not None], reverse=True), 'All: highest expected first (each / a craft)')
+at = [L(f'AF_NS.UI.ShownRows()[{i}].tier') for i in range(1, n_all + 1)]
+ok(at == py_tiers(sc), f'All: tiers by percentile over the combined list: {"".join(at)}')
+gtier = {L(f'AF_NS.UI.GatherRows()[{i}].id'): L(f'AF_NS.UI.GatherRows()[{i}].tier') for i in range(1, len(gr) + 1)}
+diff = [(rid, gtier[rid], at[k]) for k, (rid, sp) in enumerate(rows_all) if sp is None and gtier[rid] != at[k]]
+ok(len(diff) > 0, f'All rows carry their own tier (the Gather view keeps its own): {diff}')
+cells = {}
+for i in range(1, min(n_all, 14) + 1):
+    rid, sp = L(f'AuctionForeverFrame.Rows[{i}].entry.id'), L(f'AuctionForeverFrame.Rows[{i}].entry.spell')
+    cells[(rid, sp)] = [str(L(f'AuctionForeverFrame.Rows[{i}].Cells[{c}]:GetText()')) for c in (3, 8)]
+kinds = {k: v[0] for k, v in cells.items()}
+ok(any(v == 'Gather' for k, v in kinds.items() if k[1] is None) and all(v != 'Gather' for k, v in kinds.items() if k[1] is not None)
+   and all(cells[k][1] == '-' for k in cells if k[1] is not None), f'All rows: Kind = Gather or the profession; gold/hr only for gather rows: {kinds}')
+X('Click(AuctionForeverFrame.Headers[4])')
+go = [L(f'(function(R) if R.spell then return not R.buyExcluded and R.profit or nil end return R.net end)(AF_NS.UI.ShownRows()[{i}])') for i in range(1, n_all + 1)]
+gk = [x for x in go if x is not None]
+ok(heads()[3] == 'Gold each v' and gk == sorted(gk, reverse=True) and go[:len(gk)] == gk, 'All: Gold each sorts (net each / profit a craft)')
+X('Click(AuctionForeverFrame.Headers[3])')
+kd = shown('kind') if False else [str(L(f'(function(R) if R.spell then return AF_RecipeSkills[R.skill] end return "Gather" end)(AF_NS.UI.ShownRows()[{i}])')) for i in range(1, n_all + 1)]
+ok(heads()[2] == 'Kind v' and kd == sorted(kd, reverse=True), f'All: Kind sorts {sorted(set(kd))}')
+X('Click(AuctionForeverFrame.Headers[2])')
+ok(heads()[1] == 'Tier v' and L('AF_NS.UI.ShownRows()[1].tier') == 'S', 'All: Tier sorts')
+X('Click(AuctionForeverFrame.Headers[6])')
+ok(heads()[5] == 'Expected v', 'All: back to expected')
+X(f'Click({FB}.Gather)')
 ok(heads() == ['Item', 'Tier', 'Net each', 'Sell rate', 'Expected each v', 'Sales/day', 'Your gold/hr', 'Status'], f'Gather columns, sorted by expected each (marked): {heads()}')
 ok(L('AuctionForeverFrame.FarmBar:IsShown()') and 'sell rate' in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')) and 'market room' not in str(L('AuctionForeverFrame.FarmBar.Note:GetText()')),
    'note explains expected: ' + str(L('AuctionForeverFrame.FarmBar.Note:GetText()')))
-# Tiers in the list: 24 rows -> S = 3 (top 10%), A = 5, B = 7, C = 5, D = 4, in expected order.
-tiers = [L(f'AF_NS.UI.ShownRows()[{i}].tier') for i in range(1, 25)]
-ok(tiers == ['S'] * 3 + ['A'] * 5 + ['B'] * 7 + ['C'] * 5 + ['D'] * 4, f'tiers by percentile of expected each: {"".join(tiers)}')
+# Tiers in the list: 22 rows -> S = 3 (top 10%), A = 4, B = 7, C = 4, D = 4, in expected order.
+tiers = [L(f'AF_NS.UI.ShownRows()[{i}].tier') for i in range(1, 23)]
+ok(tiers == ['S'] * 3 + ['A'] * 4 + ['B'] * 7 + ['C'] * 4 + ['D'] * 4, f'tiers by percentile of expected each: {"".join(tiers)}')
 ok(L('AuctionForeverFrame.List') and L('(function() for _, f in ipairs(AllFramesForTest) do if f._text == "|cffa335eeS|r" then return true end end end)()'),
    'tier S shown in purple')
-ok(L('AuctionForeverFrame.Bar:IsShown()') and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24', 'scroll bar with "1-14 of 24"')
-ok(not L('AuctionForeverFrame.FarmBar.Gather:IsEnabled()') and L('AuctionForeverFrame.FarmBar.Craft:IsEnabled()') and not L('AuctionForeverFrame.FarmBar.Prof:IsShown()'),
-   'Gather selected: its button greyed, no professions button')
+ok(L('AuctionForeverFrame.Bar:IsShown()') and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 22', 'scroll bar with "1-14 of 22"')
+ok(not L('AuctionForeverFrame.FarmBar.Gather:IsEnabled()') and L('AuctionForeverFrame.FarmBar.Craft:IsEnabled()') and L('AuctionForeverFrame.FarmBar.All:IsEnabled()')
+   and not L('AuctionForeverFrame.FarmBar.Prof:IsShown()'), 'Gather selected: its button greyed, no professions button')
 X('AuctionForeverFrame.List:GetScript("OnMouseWheel")(AuctionForeverFrame.List, -1)')
-ok(L('AuctionForeverFrame.Bar.Count:GetText()') == '4-17 of 24', 'mouse wheel scrolls and moves the bar: ' + str(L('AuctionForeverFrame.Bar.Count:GetText()')))
+ok(L('AuctionForeverFrame.Bar.Count:GetText()') == '4-17 of 22', 'mouse wheel scrolls and moves the bar: ' + str(L('AuctionForeverFrame.Bar.Count:GetText()')))
 v = shown('expected')
 ok(v == sorted(v, reverse=True), 'default order: expected each (net each x sell rate - deposit lost), highest first')
 ok(L('rawget(AuctionForeverFrame.FarmBar, "Sort") == nil'), 'no sort button: the column headers sort')
 # Click a header: that column, highest first, back to the top; again: lowest first.
 X('Click(AuctionForeverFrame.Headers[3])')
 n = shown('net')
-ok(n == sorted(n, reverse=True) and heads()[2] == 'Net each v' and heads()[4] == 'Expected each' and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 24',
+ok(n == sorted(n, reverse=True) and heads()[2] == 'Net each v' and heads()[4] == 'Expected each' and L('AuctionForeverFrame.Bar.Count:GetText()') == '1-14 of 22',
    f'header click: net each, highest first, marked, scrolled to the top ({heads()[2]})')
 X('Click(AuctionForeverFrame.Headers[3])')
 n = shown('net')
