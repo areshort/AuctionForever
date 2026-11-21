@@ -57,6 +57,67 @@ def ok(c, m):
 
 
 L, X = lua.eval, lua.execute
+FIT_LUA = """if not FitOffenders then
+  local function Part(pt) pt = tostring(pt or "") if pt:find("LEFT") then return "L" elseif pt:find("RIGHT") then return "R" end return "C" end
+  local function TextW(t) t = tostring(t or ""):gsub("|T.-|t", "  "):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") return #t * 6 end
+  function FitSpan(o, Page)
+    if o == Page then return 0, Page._width end
+    if not o then return 0, 0 end
+    local W = rawget(o, "_width")
+    if not W and o._kind == "FontString" then W = TextW(o._text) end
+    local Lx, Rx, Cx
+    for _, p in ipairs(o._points) do
+      local pt, rel, rp, x
+      if type(p[2]) == "table" then pt, rel, rp, x = p[1], p[2], p[3], p[4] or 0 else pt, rel, rp, x = p[1], rawget(o, "_parent"), p[1], p[2] or 0 end
+      local a, b = FitSpan(rel, Page)
+      local k = Part(rp)
+      local ax = (k == "L" and a or k == "R" and b or (a + b) / 2) + x
+      local kk = Part(pt)
+      if kk == "L" then Lx = ax elseif kk == "R" then Rx = ax else Cx = ax end
+    end
+    if Lx and Rx then return Lx, Rx end
+    if Lx then return Lx, Lx + (W or 0) end
+    if Rx then return Rx - (W or 0), Rx end
+    if Cx then return Cx - (W or 0) / 2, Cx + (W or 0) / 2 end
+    return FitSpan(rawget(o, "_parent"), Page)
+  end
+  function FitOffenders(P)
+    local W, Out, Items = P._width, {}, {}
+    local function Add(Name, o, OnlyShown) if o and (not OnlyShown or o:IsShown()) then Items[#Items + 1] = { Name, o } end end
+    for r, R in ipairs(P.Rows) do Add("row" .. r, R) for c, C in ipairs(R.Cells) do Add("row" .. r .. ".cell" .. c, C) end end
+    for c, H in ipairs(P.Headers) do Add("header" .. c, H) end
+    for f, B in ipairs(P.Filters) do Add("filter" .. f, B, true) end
+    Add("filternote", P.FilterNote, true); Add("bar", P.Bar); Add("checkbox", P.AllRecipes); Add("checklabel", P.AllRecipesLabel)
+    Add("budget", P.Budget); Add("target", P.Target); Add("results", P.Results); Add("empty", P.Empty)
+    Add("pane", P.Pane); Add("detail", P.Detail); Add("summary", P.Summary); Add("flipbuy", P.Buy, true); Add("status", P.Status); Add("next", P.Skip)
+    for c, H in ipairs(P.PaneHead) do Add("panehead" .. c, H) end
+    for l, Ln in ipairs(P.Lines) do
+      if Ln:IsShown() then
+        Add("line" .. l, Ln); Add("line" .. l .. ".wide", Ln.Wide); Add("line" .. l .. ".btn", Ln.Btn, true); Add("line" .. l .. ".note", Ln.Note)
+        for c, C in ipairs(Ln.Cells) do Add("line" .. l .. ".cell" .. c, C) end
+      end
+    end
+    for _, It in ipairs(Items) do
+      local a, b = FitSpan(It[2], P)
+      if b > W - 4 + 0.01 then Out[#Out + 1] = string.format("%s right %d > %d", It[1], b, W - 4) end
+    end
+    for _, B in ipairs({ P.Buy, P.Lines[1].Btn, P.Lines[2].Btn }) do
+      if B:IsShown() and (B._width > 160 or B._width < 80 or (B._height or 18) > 18) then Out[#Out + 1] = "button " .. tostring(B:GetText()) .. " " .. B._width .. "x" .. tostring(B._height) end
+    end
+    local _, ResR = FitSpan(P.Results, P)
+    local LabL = FitSpan(P.AllRecipesLabel, P)
+    if ResR > LabL then Out[#Out + 1] = "results text runs under the checkbox label" end
+    return Out
+  end
+end"""
+
+
+def fit_offenders(w):
+    X(FIT_LUA)
+    X(f'AuctionForeverBuyPanel._width = {w}; AF_NS.Trade.LayoutBuy(); AF_NS.Trade.DrawBuy()')
+    return [str(v) for v in L('FitOffenders(AuctionForeverBuyPanel)').values()]
+
+
 ok(not taint, 'no Blizzard globals reassigned (taint): ' + (', '.join(taint) or 'none'))
 S = 'AF_NS.Session'
 X('FireEvent("PLAYER_LOGIN")')
@@ -698,12 +759,21 @@ if real:
                        + [bool(L(f'{W}.Btn:IsShown()')), bool(L(f'{W}.Btn:IsEnabled()')), str(L(f'{W}.Btn:GetText()')), plain(L(f'{W}.Note:GetText()'))])
         return out
     pl = pane()
-    want = [[str(2 * n), 'Item 990102', 'AH', money(L('CF.mats[1].target')), '1s 00c', money(L('CF.mats[1].cost')), True, True, 'Buy', ''],
-            [str(n), 'Item 990103', 'AH', money(L('CF.mats[2].target')), '3s 00c', money(L('CF.mats[2].cost')), True, True, 'Buy', ''],
+    want = [[str(2 * n), 'Item 990102', 'AH', money(L('CF.mats[1].target')), '1s 00c', money(L('CF.mats[1].cost')), True, True, f'Buy {2 * n} Item 990102', ''],
+            [str(n), 'Item 990103', 'AH', money(L('CF.mats[2].target')), '3s 00c', money(L('CF.mats[2].cost')), True, True, f'Buy {n} Item 990103', ''],
             [str(n), 'Item 2320', 'Vendor', money(L('CF.list[3].each')), '-', money(L('CF.vendorCost')), False, True, 'Buy', 'buy from a vendor']]
     ok([r[:6] + r[8:] for r in pl if r[6]] == [r[:6] + r[8:] for r in want if r[6]] and [r[:6] + r[9:] for r in pl if not r[6]] == [r[:6] + r[9:] for r in want if not r[6]]
        and [r[6] for r in pl] == [True, True, False] and pl[0][7] and pl[1][7],
-       f'panel lines: need, reagent, source, pay up to (a price, no "up to"), listed now (cheapest price each), cost, a Buy button on AH lines: {pl}')
+       f'panel lines: need, reagent, source, pay up to (a price, no "up to"), listed now (cheapest price each), cost, a "Buy N name" button on AH lines: {pl}')
+    for w in (790, 930):
+        off = fit_offenders(w)
+        ok(off == [], f'craft panel at page width {w}: every line, cell and Buy button inside the page: {off}')
+    btn = [(str(L(f'AuctionForeverBuyPanel.Lines[{i}].Btn:GetText()')), L(f'AuctionForeverBuyPanel.Lines[{i}].Btn._points[#AuctionForeverBuyPanel.Lines[{i}].Btn._points][5]'),
+            L(f'AuctionForeverBuyPanel.Lines[{i}].Btn._points[#AuctionForeverBuyPanel.Lines[{i}].Btn._points][4]'), L(f'AuctionForeverBuyPanel.Lines[{i}]._height')) for i in (1, 2, 3)]
+    ok(btn[0][1] == -21 and btn[0][2] == 24 + 40 + 6 and btn[0][3] == 40 and btn[2][3] == 20
+       and L('AuctionForeverBuyPanel.Lines[2]._points[#AuctionForeverBuyPanel.Lines[2]._points][5]') - L('AuctionForeverBuyPanel.Lines[1]._points[#AuctionForeverBuyPanel.Lines[1]._points][5]') == -40,
+       f'AH lines: the Buy button on its own line under the Reagent column (2 slots), other lines 1: {btn}')
+    X('AuctionForeverBuyPanel._width = nil; AF_NS.Trade.LayoutBuy(); AF_NS.Trade.DrawBuy()')
     src = [str(L(f'AuctionForeverBuyPanel.Lines[{i}].Cells[3]:GetText()')) for i in (1, 3)]
     ok('|TInterface\\Icons\\INV_Misc_Coin_02:' in src[0] and '|TInterface\\Icons\\Inv_misc_bag_08:' in src[1] and '|c' not in src[0] + src[1]
        and all(ord(ch) < 128 for ch in src[0] + src[1]), f'source column: an icon and the plain word for AH and Vendor: {src}')
@@ -734,12 +804,12 @@ if real:
     c = L('LastCall("StartCommoditiesPurchase")')
     ok(c is not None and c[2] == 990102 and c[3] == L('CF.mats[1].qty'), f'line 1 Buy: that mat, the planned quantity ({c and c[2]} x {c and c[3]})')
     X('FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].target, CF.mats[1].cost)')
-    ok(str(L('AuctionForeverBuyPanel.Lines[1].Btn:GetText()')) == 'Confirm' and not L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()'),
+    ok(str(L('AuctionForeverBuyPanel.Lines[1].Btn:GetText()')).startswith('Confirm ') and not L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()'),
        'price at or under its pay up to: Confirm on that line, the other lines wait')
     X('Click(AuctionForeverBuyPanel.Lines[1].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
     pl = pane()
     ok(L('LastCall("ConfirmCommoditiesPurchase")[2]') == 990102 and L('LastCall("ConfirmCommoditiesPurchase")[3]') == L('CF.mats[1].qty')
-       and pl[0][9] == 'bought' and not pl[0][7] and pl[1][7] and pl[1][8] == 'Buy' and L('AF_NS.Trade.CraftRun().bought[1]') == L('CF.mats[1].qty'),
+       and pl[0][9] == 'bought' and not pl[0][7] and pl[1][7] and pl[1][8].startswith('Buy ') and L('AF_NS.Trade.CraftRun().bought[1]') == L('CF.mats[1].qty'),
        f'bought: the line says "bought", its button is off, the next line can buy: {pl}')
     ok('|cff1eff00bought|r' in str(L('AuctionForeverBuyPanel.Lines[1].Note:GetText()')), 'bought is green')
     # Over its target (pay up to): cancelled, nothing bought, the line can try again.
@@ -749,10 +819,10 @@ if real:
        'live price over its pay up to: cancelled, not bought: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
     # (the re-check after it reads the test items as sold out: back to the test data; the run keeps its plan)
     X('AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)')
-    ok(L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')) == 'Buy', 'the line can try again')
+    ok(L('AuctionForeverBuyPanel.Lines[2].Btn:IsEnabled()') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')).startswith('Buy '), 'the line can try again')
     # Above the listing the plan was priced at but under the target: fine.
     X('Calls = {}; Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo + 20, CF.mats[2].cost)')
-    ok(L('CF.mats[2].upTo + 20 < CF.mats[2].target') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')) == 'Confirm' and L('LastCall("CancelCommoditiesPurchase") == nil'),
+    ok(L('CF.mats[2].upTo + 20 < CF.mats[2].target') and str(L('AuctionForeverBuyPanel.Lines[2].Btn:GetText()')).startswith('Confirm ') and L('LastCall("CancelCommoditiesPurchase") == nil'),
        'a live price over the planned listing but under the target: Confirm (only the target cancels)')
     X('Click(AuctionForeverBuyPanel.Lines[2].Btn); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
     total = L('CF.mats[1].cost + CF.mats[2].cost + CF.vendorCost')
@@ -778,7 +848,7 @@ if real:
     pl = pane()
     X('Click(AuctionForeverBuyPanel.Lines[2].Btn)')
     c = L('LastCall("StartCommoditiesPurchase")')
-    ok(pl[1][9] == 'bought 5 of ' + str(L('CF.mats[2].qty')) and pl[1][8] == 'Buy rest' and c and c[3] == L('CF.mats[2].qty') - 5,
+    ok(pl[1][9] == 'bought 5 of ' + str(L('CF.mats[2].qty')) and pl[1][8] == 'Buy rest ' + str(L('CF.mats[2].qty') - 5) + ' Item 990103' and c and c[3] == L('CF.mats[2].qty') - 5,
        f'part bought: "bought 5 of N", Buy buys the rest ({pl[1]}, {c and c[3]})')
     X('FireEvent("AUCTION_HOUSE_CLOSED")')
     ok(L('AF_NS.Trade.CraftRun() == nil') and L('(AF_NS.Core.Holding(AuctionForeverDB, 990102))') == L('CF.mats[1].qty'),
@@ -795,9 +865,13 @@ if real:
     kl = [(L(f'KF.list[{i}].source'), L(f'KF.list[{i}].id'), L(f'KF.list[{i}].qty')) for i in range(1, (L('#KF.list') or 0) + 1)]
     ok(kl == [('AH', 990102, 2 * m - 4), ('AH', 990103, m - 3), ('Vendor', 2320, m), ('Owned', 990102, 4), ('Bank', 990103, 3)]
        and L('KF.mats[2].qty') == m - 3, f'bank units held too (after the bags), grouped AH, Vendor, Owned, Bank: {kl}')
+    X('''SavePL2 = AF_NS.Trade.PaneLines
+      AF_NS.Trade.PaneLines = function(E) local All = SavePL2(E) return { All[1], All[4], All[5] } end; AF_NS.Trade.DrawBuy()''')
     pl = pane()
-    raw = [str(L(f'AuctionForeverBuyPanel.Lines[{i}].Cells[3]:GetText()')) for i in (4, 5)]
-    ok([r[2] for r in pl] == ['AH', 'AH', 'Vendor', 'Owned', 'Bank'] and pl[3][9] == 'you have 4' and pl[4][9] == 'you have 3' and pl[3][3] == '-' and pl[3][5] == '-'
+    raw = [str(L(f'AuctionForeverBuyPanel.Lines[{i}].Cells[3]:GetText()')) for i in (2, 3)]
+    X('AF_NS.Trade.PaneLines = SavePL2; AF_NS.Trade.DrawBuy()')
+    pl = [pl[0], None, None] + pl[1:]
+    ok([r[2] for r in pl if r] == ['AH', 'Owned', 'Bank'] and pl[3][9] == 'you have 4' and pl[4][9] == 'you have 3' and pl[3][3] == '-' and pl[3][5] == '-'
        and all('UI-CheckBox-Check' in r and ':30:255:0|t' in r for r in raw) and raw[0].endswith('|cff1eff00Owned|r') and raw[1].endswith('|cff1eff00Bank|r'),
        f'panel: Owned / Bank lines with a green check mark, "you have N": {pl} {raw}')
     ok(plain(L('AF_NS.UI.MatsLine(KF.list, 9)')).endswith(', 4 Item 990102 (Owned), 3 Item 990103 (Bank)'), 'compact Mats line: (Owned) / (Bank)')
@@ -812,9 +886,17 @@ if real:
       AF_NS.Trade.PaneLines = SavePL""")
     k1 = [L(f'PM1.lines[{i}].kind') for i in range(1, L('#PM1.lines') + 1)]
     k2 = [L(f'PM2.lines[{i}].kind') for i in range(1, L('#PM2.lines') + 1)]
-    ok(L('PM1.fit') == 5 and k1 == ['AH'] * 4 + ['held'] and L('#PM1.lines[5].parts') == 3 and L('PM1.rows') == 5
-       and k2 == ['AH'] * 4 + ['more'] and L('PM2.lines[5].n') == 5 and L('PM2.rows') == 5,
-       f'overflow: Owned/Bank collapse first ({k1}), then +N more ({k2}, {L("PM2.lines[5].n")})')
+    # (an AH line takes two slots: the line and its Buy button under it; 5 slots fit with the table at 5 rows)
+    X('''PM3L = { { kind = "AH", id = 1, qty = 1, cost = 1, upTo = 1, bought = 0 }, { kind = "Vendor", id = 2, qty = 1, cost = 1, upTo = 1 },
+        { kind = "Owned", id = 3, qty = 1 }, { kind = "Bank", id = 4, qty = 1 }, { kind = "Owned", id = 5, qty = 1 } }
+      AF_NS.Trade.PaneLines = function() return PM3L end
+      PM3 = AF_NS.Trade.PaneModel(AF_NS.Trade.SelectedBuy())
+      AF_NS.Trade.PaneLines = SavePL''')
+    k3 = [L(f'PM3.lines[{i}].kind') for i in range(1, L('#PM3.lines') + 1)]
+    ok(L('PM1.fit') == 5 and k1 == ['AH'] * 2 + ['more'] and L('PM1.lines[3].n') == 3 and L('PM1.slots') == 5 and L('PM1.rows') == 5
+       and k2 == ['AH'] * 2 + ['more'] and L('PM2.lines[3].n') == 7 and L('PM2.rows') == 5
+       and k3 == ['AH', 'Vendor', 'held'] and L('#PM3.lines[3].parts') == 3 and L('PM3.slots') == 4,
+       f'overflow (AH lines take 2 slots): Owned/Bank collapse first ({k3}), then +N more ({k1}, {k2})')
     # A product too cheap for any craft to pay: not listed; with Show all, one craft greyed "over target" with each
     # mat's target (under today's listing), no Buy.
     X("""CheapSaved = AuctionForeverData.items[990101]
@@ -1421,12 +1503,31 @@ sp = L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._po
 ok(sp is not None and sp[1] == 'LEFT' and L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points][2] == AuctionForeverBuyPanel.Skip') and sp[3] == 'RIGHT'
    and L('AuctionForeverBuyPanel.Status._width') == 350,
    'AF Buy status message sits beside the buttons, 350 wide (long messages no longer run down over the bid bar)')
-# Roomier AF Buy table: below the summary lines with a gap, full window width, columns 10 apart.
-rp = L('AuctionForeverBuyPanel.Rows[1]._points[1]')
-c2 = L('AuctionForeverBuyPanel.Rows[1].Cells[2]._points[1]')
-c7w = L('AuctionForeverBuyPanel.Rows[1].Cells[7]._width')
-ok(rp[3] == -100 and L('AuctionForeverBuyPanel.Headers[1]._points[1][3]') == -80 and L('AuctionForeverBuyPanel.Filters[1]._points[#AuctionForeverBuyPanel.Filters[1]._points][5]') == -58 and c2[4] == 24 + 220 + 10 and c7w == 130 and L('AuctionForeverBuyPanel.Results._points[1][3]') == -38,
-   f'AF Buy table: filter bar at -58, headers at -82, rows from -100, Item 220 wide, columns 10 apart, Status 130 wide ({list(rp.values())}, {list(c2.values())}, {c7w})')
+# AF Buy fits the auction house window: everything sized from the page's width (790 at the default size).
+for w in (790, 930):
+    off = fit_offenders(w)
+    ok(off == [], f'AF Buy at page width {w} (a flip selected): every row, cell, header, filter, checkbox, panel and button inside the page: {off}')
+cols = [L(f'AuctionForeverBuyPanel.Rows[1].Cells[{c}]._width') for c in range(1, 8)]
+ok(cols[0] > 220 and cols[6] > 130 and cols[1:6] == [34, 60, 150, 90, 100], f'wider page (930): Item and Status get the room: {cols}')
+X('AuctionForeverBuyPanel._width = 790; AF_NS.Trade.LayoutBuy(); AF_NS.Trade.DrawBuy()')
+cols = [L(f'AuctionForeverBuyPanel.Rows[1].Cells[{c}]._width') for c in range(1, 8)]
+mins = [120, 30, 50, 90, 60, 70, 80]
+ok(all(c >= m for c, m in zip(cols, mins)) and sum(cols) + 24 + 60 == 790 - 14 - 20 - 6, f'page 790: columns shrink (not under their minimums) to fit: {cols}')
+fb = L('AuctionForeverBuyPanel.Buy')
+ok(L('AuctionForeverBuyPanel.Buy._points[#AuctionForeverBuyPanel.Buy._points][5]') == -21 and str(L('AuctionForeverBuyPanel.Buy:GetText()')).startswith('Buy ' + str(L('FF.buyQty')) + ' '),
+   f'flip: "Buy N name" on its own line under the item line: {L("AuctionForeverBuyPanel.Buy:GetText()")}')
+X('AuctionForeverBuyPanel._width = 600; AF_NS.Trade.LayoutBuy(); AF_NS.Trade.DrawBuy()')
+off = fit_offenders(600)
+ok(off == [], f'even a narrow page (600) keeps everything inside: {off}')
+X('AuctionForeverBuyPanel._width = nil; AF_NS.Trade.LayoutBuy(); AF_NS.Trade.DrawBuy()')
+# A vendor flip: Sell rate says "vendor" (a sure sale), and the panel doesn't quote the AH sell rate.
+X("""VF = AF_NS.Trade.SelectedBuy(); VFv, VFs = VF.flip.vendor, VF.info and VF.info.sellThrough
+  VF.flip.vendor = true; if VF.info then VF.info.sellThrough = 0.34 end; AF_NS.Trade.DrawBuy()
+  VFSel = nil; for i, R in ipairs(AuctionForeverBuyPanel.Rows) do if R.Sel:IsShown() then VFSel = R end end""")
+vr = str(L('VFSel and VFSel.Cells[3]:GetText()'))
+vd = str(L('AuctionForeverBuyPanel.Detail:GetText()'))
+X('VF.flip.vendor = VFv; if VF.info then VF.info.sellThrough = VFs end; AF_NS.Trade.DrawBuy()')
+ok(vr == 'vendor' and 'sells ' not in vd, f'vendor flip: Sell rate "vendor", no "sells N%" in the panel ({vr}; {vd!r})')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
 cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[6]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))

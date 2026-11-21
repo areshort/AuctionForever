@@ -96,6 +96,7 @@ local function RowList(Parent, X, Y, Width, Count, Cols, OnPick, Gap)
 			FS:SetWidth(W)
 			FS:SetJustifyH("LEFT")
 			FS:SetWordWrap(false)
+			FS:SetMaxLines(1)
 			R.Cells[c] = FS
 			CX = CX + W + (Gap or 6)
 		end
@@ -187,9 +188,39 @@ local function RecordBuy(id, Qty, Total, Resell)
 end
 
 -- AF Buy ------------------------------------------------------------------------------------------------------
--- AF Buy uses the auction house window's full width (about 930 wide): roomier columns, 10 apart.
-local BUY_COLS = { 220, 34, 60, 150, 90, 100, 130 }
-local BUY_GAP, BUY_W = 10, 868 -- 24 (icon) + columns + 6 gaps
+-- AF Buy fits the page it's on (the auction house window's inside: about 790 wide at the default size): the table
+-- and the panel are sized from the page's width each time it's shown or resized. BUY_COLS are the widths at 868
+-- (24 icon + columns + 6 gaps of 10); narrower, each column shrinks toward its minimum, wider, Item and Status get
+-- the room.
+local BUY_BASE = { 220, 34, 60, 150, 90, 100, 130 }
+local BUY_MIN = { 120, 30, 50, 90, 60, 70, 80 }
+local BUY_COLS = { 220, 34, 60, 150, 90, 100, 130 } -- the current widths (T.LayoutBuy sets them)
+local BUY_GAP, BUY_W = 10, 868 -- the current table width
+local PAGE_W_DEFAULT = 790 -- when the page can't tell its width yet
+local SCROLL_W = 16 + 4 -- the scroll bar and its gap
+local EDGE = 6 -- kept free at the page's right edge
+local function Sum(T0) local N = 0 for _, V in ipairs(T0) do N = N + V end return N end
+-- Column widths for Avail units: base widths shrunk toward the minimums (in proportion), or the slack shared by
+-- the Slack columns; never under the minimums unless even those don't fit (then all scaled down).
+local function FitCols(Base, Min, Avail, Slack)
+	local Out, SB, SM = {}, Sum(Base), Sum(Min)
+	if Avail >= SB then
+		local Extra = Avail - SB
+		for c, W in ipairs(Base) do Out[c] = W end
+		for k, c in ipairs(Slack) do
+			local Part = k < #Slack and math.floor(Extra / #Slack) or (Extra - math.floor(Extra / #Slack) * (#Slack - 1))
+			Out[c] = Out[c] + Part
+		end
+	elseif Avail >= SM then
+		local F = (Avail - SM) / math.max(1, SB - SM)
+		for c, W in ipairs(Base) do Out[c] = Min[c] + math.floor((W - Min[c]) * F) end
+		Out[Slack[1]] = Out[Slack[1]] + (Avail - Sum(Out))
+	else
+		for c, W in ipairs(Min) do Out[c] = math.floor(W * math.max(0, Avail) / SM) end
+	end
+	return Out
+end
+T.FitCols = FitCols
 -- The details panel under the table (the selected row), pixel layout. The table starts at PANE_TOP; the panel ends
 -- above the Next button (at -420), 4 below the table. Panel, top down: 4 padding, the header and evidence lines (14
 -- each), 2, the column headers (14), one 20 px line per source line (its Buy button 18 tall), 4, three summary
@@ -198,7 +229,11 @@ local BUY_GAP, BUY_W = 10, 868 -- 24 (icon) + columns + 6 gaps
 local FILTER_Y, HEAD_Y = -58, -82
 local PANE_TOP, PANE_SPACE = -100, 316 -- the table's top, and the height from there to just above the buttons
 local PANE_TEXT_H, PANE_LINE_H, PANE_MIN_ROWS, PANE_MAX_LINES = 14, 20, 5, 8
-local PANE_COLS = { 40, 190, 80, 110, 60, 100 }
+local PANE_BASE = { 40, 190, 80, 110, 60, 100 }
+local PANE_MIN = { 30, 110, 60, 80, 55, 75 }
+local PANE_COLS = { 40, 190, 80, 110, 60, 100 } -- the current widths (T.LayoutBuy sets them)
+local PANE_GAP = 6
+local BTN_MIN, BTN_MAX, BTN_H = 80, 160, 18 -- a panel line's Buy button: as wide as its label, within these
 local PANE_NAMES = { "Need", "Reagent", "Source", "Pay up to", "Listed now", "Cost" }
 
 local function SayBuy(Msg) if BuyP then BuyP.Status:SetText(Msg or "") end end
@@ -250,6 +285,7 @@ T.TierLine = TierLine
 -- The item's sell rate (sold / (sold + expired)); nil when not measured yet (sorts last).
 local function Rate(E)
 	if E.craft and E.flip and E.flip.route == "Vendor" then return 1 end -- sold to a vendor: a sure sale
+	if not E.craft and E.flip and E.flip.vendor then return 1 end
 	return E.info and type(E.info.sellThrough) == "number" and E.info.sellThrough or nil
 end
 T.BuyRate = Rate
@@ -306,7 +342,7 @@ function T.DrawBuy()
 			R.Cells[1]:SetText(NameText(E.id, true))
 			local Tier, TColor = T.Tier(F)
 			R.Cells[2]:SetText(TColor .. Tier .. "|r")
-			R.Cells[3]:SetText(UI().RateText(Rate(E)))
+			R.Cells[3]:SetText(F.vendor and "vendor" or UI().RateText(Rate(E)))
 			R.Cells[4]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
 			R.Cells[5]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
 			R.Cells[6]:SetText(Core.MoneyDelta(F.profit))
@@ -394,24 +430,38 @@ local function DrawFilters(Profs, Eff, NShown, Total)
 	if not (P and P.Filters) then return end
 	local Keys = { "all", "flips" }
 	for _, Name in ipairs(Profs) do Keys[#Keys + 1] = Name end
+	-- Button widths from their labels; squeezed (down to 30) when they don't fit the table's width, and any that
+	-- still don't fit are left out (the table's own filter is unchanged).
+	local Widths, Labels = {}, {}
+	for i, K in ipairs(Keys) do
+		Labels[i] = K == "all" and "All" or K == "flips" and "Flips" or T.ProfLabel(K)
+		Widths[i] = math.max(40, #Labels[i] * 7 + 20)
+	end
+	local Room = BUY_W
+	local Need = Sum(Widths) + 4 * math.max(0, #Widths - 1)
+	if Need > Room then
+		local F = (Room - 4 * math.max(0, #Widths - 1)) / Sum(Widths)
+		for i, W in ipairs(Widths) do Widths[i] = math.max(30, math.floor(W * F)) end
+	end
 	local X = 0
 	for i, B in ipairs(P.Filters) do
 		local K = Keys[i]
-		B:SetShown(K ~= nil)
-		B.key = K
-		if K then
-			local Label = K == "all" and "All" or K == "flips" and "Flips" or T.ProfLabel(K)
-			local W = math.max(40, #Label * 7 + 20)
-			B:SetText(Label)
-			B:SetWidth(W)
+		local Fits = K ~= nil and X + Widths[i] <= Room
+		B:SetShown(Fits)
+		B.key = Fits and K or nil
+		if Fits then
+			B:SetText(Labels[i])
+			B:SetWidth(Widths[i])
 			B:ClearAllPoints()
 			B:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + X, FILTER_Y)
 			B:SetEnabled(K ~= Eff)
-			X = X + W + 4
+			X = X + Widths[i] + 4
 		end
 	end
 	P.FilterNote:ClearAllPoints()
 	P.FilterNote:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + X + 6, FILTER_Y - 5)
+	P.FilterNote:SetWidth(100)
+	P.FilterNote:SetShown(X + 6 + 100 <= Room)
 	P.FilterNote:SetText(string.format("Showing %d of %d", NShown, Total))
 end
 -- Put the loaded list in the chosen order (no new work: sorting only reorders what's loaded), through the filter.
@@ -610,7 +660,7 @@ local function OnPriceUpdated(Unit, Total)
 	else
 		Buy.state = "confirm"
 		Pd.total = Total
-		BuyP.Buy:SetText(string.format("Confirm %d for %s", Pd.qty, Core.MoneyColor(Total)))
+		T.SetBuyButton(BuyP.Buy, string.format("Confirm %d for %s", Pd.qty, Core.MoneyColor(Total)))
 		SayBuy(string.format("Current price %s each. Click Confirm to buy.", Core.MoneyColor(Unit)))
 	end
 	T.DrawBuy()
@@ -629,6 +679,7 @@ end
 local function BuildBuy()
 	BuyP = UI().NewAHPage("AF Buy", "AuctionForeverBuyTab", "AuctionForeverBuyPanel",
 		function()
+			T.LayoutBuy() -- the window may have another size now
 			-- Rebuild only if there's new scan data or your gold changed since the list was made.
 			if not Buy.loaded or Buy.money ~= GetMoney() then T.RefreshBuy() end
 			T.SelectBuy(Buy.sel)
@@ -660,14 +711,16 @@ local function BuildBuy()
 	-- Craft plans: only recipes you know, unless this is ticked.
 	P.AllRecipes = CreateFrame("CheckButton", nil, P, "UICheckButtonTemplate")
 	P.AllRecipes:SetSize(20, 20)
-	P.AllRecipes:SetPoint("TOPLEFT", 700, -36)
+	P.AllRecipes:SetPoint("TOPRIGHT", P, "TOPRIGHT", -EDGE, -36)
 	P.AllRecipes:SetChecked(UI().ShowAllRecipes())
 	P.AllRecipes:SetScript("OnClick", function(self)
 		UI().SetShowAllRecipes(not UI().ShowAllRecipes())
 		self:SetChecked(UI().ShowAllRecipes())
 		T.RefreshBuy()
 	end)
-	P.AllRecipesLabel = Text(P, "GameFontHighlightSmall", 722, -40)
+	P.AllRecipesLabel = P:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	P.AllRecipesLabel:SetPoint("RIGHT", P.AllRecipes, "LEFT", -2, 0)
+	P.AllRecipesLabel:SetJustifyH("RIGHT")
 	P.AllRecipesLabel:SetText("Show all recipes")
 	T.BuildPane(P)
 	P.Skip = Button(P, "Next", 20, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
@@ -676,6 +729,8 @@ local function BuildBuy()
 	P.Status = Text(P, "GameFontHighlightSmall", 320, -420, 350)
 	P.Status:ClearAllPoints()
 	P.Status:SetPoint("LEFT", P.Skip, "RIGHT", 12, 0)
+	T.LayoutBuy()
+	P:HookScript("OnSizeChanged", function() T.LayoutBuy(); T.DrawBuy() end)
 end
 
 -- AF Sell -----------------------------------------------------------------------------------------------------
@@ -1082,7 +1137,7 @@ function T.PaneText(E)
 	local F = PlanOf(E)
 	if not E.craft then
 		local Need = ShownNeed(E)
-		local Out = NameText(E.id) .. "\n" .. TierLine(F) .. ", " .. SellsText(E)
+		local Out = NameText(E.id) .. "\n" .. TierLine(F) .. (F.vendor and "" or (", " .. SellsText(E))) -- a vendor sale is sure
 		if F.slow then Out = Out .. "\n|cffffd100Slow seller: sales come in bursts or often expire, so it may take longer to sell than planned.|r" end
 		if Need then
 			Out = Out .. "\n" .. (F.vendor and ("Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Money(Core.MinKeep) .. " always kept).")
@@ -1177,32 +1232,70 @@ function T.PaneSummary(E)
 	return Out
 end
 local function TextLines(S) local N = 1 for _ in S:gmatch("\n") do N = N + 1 end return N end
+-- Panel lines take one 20 px slot each; a line you buy from (an AH mat, a flip) takes a second one, for its Buy
+-- button under it.
+local function Slots(L) return (L.kind == "AH" or L.kind == "flip") and 2 or 1 end
+function T.PaneSlots(Lines)
+	local N = 0
+	for _, L in ipairs(Lines) do N = N + Slots(L) end
+	return N
+end
 -- The panel for a row: its text, lines and summary, its height, and the table rows that fit above it. Lines that
 -- don't fit (with the table at PANE_MIN_ROWS) collapse: Owned/Bank lines first into one "Owned/Bank: ..." line,
--- then the last ones into a "+N more" line.
+-- then the last ones into a "+N more" line. Fit counts slots (see Slots).
 function T.PaneModel(E)
 	local M = { detail = T.PaneText(E), summary = T.PaneSummary(E), lines = T.PaneLines(E) }
 	M.top = 4 + TextLines(M.detail) * PANE_TEXT_H + 2 -- the column headers
 	local Fixed = M.top + PANE_TEXT_H + 4 + 3 * PANE_TEXT_H + 2
 	local Fit = math.floor((PANE_SPACE - 4 - PANE_MIN_ROWS * ROW_H - Fixed) / PANE_LINE_H)
-	Fit = math.max(1, math.min(Fit, PANE_MAX_LINES))
-	if #M.lines > Fit then
+	Fit = math.max(2, math.min(Fit, PANE_MAX_LINES))
+	if T.PaneSlots(M.lines) > Fit then
 		local Keep, Held = {}, {}
 		for _, L in ipairs(M.lines) do
 			if L.kind == "Owned" or L.kind == "Bank" then Held[#Held + 1] = L else Keep[#Keep + 1] = L end
 		end
 		if #Held > 0 then Keep[#Keep + 1] = { kind = "held", parts = Held } end
-		if #Keep > Fit then
-			local More = #Keep - Fit + 1
-			for i = #Keep, Fit, -1 do table.remove(Keep, i) end
+		if T.PaneSlots(Keep) > Fit then
+			local More = 0
+			while #Keep > 0 and T.PaneSlots(Keep) + 1 > Fit do
+				table.remove(Keep)
+				More = More + 1
+			end
 			Keep[#Keep + 1] = { kind = "more", n = More }
 		end
 		M.lines = Keep
 	end
 	M.fit = Fit
-	M.height = Fixed + #M.lines * PANE_LINE_H
+	M.slots = T.PaneSlots(M.lines)
+	M.height = Fixed + M.slots * PANE_LINE_H
 	M.rows = math.max(PANE_MIN_ROWS, math.min(ROWS, math.floor((PANE_SPACE - 4 - M.height) / ROW_H)))
 	return M
+end
+-- Rough text width when the game can't measure it (offline): 6 per character, color codes and textures left out.
+local function TextWidth(FS, Str)
+	local W = FS and FS.GetStringWidth and FS:GetStringWidth()
+	if type(W) == "number" and W > 0 then return W end
+	Str = tostring(Str or ""):gsub("|T.-|t", "  "):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	return #Str * 6
+end
+T.TextWidth = TextWidth
+-- A panel line's Buy button: Verb, then the quantity and the item's name, shortened ("...") so the button stays
+-- within BTN_MAX; the button as wide as its label (BTN_MIN at least).
+function T.SetBuyButton(B, Label, Name)
+	local Full = Name and (Label .. " " .. Name) or Label
+	B:SetText(Full)
+	local FS = B.GetFontString and B:GetFontString()
+	local W = TextWidth(FS, Full) + 20
+	if Name and W > BTN_MAX then
+		local Short = Name
+		while #Short > 1 and W > BTN_MAX do
+			Short = Short:sub(1, -2)
+			Full = Label .. " " .. Short .. "..."
+			B:SetText(Full)
+			W = TextWidth(FS, Full) + 20
+		end
+	end
+	B:SetSize(math.max(BTN_MIN, math.min(BTN_MAX, math.floor(W + 0.5))), BTN_H)
 end
 function T.BuildPane(P)
 	local Pane = CreateFrame("Frame", nil, P)
@@ -1217,62 +1310,137 @@ function T.BuildPane(P)
 	P.Detail:SetWidth(BUY_W - 12)
 	P.Detail:SetJustifyH("LEFT")
 	P.PaneHead = {}
-	local X = 24
-	for c, W in ipairs(PANE_COLS) do
+	for c in ipairs(PANE_COLS) do
 		local H = Pane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		H:SetWidth(W)
 		H:SetJustifyH("LEFT")
+		H:SetWordWrap(false)
 		H:SetText(PANE_NAMES[c])
-		H.x = X
 		P.PaneHead[c] = H
-		X = X + W + 6
 	end
-	local BtnX = X
 	P.Lines = {}
 	for i = 1, PANE_MAX_LINES do
 		local W = CreateFrame("Frame", nil, Pane)
 		W:SetSize(BUY_W, PANE_LINE_H)
 		W.Icon = W:CreateTexture(nil, "ARTWORK")
 		W.Icon:SetSize(16, 16)
-		W.Icon:SetPoint("LEFT", 4, 0)
+		W.Icon:SetPoint("TOPLEFT", W, "TOPLEFT", 4, -2)
 		W.Cells = {}
-		local CX = 24
-		for c, CW in ipairs(PANE_COLS) do
+		for c in ipairs(PANE_COLS) do
 			local FS = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-			FS:SetPoint("LEFT", W, "LEFT", CX, 0)
-			FS:SetWidth(CW)
 			FS:SetJustifyH("LEFT")
 			FS:SetWordWrap(false)
+			FS:SetMaxLines(1)
 			W.Cells[c] = FS
-			CX = CX + CW + 6
 		end
 		W.Wide = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		W.Wide:SetPoint("LEFT", W, "LEFT", 24, 0)
-		W.Wide:SetWidth(BUY_W - 30)
 		W.Wide:SetJustifyH("LEFT")
 		W.Wide:SetWordWrap(false)
+		W.Wide:SetMaxLines(1)
+		-- The Buy button on its own line, under the Reagent column; "bought ..." to its right.
 		W.Btn = CreateFrame("Button", nil, W, "UIPanelButtonTemplate")
-		W.Btn:SetSize(120, 18)
-		W.Btn:SetPoint("LEFT", W, "LEFT", BtnX, 0)
+		W.Btn:SetSize(BTN_MIN, BTN_H)
 		W.Btn:SetText("Buy")
 		W.Btn:SetScript("OnClick", function() T.BuyMat(W.mat) end)
 		W.Note = W:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		W.Note:SetPoint("LEFT", W, "LEFT", BtnX + 126, 0)
-		W.Note:SetWidth(BUY_W - BtnX - 130)
 		W.Note:SetJustifyH("LEFT")
+		W.Note:SetWordWrap(false)
+		W.Note:SetMaxLines(1)
 		P.Lines[i] = W
 	end
-	-- A flip's Buy button sits on its one line, where a mat's Buy button would be (wider: "Confirm 20 for 1g 05s 00c").
+	-- A flip's Buy button: on the line under its one item line, like a mat's ("Confirm 20 for 1g 05s 00c").
 	P.Buy = CreateFrame("Button", nil, P.Lines[1], "UIPanelButtonTemplate")
-	P.Buy:SetSize(220, 18)
-	P.Buy:SetPoint("LEFT", P.Lines[1], "LEFT", BtnX, 0)
+	P.Buy:SetSize(BTN_MIN, BTN_H)
 	P.Buy:SetText("Buy")
 	P.Buy:SetScript("OnClick", function() T.BuyClick() end)
 	P.Summary = Pane:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	P.Summary:SetWidth(BUY_W - 12)
 	P.Summary:SetJustifyH("LEFT")
 end
+-- Size everything on the AF Buy page from the page's width (the auction house window's inside): the table's
+-- columns, rows, scroll bar, the summary lines, the filter bar's room, the panel and its columns.
+function T.PageWidth()
+	local W = BuyP and BuyP:GetWidth()
+	if type(W) ~= "number" or W < 200 then W = PAGE_W_DEFAULT end
+	return W
+end
+function T.LayoutBuy()
+	local P = BuyP
+	if not P then return end
+	local PW = T.PageWidth()
+	BUY_W = math.floor(PW - 14 - SCROLL_W - EDGE)
+	local Cols = FitCols(BUY_BASE, BUY_MIN, BUY_W - 24 - BUY_GAP * (#BUY_BASE - 1), { 1, 7 })
+	for c, W in ipairs(Cols) do BUY_COLS[c] = W end
+	local CX = 24
+	for c, W in ipairs(BUY_COLS) do
+		local H = P.Headers[c]
+		H:SetWidth(W)
+		H:ClearAllPoints()
+		H:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + CX, HEAD_Y + 2)
+		if H.Label then H.Label:SetWidth(W); H.Label:SetWordWrap(false) end
+		for _, R in ipairs(P.Rows) do
+			local FS = R.Cells[c]
+			FS:ClearAllPoints()
+			FS:SetPoint("LEFT", R, "LEFT", CX, 0)
+			FS:SetWidth(W)
+		end
+		CX = CX + W + BUY_GAP
+	end
+	for _, R in ipairs(P.Rows) do R:SetWidth(BUY_W) end
+	P.Bar:ClearAllPoints()
+	P.Bar:SetPoint("TOPLEFT", P, "TOPLEFT", 14 + BUY_W + 4, PANE_TOP)
+	P.Empty:SetWidth(math.min(600, BUY_W - 6))
+	-- The summary lines (from x 300); the third shares its row with "Show all recipes" at the right edge.
+	local Box = 20 + 2 + TextWidth(P.AllRecipesLabel, "Show all recipes") + 8
+	for _, FS in ipairs({ P.Budget, P.Target }) do FS:SetWidth(math.max(100, PW - 300 - EDGE)) end
+	P.Results:SetWidth(math.max(100, PW - 300 - EDGE - Box))
+	-- The panel.
+	local Pane = P.Pane
+	Pane:SetWidth(BUY_W)
+	P.Detail:SetWidth(BUY_W - 12)
+	P.Summary:SetWidth(BUY_W - 12)
+	local PCols = FitCols(PANE_BASE, PANE_MIN, BUY_W - 24 - PANE_GAP * (#PANE_BASE - 1) - 4, { 2 })
+	-- (with room to spare, the columns keep their base widths; the space after them is the note's)
+	if BUY_W - 24 - PANE_GAP * (#PANE_BASE - 1) - 4 > Sum(PANE_BASE) then PCols = { unpack(PANE_BASE) } end
+	for c, W in ipairs(PCols) do PANE_COLS[c] = W end
+	local X = 24
+	for c, W in ipairs(PANE_COLS) do
+		P.PaneHead[c].x = X
+		P.PaneHead[c]:SetWidth(W)
+		for _, Ln in ipairs(P.Lines) do
+			local FS = Ln.Cells[c]
+			FS:ClearAllPoints()
+			FS:SetPoint("TOPLEFT", Ln, "TOPLEFT", X, -4)
+			FS:SetWidth(W)
+		end
+		X = X + W + PANE_GAP
+	end
+	P.PaneEnd = X -- after the last column: a line's note ("buy from a vendor", "you have 4")
+	P.BtnX = 24 + PANE_COLS[1] + PANE_GAP -- the Buy buttons: under the Reagent column
+	for _, Ln in ipairs(P.Lines) do
+		Ln:SetWidth(BUY_W)
+		Ln.Wide:ClearAllPoints()
+		Ln.Wide:SetPoint("TOPLEFT", Ln, "TOPLEFT", 24, -4)
+		Ln.Wide:SetWidth(BUY_W - 30)
+		Ln.Btn:ClearAllPoints()
+		Ln.Btn:SetPoint("TOPLEFT", Ln, "TOPLEFT", P.BtnX, -PANE_LINE_H - 1)
+	end
+	P.Buy:ClearAllPoints()
+	P.Buy:SetPoint("TOPLEFT", P.Lines[1], "TOPLEFT", P.BtnX, -PANE_LINE_H - 1)
+end
 local function Owned(K) return K == "Owned" or K == "Bank" end
+-- A line's note: right of its Buy button (on the button's line), else after the last column.
+local function PlaceNote(W, Btn)
+	local P = BuyP
+	W.Note:ClearAllPoints()
+	if Btn then
+		W.Note:SetPoint("LEFT", Btn, "RIGHT", 6, 0)
+		W.Note:SetWidth(math.max(20, BUY_W - P.BtnX - Btn:GetWidth() - 6 - 4))
+	else
+		W.Note:SetPoint("TOPLEFT", W, "TOPLEFT", P.PaneEnd, -4)
+		W.Note:SetWidth(math.max(20, BUY_W - P.PaneEnd - 4))
+	end
+end
+local function ShortItem(id) return UI().ShortName((UI().ItemName(id))) end
 function T.DrawPane(E, M)
 	local P = BuyP
 	local Pane = P.Pane
@@ -1291,17 +1459,21 @@ function T.DrawPane(E, M)
 	local F, R = PlanOf(E)
 	local Busy = Buy.state ~= nil
 	local Blocked = E.craft and (F.onCooldown or F.blocked)
+	local Slot = 0
 	for i, W in ipairs(P.Lines) do
 		local L = M.lines[i]
 		W:SetShown(L ~= nil)
 		W.mat = nil
 		if L then
 			W:ClearAllPoints()
-			W:SetPoint("TOPLEFT", Pane, "TOPLEFT", 0, Y - (i - 1) * PANE_LINE_H)
+			W:SetPoint("TOPLEFT", Pane, "TOPLEFT", 0, Y - Slot * PANE_LINE_H)
+			W:SetHeight(Slots(L) * PANE_LINE_H)
+			Slot = Slot + Slots(L)
 			for c = 1, #PANE_COLS do W.Cells[c]:SetText("") end
 			W.Wide:SetText("")
 			W.Note:SetText("")
 			W.Btn:Hide()
+			PlaceNote(W)
 			W.Icon:SetTexture(L.id and UI().Icon(L.id) or nil)
 			if L.kind == "held" then
 				local Parts = {}
@@ -1320,23 +1492,25 @@ function T.DrawPane(E, M)
 					W.mat = L.mat
 					W.Btn:Show()
 					local Pend = R and R == Run and Buy.pending and Buy.pending.craft and Buy.pending.mat == L.mat
+					local Left = math.max(0, L.qty - L.bought)
 					if L.bought >= L.qty then
-						W.Btn:SetText("Buy")
+						T.SetBuyButton(W.Btn, "Buy " .. L.qty, ShortItem(L.id))
 						W.Btn:SetEnabled(false)
 						W.Note:SetText("|cff1eff00bought|r")
 					else
 						if L.bought > 0 then W.Note:SetText(string.format("|cffffd100bought %d of %d|r", L.bought, L.qty)) end
 						if Pend and Buy.state == "confirm" then
-							W.Btn:SetText("Confirm")
+							T.SetBuyButton(W.Btn, "Confirm " .. Left, ShortItem(L.id))
 							W.Btn:SetEnabled(true)
 						elseif Pend then
-							W.Btn:SetText("...")
+							T.SetBuyButton(W.Btn, "...")
 							W.Btn:SetEnabled(false)
 						else
-							W.Btn:SetText(L.bought > 0 and "Buy rest" or "Buy")
+							T.SetBuyButton(W.Btn, (L.bought > 0 and "Buy rest " or "Buy ") .. Left, ShortItem(L.id))
 							W.Btn:SetEnabled(not Busy and not Blocked and not (R and R == LastRun))
 						end
 					end
+					PlaceNote(W, W.Btn)
 				elseif L.kind == "Vendor" then
 					W.Note:SetText("buy from a vendor")
 				elseif Owned(L.kind) then
@@ -1346,8 +1520,15 @@ function T.DrawPane(E, M)
 		end
 	end
 	P.Buy:SetShown(not E.craft)
+	if not E.craft then
+		-- (the flip's label is set by the purchase steps; "Buy N name" when it's waiting)
+		local Txt = tostring(P.Buy:GetText() or "")
+		if Txt == "" or Txt == "Buy" or Txt:match("^Buy %d") then T.SetBuyButton(P.Buy, "Buy " .. (F.buyQty or 0), ShortItem(E.id))
+		else T.SetBuyButton(P.Buy, Txt) end
+		PlaceNote(P.Lines[1], P.Buy)
+	end
 	P.Summary:ClearAllPoints()
-	P.Summary:SetPoint("TOPLEFT", Pane, "TOPLEFT", 6, Y - #M.lines * PANE_LINE_H - 4)
+	P.Summary:SetPoint("TOPLEFT", Pane, "TOPLEFT", 6, Y - Slot * PANE_LINE_H - 4)
 	P.Summary:SetText(M.summary)
 end
 function T.EndCraftRun(Done)
