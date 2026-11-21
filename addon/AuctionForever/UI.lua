@@ -1831,23 +1831,102 @@ local function TargetPrice(I)
 end
 L.TargetPrice = TargetPrice
 
--- Count (Shift held, a stack of more than one): Vendor, AH and Profit for the whole stack, labeled "(x20)", or
--- "(x20 in bags)" when the count is what you carry (InBags). Key: the hovered item's market (a suffix version's own,
--- see Core.LinkKey); a version with no data shows no AH value, never another version's.
-function L.TooltipLines(id, Count, InBags, Key)
+-- What to do with an item you hold: the one decision the tooltip's Rec line, the bag icons and AF Sell share.
+-- Returns Rec, the vendor price, the AH target price, and Why (for "Keep" / "-"):
+--   "Keep"    soulbound (Bound: can't go on the auction house) or on your keep list
+--   "-"       a quest item, or nothing pays for it (no AH data and no vendor price)
+--   "Auction" / "Vendor"  Core.Recommend: the AH after the cut against the vendor price, weighed by the chance it
+--             sells and the deposit lost when it doesn't; a seller without steady data needs 1.5x the vendor price
+--   nil       the vendor price isn't known yet (item not loaded; asked for): decided once it is
+-- AF Sell lists exactly the items this says "Auction" for.
+function L.SellAdvice(id, Key, Bound)
+	local Keep = type(AuctionForeverDB) == "table" and type(AuctionForeverDB.keep) == "table" and AuctionForeverDB.keep
+	if Bound then return "Keep", nil, nil, "soulbound" end
+	if Keep and Keep[id] then return "Keep", nil, nil, "keep list" end
+	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(id)
+	if ClassID == 12 then return "-", nil, nil, "quest item" end
 	local I = Core.Info(Key or id)
-	local V = VendorKnown(id) -- nil: not known yet (shown as such; the profit needs it)
+	local Target = TargetPrice(I)
+	local V = VendorKnown(id)
+	if V == nil then
+		if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+		return nil, nil, Target
+	end
+	if not I then
+		if V > 0 then return "Vendor", V, nil end
+		return "-", V, nil, "nothing pays for it"
+	end
+	return Core.Recommend(I, V, Target) or (V > 0 and "Vendor" or "-"), V, Target
+end
+
+-- The item's Farm tier (S/A/B/C/D): its expected earnings each (net x sell rate - deposit lost, as the Farm lists
+-- work it out) ranked against the Farm All list, with MarkTiers' cut-offs. nil when it isn't known (no data, still
+-- warming up, no sales measured).
+local TierScores
+function L.ItemTier(Key)
+	local R = Farm.Raw(Key, FarmEnv())
+	local X = R.expected
+	if R.excluded then
+		if X and X <= 0 then return "D" end
+		return nil
+	end
+	if not X then return nil end
+	if X <= 0 then return "D" end
+	local Rows = L.AllRows()
+	if not (TierScores and TierScores.rows == Rows) then
+		local S = {}
+		for _, Rw in ipairs(Rows) do local Sc = Rw.score or Rw.expected; if Sc then S[#S + 1] = Sc end end
+		TierScores = { rows = Rows, scores = S }
+	end
+	local Above, N = 0, #TierScores.scores
+	for _, Sc in ipairs(TierScores.scores) do if Sc > X then Above = Above + 1 end end
+	if N == 0 then return nil end
+	for _, T in ipairs(L.TIERS) do if Above / N < T[2] then return T[1] end end
+	return "D"
+end
+
+-- The tooltip's lines under "AuctionForever": Tier, Vendor, AH, Rec and Source. Count (Shift held, a stack of more
+-- than one): Vendor, AH and Rec's delta for the whole stack, labeled "(x20)", or "(x20 in bags)" when the count is
+-- what you carry (InBags). Key: the hovered item's market (a suffix version's own, see Core.LinkKey); a version with
+-- no data shows no AH value, never another version's. Bound: the hovered item is soulbound.
+function L.TooltipLines(id, Count, InBags, Key, Bound)
+	local I = Core.Info(Key or id)
+	local V = VendorKnown(id) -- nil: not known yet (shown as such)
 	if not I and (V or 0) <= 0 then return nil end
 	local Target = TargetPrice(I)
 	local N = (Count and Count > 1) and math.floor(Count) or 1
 	local Tag = N > 1 and string.format(" (x%d%s)", N, InBags and " in bags" or "") or ""
+	local Rec, _, _, Why = L.SellAdvice(id, Key, Bound)
+	local RecText = Rec or "-"
+	if (Rec == "Auction" or Rec == "Vendor") and Target and V then
+		-- Per unit: the AH price after the 5% cut minus what a vendor pays (times the stack).
+		RecText = Rec .. "  " .. Core.MoneyDelta((math.floor(Target * (1 - Core.Cut)) - V) * N)
+	elseif Why then
+		RecText = RecText .. " (" .. Why .. ")"
+	end
+	local Ok, Tier = pcall(L.ItemTier, Key or id)
 	return {
+		{ "Tier", (Ok and Tier) and L.TierText(Tier) or "-" },
 		{ "Vendor" .. Tag, (V == nil and "not known yet") or (V > 0 and Core.MoneyColor(V * N)) or "-" },
 		{ "AH" .. Tag, Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data" },
-		-- Per unit: the AH price after the 5% cut minus what a vendor pays (times the stack).
-		{ "Profit" .. Tag, (Target and V) and Core.MoneyDelta((math.floor(Target * (1 - Core.Cut)) - V) * N) or "-" },
+		{ "Rec" .. Tag, RecText },
 		{ "Source", AF.Farm.Source(id) },
 	}
+end
+-- Is the hovered item soulbound? A bag slot is asked directly; otherwise the tooltip's own "Soulbound" line.
+function L.TooltipBound(Tip, TData)
+	local Ok, Info = pcall(function() return Tip.GetPrimaryTooltipInfo and Tip:GetPrimaryTooltipInfo() end)
+	local Args = Ok and type(Info) == "table" and Info.getterName == "GetBagItem" and Info.getterArgs
+	local IL = rawget(_G, "ItemLocation")
+	if type(Args) == "table" and IL and C_Item.IsBound then
+		local Ok2, Yes = pcall(function() return C_Item.IsBound(IL:CreateFromBagAndSlot(Args[1], Args[2])) end)
+		if Ok2 then return Yes == true end
+	end
+	local Word = rawget(_G, "ITEM_SOULBOUND") or "Soulbound"
+	for _, Ln in ipairs(type(TData) == "table" and type(TData.lines) == "table" and TData.lines or {}) do
+		if type(Ln) == "table" and Ln.leftText == Word then return true end
+	end
+	return false
 end
 -- The hovered stack's size, from what the tooltip shows: the game's getter (a bag slot, loot, mail), else the
 -- tooltip owner (a bag button, or any item button that keeps its count). nil when it doesn't say.
@@ -1885,17 +1964,13 @@ function L.TooltipCount(Tip, id)
 	if Ok and type(B) == "number" and B > 1 then return B, true end
 	return nil
 end
--- For the bag icons (Bags.lua): the tooltip's recommendation ("Auction", "Vendor" or nil) and the vendor price.
+-- For the bag icons (Bags.lua): the tooltip's Rec ("Auction" or "Vendor"; nil for Keep / "-") and the vendor price.
 -- A third result, true: the vendor price isn't known yet (the item isn't loaded), so no advice yet; ask again later.
-function L.BagAdvice(id, Key)
-	local I = Core.Info(Key or id)
-	local V = VendorKnown(id)
-	if V == nil then
-		if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
-		return nil, nil, true
-	end
-	if not I and V <= 0 then return nil, V end
-	return Core.Recommend(I, V, TargetPrice(I)), V
+function L.BagAdvice(id, Key, Bound)
+	local Rec, V = L.SellAdvice(id, Key, Bound)
+	if Rec == nil then return nil, nil, true end
+	if Rec ~= "Auction" and Rec ~= "Vendor" then return nil, V end
+	return Rec, V
 end
 -- Shift pressed or released while our tooltip shows an item: show it again (stack values on / off). Listened to only
 -- while such a tooltip is up.
@@ -1932,7 +2007,7 @@ local function OnTooltip(Tip, TData)
 	local Link = TData.hyperlink
 	if not Link and Tip.GetItem then local Ok, _, L2 = pcall(Tip.GetItem, Tip); Link = Ok and L2 or nil end
 	local N, InBags = L.TooltipCount(Tip, id)
-	local Lines = L.TooltipLines(id, N, InBags, Core.LinkKey(Link, id))
+	local Lines = L.TooltipLines(id, N, InBags, Core.LinkKey(Link, id), L.TooltipBound(Tip, TData))
 	if not Lines then return end
 	WatchShift(Tip, id)
 	Tip:AddLine(" ")

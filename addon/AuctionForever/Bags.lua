@@ -93,11 +93,10 @@ end
 
 -- "Auction", "Vendor" or "" (no icon). Bound: soulbound.
 -- MKey: the item's market (a suffix version's own, from its link; see Core.LinkKey).
+-- The same decision as the tooltip's Rec line and AF Sell (UI.SellAdvice: soulbound, keep list and quest items
+-- get no icon).
 local function Decide(ID, Bound, MKey)
-	if Bound or KeepList()[ID] then return "" end
-	local _, _, _, _, _, ClassID = C_Item.GetItemInfoInstant(ID)
-	if ClassID == QUEST_CLASS then return "" end
-	local Advice, _, Unknown = AF.UI.BagAdvice(ID, MKey)
+	local Advice, _, Unknown = AF.UI.BagAdvice(ID, MKey, Bound)
 	if Unknown then return nil end -- vendor price not known yet: decided later, not cached as "nothing"
 	return Advice or ""
 end

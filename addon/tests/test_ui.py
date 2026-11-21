@@ -1208,7 +1208,7 @@ ok(I.mySold == 40 and I.mySoldValue == 1000, f'Info: you sold {I.mySold} for {I.
 X("time = function() return 1800000000 + 4 * 86400 end")
 ok(L('AF_NS.Core.Info(2589).mySold') in (None, 0), 'own sales older than 3 days drop out of the Info count')
 
-# Item tooltip: just Vendor, AH, Profit (AH after the 5% cut - vendor, green + / red -) and Source; no Shift details.
+# Item tooltip: exactly Tier, Vendor, AH, Rec (with the AH-after-cut minus vendor delta, green + / red -), Source.
 mc = L('AF_NS.Core.MoneyColor(10203)')
 ok('|cffffd7001g|r' in mc and '|cffc7c7cf02s|r' in mc and '|cffeda55f03c|r' in mc, 'money in coin colors: ' + mc)
 ok(L('AF_NS.Core.MoneyColor(5)') == '|cffeda55f5c|r' and L('AF_NS.Core.MoneyColor(nil)') == '-', 'copper only; no price shows "-"')
@@ -1216,12 +1216,15 @@ md = [L(f'AF_NS.Core.MoneyDelta({c})') for c in ('150', '-150', '0', 'nil')]
 ok(md == ['|cff1eff00+|r|cffeda55f1s|r |cffeda55f50c|r'.replace('|cffeda55f1s|r', '|cffc7c7cf1s|r'), '|cffff4040-|r|cffc7c7cf1s|r |cffeda55f50c|r', '|cffeda55f0c|r', '-'],
    f'MoneyDelta: green + for a gain, red - for a loss: {md}')
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok([r[0] for r in tl] == ['Vendor', 'AH', 'Profit', 'Source'], 'tooltip lines: exactly Vendor, AH, Profit, Source: ' + str([r[0] for r in tl]))
+ok([r[0] for r in tl] == ['Tier', 'Vendor', 'AH', 'Rec', 'Source'], 'tooltip lines: exactly Tier, Vendor, AH, Rec, Source: ' + str([r[0] for r in tl]))
 v = L('AF_NS.UI.Vendor(2589)'); ah = L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
 exp = int(ah * 0.95) - v
-ok(str(tl[2][1]) == L(f'AF_NS.Core.MoneyDelta({exp})') and (exp <= 0 or str(tl[2][1]).startswith('|cff1eff00+|r')),
-   f'Profit = AH after the 5% cut - vendor, green plus ({ah}c, vendor {v}c -> {tl[2][1]})')
-ok(str(tl[3][1]) in ('Gather', 'Drop', 'Crafted'), 'Source line: ' + str(tl[3][1]))
+rec0 = L('(AF_NS.UI.SellAdvice(2589))')
+ok(str(tl[3][1]) == f"{rec0}  " + L(f'AF_NS.Core.MoneyDelta({exp})') and rec0 in ('Auction', 'Vendor') and (exp <= 0 or L(f'AF_NS.Core.MoneyDelta({exp})').startswith('|cff1eff00+|r')),
+   f'Rec = the shared decision, then AH after the 5% cut - vendor in green/red ({ah}c, vendor {v}c -> {tl[3][1]})')
+ok(str(tl[4][1]) in ('Gather', 'Drop', 'Crafted'), 'Source line: ' + str(tl[4][1]))
+tier0 = L('AF_NS.UI.ItemTier(2589)')
+ok(plain(str(tl[0][1])) == (tier0 or '-') and tier0 in ('S', 'A', 'B', 'C', 'D', None), f'Tier line: the Farm tier ({tl[0][1]})')
 ok(not any('Shift' in str(r) for r in tl), 'no Shift hint')
 # Shift held: Vendor, AH and Profit for the hovered stack ("(x20)"), the same lines times the count; released: one.
 X("""ShiftDown = false; IsShiftKeyDown = function() return ShiftDown end
@@ -1243,40 +1246,42 @@ def tip():
 v1, ah1 = L('AF_NS.UI.Vendor(2589)'), L('AF_NS.UI.TargetPrice(AF_NS.Core.Info(2589))')
 m = lambda c: plain(L(f'AF_NS.Core.MoneyColor({c})'))
 d = lambda c: plain(L(f'AF_NS.Core.MoneyDelta({c})'))
-one = [f'Vendor: {m(v1)}', f'AH: {m(ah1)}', f'Profit: {d(int(ah1 * 0.95) - v1)}']
+rec1 = L('(AF_NS.UI.SellAdvice(2589))')
+one = [f'Vendor: {m(v1)}', f'AH: {m(ah1)}', f'Rec: {rec1}  {d(int(ah1 * 0.95) - v1)}']
 X('ShowTip()')
 t0 = tip()
 X('ShiftDown = true; ShowTip()')
 t20 = tip()
-ok(t0[:3] == one and t20[:3] == [f'Vendor (x20): {m(v1 * 20)}', f'AH (x20): {m(ah1 * 20)}', f'Profit (x20): {d((int(ah1 * 0.95) - v1) * 20)}']
-   and len(t20) == len(t0) and t20[3] == t0[3], f'Shift on a bag stack of 20: the stack\'s values, no extra lines: {t20} (without Shift {t0})')
+ok(t0[1:4] == one and t20[1:4] == [f'Vendor (x20): {m(v1 * 20)}', f'AH (x20): {m(ah1 * 20)}', f'Rec (x20): {rec1}  {d((int(ah1 * 0.95) - v1) * 20)}']
+   and len(t20) == len(t0) and t20[4] == t0[4] and t20[0] == t0[0], f'Shift on a bag stack of 20: the stack\'s values, no extra lines: {t20} (without Shift {t0})')
 X('ShiftDown = false; Refreshes = 0; FireEvent("MODIFIER_STATE_CHANGED", "LSHIFT", 0)')
-ok(L('Refreshes') == 1 and tip()[:3] == one, f'Shift released while hovering: the tooltip refreshes to one item: {tip()}')
+ok(L('Refreshes') == 1 and tip()[1:4] == one, f'Shift released while hovering: the tooltip refreshes to one item: {tip()}')
 X('ShiftDown = true; FireEvent("MODIFIER_STATE_CHANGED", "RSHIFT", 1)')
-ok(L('Refreshes') == 2 and tip()[0] == f'Vendor (x20): {m(v1 * 20)}', 'Shift pressed while hovering: back to the stack')
+ok(L('Refreshes') == 2 and tip()[1] == f'Vendor (x20): {m(v1 * 20)}', 'Shift pressed while hovering: back to the stack')
 X('FireEvent("MODIFIER_STATE_CHANGED", "LCTRL", 1); GameTooltip.GetItem = function() return "Other", "|Hitem:4306::|h" end; FireEvent("MODIFIER_STATE_CHANGED", "LSHIFT", 1)')
 ok(L('Refreshes') == 2, 'other keys, or the tooltip now showing another item: no refresh')
 X('GameTooltip.GetItem = function() return "Linen Cloth", "|Hitem:2589::|h" end; for _, f in ipairs((rawget(GameTooltip, "_hooks") or {}).OnHide or {}) do f(GameTooltip) end')
 ok(L('AF_NS.UI.ShiftWatch._events.MODIFIER_STATE_CHANGED') is None, 'tooltip hidden: stops listening for Shift')
 X('StackN = 1; ShowTip()')
-ok(tip()[:3] == one, f'a single item with Shift: unchanged: {tip()}')
+ok(tip()[1:4] == one, f'a single item with Shift: unchanged: {tip()}')
 X('TipGetter = nil; ShowTip()')
-ok(tip()[:3] == [f'Vendor (x24 in bags): {m(v1 * 24)}', f'AH (x24 in bags): {m(ah1 * 24)}', f'Profit (x24 in bags): {d((int(ah1 * 0.95) - v1) * 24)}'],
+ok(tip()[1:4] == [f'Vendor (x24 in bags): {m(v1 * 24)}', f'AH (x24 in bags): {m(ah1 * 24)}', f'Rec (x24 in bags): {rec1}  {d((int(ah1 * 0.95) - v1) * 24)}'],
    f'no stack to read: your bag count, labeled "in bags": {tip()}')
 X('GameTooltip.GetOwner = function() return { count = 7 } end; ShowTip()')
-ok(tip()[0] == f'Vendor (x7): {m(v1 * 7)}', 'an item button that keeps its count (loot, mail...): that stack')
+ok(tip()[1] == f'Vendor (x7): {m(v1 * 7)}', 'an item button that keeps its count (loot, mail...): that stack')
 X("""C_Item.GetItemCount, C_Container.GetContainerItemInfo = RealGIC, RealCCI; IsShiftKeyDown = function() return false end
   GameTooltip.GetPrimaryTooltipInfo, GameTooltip.GetItem, GameTooltip.RefreshData, GameTooltip.GetOwner = nil, nil, nil, nil
   for _, f in ipairs((rawget(GameTooltip, "_hooks") or {}).OnHide or {}) do f(GameTooltip) end; TipLines = {}""")
 # A vendor pays more than the AH after the cut: a red minus.
 X('OldInfo = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2589 then return "Linen Cloth", nil, 1, nil, nil, nil, nil, nil, nil, nil, 10^7 end return OldInfo(id) end')
 tl3 = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok(str(tl3[2][1]).startswith('|cffff4040-|r'), 'vendor pays more: Profit with a red minus: ' + str(tl3[2][1]))
+ok(str(tl3[3][1]).startswith('Vendor  |cffff4040-|r'), 'vendor pays more: Rec Vendor with a red minus: ' + str(tl3[3][1]))
 X('C_Item.GetItemInfo = OldInfo')
 # An item with no AH data still shows its vendor price; Profit "-".
 tl4 = L('AF_NS.UI.TooltipLines(424242)')
-ok(tl4 is not None and list(tl4[2].values())[1] == 'no data' and list(tl4[3].values())[1] == '-', 'no AH data: vendor price shown, AH no data, Profit -')
-ok(L('AF_NS.UI.TooltipLines(2996)[4][2]') == 'Crafted', 'Source: Crafted for an item a recipe makes')
+ok(tl4 is not None and list(tl4[3].values())[1] == 'no data' and list(tl4[4].values())[1] == 'Vendor' and list(tl4[1].values())[1] == '-',
+   f'no AH data: vendor price shown, AH no data, Rec Vendor (no delta), Tier - ({[list(r.values()) for r in tl4.values()]})')
+ok(L('AF_NS.UI.TooltipLines(2996)[5][2]') == 'Crafted', 'Source: Crafted for an item a recipe makes')
 
 # /af selftest runs end to end in the mock (auction house open), saves results, and finds no problems.
 X('AuctionHouseFrame:Show(); AuctionForeverDB = AuctionForeverDB or {}; AuctionForeverDB.selftest = nil')
@@ -1384,14 +1389,14 @@ X("""OldCD, OldStatus2, OldNow = AF_NS.Core.SellPrice, AF_NS.Core.Status, time
   AuctionForeverDB.fresh.items[2589] = { 20, 500, { { 20, 300 } }, 1800000000 }
   time = function() return 1800000000 + 720 end""")
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ah = str(tl[1][1])
+ah = str(tl[2][1])
 ok('43s' in ah and '21c' in ah and '|T' not in ah and 'ago' not in ah, 'AH line: target price, fresh data: no icon, no timestamp: ' + ah)
 X('time = function() return 1800000000 + 7200 end')
-ah2 = str([list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()][1][1])
+ah2 = str([list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()][2][1])
 ok('43s' in ah2 and 'UI-Dialog-Icon-AlertNew' in ah2, 'data over an hour old: warning icon: ' + ah2)
 X('AF_NS.Core.Status = function() return "warming up" end')
 tl = [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]
-ok('43s' not in str(tl[1][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[1][1]))
+ok('43s' not in str(tl[2][1]), 'not rated yet: falls back to the recent selling price: ' + str(tl[2][1]))
 X('AF_NS.Core.SellPrice, AF_NS.Core.Status, time = OldCD, OldStatus2, OldNow')
 # Empty flip list says what the budget is.
 X('OldMoney = GetMoney; GetMoney = function() return 15000 end')
@@ -2282,7 +2287,7 @@ ok(L('AF_NS.UI.VendorKnown(990647)') is None and L('AF_NS.UI.VendorKnown(2589)')
 X('AuctionForeverData.info[990647] = { nil, 3, 0 }')
 ok(L('AF_NS.UI.VendorKnown(990647)') is None, 'new data file (nil vendor price): not known')
 tl = {str(r[1]): plain(str(r[2])) for r in L('AF_NS.UI.TooltipLines(990647)').values()}
-ok(tl.get('Vendor') == 'not known yet' and tl.get('Profit') == '-' and tl.get('AH') not in (None, 'no data'),
+ok(tl.get('Vendor') == 'not known yet' and tl.get('Rec') == '-' and tl.get('AH') not in (None, 'no data'),
    f'tooltip: vendor "not known yet", no profit worked out against 0, the AH price still shown ({tl})')
 ba = L('{ AF_NS.UI.BagAdvice(990647) }')
 ok(ba[1] is None and ba[3] is True, 'bag advice waits for the vendor price (no advice yet, asked again later)')
@@ -2297,6 +2302,54 @@ ok(L('AF_NS.UI.VendorKnown(990647)') == 5 and L('AF_NS.Bags.Status(990647, false
    'once the game knows the item, its own vendor price is used and the bag icon is decided')
 X("""AuctionForeverData.info[990647], AuctionForeverData.items[990647], AuctionForeverData.names[990647] = UVSaved.info, UVSaved.item, UVSaved.nm
   C_Container.GetContainerItemInfo, C_Container.GetContainerNumSlots = UVSaved.CC, UVSaved.NS
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+# ---- One decision for the tooltip's Rec, the bag icons and AF Sell -------------------------------------------------
+# An item the AH pays a bit more for than a vendor, but not a steady seller: the old Profit line showed a plus while
+# AF Sell (Recommend: needs 1.5x the vendor price) left it out. Now Rec says Vendor, and the bag icon agrees.
+if not L('rawget(_G, "GetTimePreciseSec")'):
+    X('GetTimePreciseSec = function() return 0 end')
+X("""AgSaved = { gi = C_Item.GetItemInfo, CC = C_Container.GetContainerItemInfo, NS = C_Container.GetContainerNumSlots,
+    st = AF_NS.Core.Status, keep = AuctionForeverDB.keep }
+  local Idx = {}
+  for i, N in ipairs(AuctionForeverData.fields) do Idx[N] = i end
+  local function Row(P)
+    local R = {}
+    for i, V in pairs(AuctionForeverData.items[2589]) do R[i] = type(V) == "table" and {} or V end
+    for _, N in ipairs({ "low", "med", "hi", "med24", "medAll" }) do R[Idx[N]] = P end
+    R[Idx.ladder] = { { P, 1 } }; R[Idx.lows] = { P, P, P }
+    return R
+  end
+  AuctionForeverData.items[990801], AuctionForeverData.items[990802] = Row(1200), Row(5000)
+  AuctionForeverData.info[990801], AuctionForeverData.info[990802] = { 1000, 2, 0 }, { 1000, 2, 0 }
+  AF_NS.Core.Status = function(I) if I and (I.id == 990801 or I.id == 990802) then return "slow" end return AgSaved.st(I) end
+  C_Item.GetItemInfo = function(id) if id == 990801 or id == 990802 then return "Item " .. id, nil, 2, nil, nil, nil, nil, nil, nil, nil, 1000 end return AgSaved.gi(id) end
+  AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  BagItems = { { itemID = 990801, stackCount = 1, hyperlink = "|Hitem:990801::|h", isBound = false },
+    { itemID = 990802, stackCount = 1, hyperlink = "|Hitem:990802::|h", isBound = false } }
+  C_Container.GetContainerNumSlots = function(b) return b == 0 and #BagItems or 0 end
+  C_Container.GetContainerItemInfo = function(b, sl) if b == 0 then return BagItems[sl] end end
+  function AgQueue() local Q = AF_NS.Trade.BuildQueue(); local T = {} for _, G in ipairs(Q) do T[G.id] = true end return T end""")
+def rec(id, bound='false'):
+    r = [list(x.values()) for x in L(f'AF_NS.UI.TooltipLines({id}, nil, nil, nil, {bound})').values()]
+    return plain(str(r[3][1]))
+r1, r2 = rec(990801), rec(990802)
+q = L('AgQueue()')
+ok(r1.startswith('Vendor  +') and r2.startswith('Auction  +') and not q[990801] and q[990802],
+   f'AH after the cut a bit over vendor, not a steady seller: Rec Vendor (with the + delta), not in AF Sell; well over: Auction, in AF Sell ({r1} / {r2})')
+ok(L('AF_NS.Bags.Status(990801, false)') == 'Vendor' and L('AF_NS.Bags.Status(990802, false)') == 'Auction', 'bag icons: the same answers')
+X('AuctionForeverDB.keep = { [990802] = true }; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+ok(rec(990802) == 'Keep (keep list)' and not L('AgQueue()')[990802] and L('AF_NS.Bags.Status(990802, false)') == '',
+   'keep list: Rec "Keep", no bag icon, not in AF Sell (' + rec(990802) + ')')
+X('AuctionForeverDB.keep = AgSaved.keep; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+ok(rec(990802, 'true') == 'Keep (soulbound)' and L('AF_NS.Bags.Status(990802, true)') == '', 'soulbound: Rec "Keep", no bag icon (AF Sell skips bound items)')
+X("""GameTooltip.GetPrimaryTooltipInfo = nil
+  AgBound = AF_NS.UI.TooltipBound(GameTooltip, { lines = { { leftText = "Item 990802" }, { leftText = "Soulbound" } } })
+  AgFree = AF_NS.UI.TooltipBound(GameTooltip, { lines = { { leftText = "Item 990802" } } })""")
+ok(L('AgBound') == True and L('AgFree') == False, 'tooltip: soulbound read from its "Soulbound" line')
+X("""AF_NS.Core.Status, C_Item.GetItemInfo = AgSaved.st, AgSaved.gi
+  C_Container.GetContainerItemInfo, C_Container.GetContainerNumSlots = AgSaved.CC, AgSaved.NS
+  AuctionForeverData.items[990801], AuctionForeverData.items[990802] = nil, nil
+  AuctionForeverData.info[990801], AuctionForeverData.info[990802] = nil, nil
   AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
 undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
