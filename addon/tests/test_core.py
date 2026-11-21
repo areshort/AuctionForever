@@ -313,9 +313,15 @@ ok(L(f'(({C}.NearMiss(MakeItem({{ perHour = 2000, medHour = 2000, sellThrough = 
 # Vendor buys count purchases: a commodity is one purchase at any size; item auctions one each, at most 3.
 ok(L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10) ~= nil') and L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10).purchases') == 1 and L(f'{C}.VendorDeal({{ {{1, 200}} }}, 10).buyQty') == 200,
    'commodity vendor buy of 200 units: allowed, one purchase')
-ok(L(f'{C}.VendorDeal({{ {{100, 75}} }}, 200, nil, true) == nil'), 'item vendor buy needing 75 auctions: not a target')
-ok(L(f'{C}.VendorDeal({{ {{100, 2}} }}, 200, nil, true) ~= nil') and L(f'{C}.VendorDeal({{ {{100, 2}} }}, 200, nil, true).purchases') == 2,
-   'item vendor buy of 2 auctions: allowed (2 purchases)')
+# Item auctions: one click each, so each must earn 10s on its own (vendor 20s: 8s auctions earn 12s, 17s ones 3s).
+X(f"IVD = {C}.VendorDeal({{ {{800, 5}}, {{1700, 3}} }}, 2000, nil, true)")
+ok(L('IVD ~= nil and IVD.buyQty == 5 and IVD.purchases == 5 and IVD.buyUpTo == 800 and IVD.profit == 6000'),
+   f"item vendor buy: the 5 auctions earning 12s each kept, the 3 earning 3s dropped ({L('IVD and IVD.buyQty')} bought, +{L('IVD and IVD.profit')})")
+ok(L(f'{C}.VendorDeal({{ {{1700, 75}} }}, 2000, nil, true) == nil'), 'item vendor buy of 75 auctions at 3s each: not a target')
+ok(L(f'{C}.VendorDeal({{ {{800, 75}} }}, 2000, nil, true) ~= nil') and L(f'{C}.VendorDeal({{ {{800, 75}} }}, 2000, nil, true).buyQty') == 75,
+   'item vendor buy of 75 auctions at 12s each: all kept (any number is fine)')
+ok(L(f'{C}.VendorDeal({{ {{1700, 75}} }}, 2000) ~= nil') and L(f'{C}.VendorDeal({{ {{1700, 75}} }}, 2000).buyQty') == 75,
+   'the same as a commodity (one purchase): a target')
 # FlipNeed: the return by speed (an item or its FlipStatus); unknown speed is held to the slow sellers' return.
 ok(L(f'{C}.FlipNeed(10000, 200, "good")') == 1000 and L(f'{C}.FlipNeed(10000, 200, "slow")') == 2000
    and L(f'{C}.FlipNeed(10000, 200)') == 2000 and L(f'{C}.FlipNeed(1000, 500, "good")') == 500,
