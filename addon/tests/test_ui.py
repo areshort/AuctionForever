@@ -623,6 +623,71 @@ if real:
     ok(L('AF_NS.Trade.SellIndex()') == 1, f'Skip walks the queue and wraps back to the start ({n} items)')
     X('Click(AuctionForeverSellPanel.QueueRows[2])')
     ok(n < 2 or L('AF_NS.Trade.SellIndex()') == 2, 'clicking a queue row selects it')
+    # ---- A quick scan feeds AF Buy / AF Sell as it reads items (at most every 2 s); a full scan only at the end ----
+    X("""local function Copy(t, seen) if type(t) ~= "table" then return t end seen = seen or {} if seen[t] then return seen[t] end
+        local c = {}; seen[t] = c; for k, v in pairs(t) do c[k] = Copy(v, seen) end return c end
+      LiveSavedDB = Copy(AuctionForeverDB) -- (the scans below change your data; later tests expect it as it was)
+      Click(AuctionForeverBuyTab)
+      LiveRows = {
+        { id = 2589, info = AF_NS.Core.Info(2589), flip = { buyQty = 10, buyUpTo = 30, cost = 250, resell = 200, hours = 2, durationIndex = 1, profit = 320 } },
+        { id = 14047, info = AF_NS.Core.Info(14047), flip = { buyQty = 1, buyUpTo = 400, cost = 380, resell = 1000, hours = 8, durationIndex = 2, profit = 570 } } }
+      FlipTargets = LiveRows
+      LiveCalls = 0; LiveInner = AF_NS.UI.FlipTargets
+      AF_NS.UI.FlipTargets = function() LiveCalls = LiveCalls + 1 return LiveInner() end
+      AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(2); AdvanceTime(5)
+      AF_NS.Scan.Lookup = RealLookup; LastQuery = nil
+      LiveSend = C_AuctionHouse.SendSearchQuery
+      C_AuctionHouse.SendSearchQuery = function(k) LastQuery = k.itemID end
+      function LiveStep() local id = LastQuery; LastQuery = nil; if id then FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", id) end end
+      LiveCalls = 0
+      -- the next list has a new target at the top
+      FlipTargets = { { id = 2592, info = AF_NS.Core.Info(2589), flip = { buyQty = 5, buyUpTo = 30, cost = 150, resell = 200, hours = 2, durationIndex = 1, profit = 600 } }, LiveRows[1], LiveRows[2] }
+      AF_NS.Scan.Lookup({ 2589, 2589, 2589, 2589 }, true)
+      LiveStep()""")
+    rows = [L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[1]:GetText()') for i in range(1, 4)]
+    ok(L('AF_NS.Scan.Busy()') and L('LiveCalls') == 1 and L('#AF_NS.Trade.BuyRows()') == 3,
+       f"quick scan: AF Buy rebuilt after the first item is read, before the scan ends ({L('LiveCalls')} rebuilds, {L('#AF_NS.Trade.BuyRows()')} rows)")
+    ok(L('AF_NS.Trade.SelectedBuy().id') == 14047, f"the selected item stays selected ({L('AF_NS.Trade.SelectedBuy().id')})")
+    X('LiveStep()')
+    ok(L('AF_NS.Scan.Busy()') and L('LiveCalls') == 1, f"throttled: the next item 0 s later doesn't rebuild again ({L('LiveCalls')})")
+    X('LiveGT = GetTime; GetTime = function() return LiveGT() + 2.5 end; LiveStep(); GetTime = LiveGT')
+    ok(L('AF_NS.Scan.Busy()') and L('LiveCalls') == 2, f"2.5 s later: rebuilt again ({L('LiveCalls')})")
+    X('for _ = 1, 10 do LiveStep() end; Timers = {}')
+    ok(not L('AF_NS.Scan.Busy()') and L('LiveCalls') == 3, f"and once more when the scan finishes ({L('LiveCalls')})")
+    # never under a purchase being priced or confirmed: waits, then applies
+    X("""for i, E in ipairs(AF_NS.Trade.BuyRows()) do if E.id == 2589 then AF_NS.Trade.SelectBuy(i) end end
+      Click(AuctionForeverBuyPanel.Buy); LiveCalls = 0; AF_NS.UI.ScanLive()""")
+    ok(L('LastCall("StartCommoditiesPurchase") ~= nil') and L('LiveCalls') == 0, f"purchase being priced: no rebuild ({L('LiveCalls')})")
+    X('LiveSel = AF_NS.Trade.SelectedBuy().id; FireEvent("COMMODITY_PRICE_UPDATED", 35, 350); LiveAfter = LiveCalls; AdvanceTime(1.1)')
+    ok(L('LiveCalls') == L('LiveAfter') + 1 and L('AF_NS.Trade.SelectedBuy().id') == L('LiveSel'),
+       f"once the purchase is done (here: cancelled, the price rose) the waiting update is applied ({L('LiveAfter')} -> {L('LiveCalls')})")
+    # a full scan: no partial updates, progress shown in AF Buy's status line, the list rebuilt at the end
+    X("""for _ = 1, 10 do LiveStep() end; Timers = {} -- (the re-check after the cancelled purchase)
+      AuctionForeverDB.lastFull = nil; AuctionForeverDB.fresh.time = nil; LiveCalls = 0
+      AF_NS.Scan.Start(); FireEvent("REPLICATE_ITEM_LIST_UPDATE")
+      for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u and f ~= AuctionForeverBuyPanel then u(f, 0.016) end end
+      AF_NS.UI.ScanProgress()""")
+    ok(L('AF_NS.Scan.Busy()') and L('LiveCalls') == 0, f"full scan reading: AF Buy not rebuilt from a part of it ({L('LiveCalls')})")
+    ok('reading' in str(L('AuctionForeverBuyPanel.Status:GetText()')), 'full scan progress in the AF Buy status: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
+    X('Pump()')
+    ok(not L('AF_NS.Scan.Busy()') and L('LiveCalls') == 1 and 'reading' not in str(L('AuctionForeverBuyPanel.Status:GetText()')),
+       f"full scan done: rebuilt once, progress text cleared ({L('LiveCalls')})")
+    # AF Sell: rebuilt in place (selection and your typed price kept); never while a post waits for confirmation
+    X("""Click(AuctionForeverSellTab); AF_NS.Trade.SelectSellId(2589); Timers = {}
+      SellBuilds = 0; LiveBQ = AF_NS.Trade.BuildQueue
+      AF_NS.Trade.BuildQueue = function() SellBuilds = SellBuilds + 1 return LiveBQ() end
+      AuctionForeverSellPanel.Qty:SetText("3"); AF_NS.UI.ScanLive()""")
+    ok(L('SellBuilds') == 1 and L('AF_NS.Trade.SelectedSell().id') == 2589 and L('AuctionForeverSellPanel.Qty:GetText()') == '3',
+       f"AF Sell rebuilt with the new data, same item selected, your quantity kept ({L('SellBuilds')}, {L('AuctionForeverSellPanel.Qty:GetText()')})")
+    X("""CallReturns = { PostCommodity = true }; AF_NS.Trade.SelectSellId(2589); Click(AuctionForeverSellPanel.Post); CallReturns = nil
+      SellBuilds = 0; AF_NS.UI.ScanLive()""")
+    ok('Confirm' in str(L('AuctionForeverSellPanel.Post:GetText()')) and L('SellBuilds') == 0, f"post waiting for confirmation: AF Sell not rebuilt ({L('SellBuilds')})")
+    X('Click(AuctionForeverSellPanel.Post); AdvanceTime(1.1)')
+    ok(L('SellBuilds') == 1, f"after the post: the waiting update is applied ({L('SellBuilds')})")
+    X('AF_NS.Trade.BuildQueue = LiveBQ; for _ = 1, 10 do LiveStep() end; Timers = {}')
+    ok(not L('AF_NS.Scan.Busy()'), 'no scan left running')
+    X('for k in pairs(AuctionForeverDB) do AuctionForeverDB[k] = nil end; for k, v in pairs(LiveSavedDB) do AuctionForeverDB[k] = v end; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+    X('AF_NS.UI.FlipTargets = LiveInner; C_AuctionHouse.SendSearchQuery = LiveSend; AF_NS.Scan.Lookup = function(Ids, Silent, Done) LookupSpy[#LookupSpy + 1] = { ids = Ids, silent = Silent }; if Done then Done() end return true end')
     # Blizzard's tab hides all our panels
     X('Click(AuctionHouseFrame.SellTab)')
     ok(L('not AuctionForeverSellPanel:IsShown() and not AuctionForeverBuyPanel:IsShown() and not AuctionForeverAHPanel:IsShown()'), "Blizzard's tab hides all our panels")

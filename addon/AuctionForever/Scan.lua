@@ -426,6 +426,21 @@ end
 local SORTS = { { sortOrder = (Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price) or 0, reverseSort = false } }
 local QuickNext
 
+-- Live updates: while a quick scan runs, AF Buy and AF Sell are refreshed with what it has read so far, at most every
+-- LIVE_EVERY seconds (plus once at the end, ScanDone). Quick scans only: a full scan isn't fed in part, since items it
+-- hasn't read yet would look sold out (MergeScan treats items missing from a newer full scan as "nothing listed").
+Scan.LIVE_EVERY = 2
+local LiveAt
+local function Live()
+	local Now = GetTime()
+	if LiveAt and Now - LiveAt < Scan.LIVE_EVERY then return end
+	LiveAt = Now
+	-- The browse so far (items read, not the "everything else has nothing listed" step: that waits for the end).
+	if Mode == "browse" and BQ_STATE then Scan.ApplyBrowse(BQ_STATE.items, time(), false) end
+	Scan.Version = Scan.Version + 1
+	Notify("ScanLive")
+end
+
 local function QuickRecord(id, Map, Exp, Auc, Cov, Commodity)
 	-- An empty answer can mean the results weren't loaded yet; treating it as "everything sold" would be a fake
 	-- sell-out, so it counts as no answer (a full scan is what tells us an item really has nothing listed).
@@ -434,6 +449,7 @@ local function QuickRecord(id, Map, Exp, Auc, Cov, Commodity)
 	Q.done = Q.done + 1
 	if St == "measured" then Q.measured = Q.measured + 1; if Sold > 0 then Q.withSales = Q.withSales + 1 end
 	elseif St == "soon" then Q.soon = Q.soon + 1 end
+	if Q.ids then Live() end -- (not for the tests' single reads outside a scan)
 end
 
 local function ReadCommodity(id)
@@ -574,6 +590,7 @@ function Scan.Lookup(Ids, Silent, OnDone)
 	if not AHOpen() then if not Silent then Say("open the auction house first.") end return false end
 	if #Ids == 0 then if not Silent then Say("nothing to quick scan yet.") end return false end
 	Mode = "lookup"
+	LiveAt = nil
 	Q = { ids = Ids, i = 0, done = 0, measured = 0, withSales = 0, soon = 0, skipped = 0, started = GetTime(), silent = Silent, onDone = OnDone }
 	QuickNext()
 	return true
@@ -712,6 +729,7 @@ function Scan.Quick(Silent, OnDone)
 	if Mode then if not Silent then Say("a scan is already running.") end return false end
 	if not AHOpen() then if not Silent then Say("open the auction house first.") end return false end
 	Mode = "browse"
+	LiveAt = nil
 	BQ_STATE = { items = {}, n = 0, started = GetTime(), ticket = 1, silent = Silent, onDone = OnDone, expected = BrowseItemCount() }
 	BrowseWatch()
 	BrowseWhenReady(function()
@@ -784,11 +802,13 @@ Events:SetScript("OnEvent", function(_, Event, Arg)
 		if Mode == "browse" and BQ_STATE and not BQ_STATE.gotFirst then
 			BQ_STATE.gotFirst = true
 			BrowseAdd(C_AuctionHouse.GetBrowseResults())
+			Live()
 			BrowseNext()
 		end
 	elseif Event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
 		if Mode == "browse" and BQ_STATE and BQ_STATE.gotFirst then
 			BrowseAdd(Arg)
+			Live()
 			BrowseNext()
 		end
 	elseif Event == "AUCTION_HOUSE_CLOSED" then

@@ -39,6 +39,7 @@ local function Recheck(Ids, Done)
 	return Scan.Lookup(Ids, true, Done)
 end
 function T.OnScanDone()
+	T.ClearScanStatus()
 	-- New scan data: rebuild AF Buy's list now if it's open (not mid-purchase), or the next time it opens.
 	if Buy.loaded and not Buy.state then
 		Buy.loaded = nil
@@ -196,6 +197,7 @@ local function ResetPurchase(Cancel)
 end
 
 function T.SelectedBuy() return Buy.rows[Buy.sel] end
+function T.BuyRows() return Buy.rows end
 
 -- The option a row shows (and Buy buys): the plan's or the best affordable one; in profit order, the most profitable
 -- at any gold.
@@ -498,6 +500,16 @@ local function OnPriceUpdated(Unit, Total)
 	T.DrawBuy()
 end
 
+-- While a scan runs (the server sends no progress while it prepares a full listing), keep the status line current.
+local function ScanTicker(P)
+	P.ScanTick = 0
+	P:SetScript("OnUpdate", function(self, Elapsed)
+		self.ScanTick = self.ScanTick + Elapsed
+		if self.ScanTick < 0.5 then return end
+		self.ScanTick = 0
+		if Scan.Busy() then T.OnScanProgress() end
+	end)
+end
 local function BuildBuy()
 	BuyP = UI().NewAHPage("AF Buy", "AuctionForeverBuyTab", "AuctionForeverBuyPanel",
 		function()
@@ -506,6 +518,7 @@ local function BuildBuy()
 			T.SelectBuy(Buy.sel)
 		end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
+	ScanTicker(P)
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
 	-- The summary lines 15 apart, then a clear gap before the table.
 	P.Budget = Text(P, "GameFontHighlightSmall", 300, -8)
@@ -844,6 +857,7 @@ local function BuildSell()
 		T.SelectSell(1)
 	end, nil, function() T.RefreshSellPrices() end)
 	local P = SellP
+	ScanTicker(P)
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Sell")
 	Text(P, "GameFontNormalSmall", 20, -44):SetText("Your items that sell here (click one)")
 	P.QueueRows = RowList(P, 14, -60, 230, ROWS, QUEUE_COLS, function(r) T.SelectSell(r + (Sell.offset or 0)) end)
@@ -875,6 +889,50 @@ local function BuildSell()
 	P.Post = Button(P, "Post", X, -270, 160, function() T.PostClick() end)
 	P.Skip = Button(P, "Skip", X + 170, -270, 90, function() T.SelectSell(Sell.idx + 1) end)
 	P.Status = Text(P, "GameFontHighlightSmall", X, -304, 480)
+end
+
+-- Live updates while a quick scan runs (Scan calls this at most every 2 s): rebuild the open lists with the new
+-- data, keeping the selected item, the sort and the scroll position. Never under a purchase or a post that is being
+-- priced or confirmed: that waits until it's done (checked again every second).
+local LiveBuy, LiveSell, LiveTimer
+local function ApplyLive()
+	if LiveBuy and not Buy.state then
+		LiveBuy = nil
+		if Buy.loaded then
+			Buy.loaded = nil
+			if BuyP and BuyP:IsShown() then
+				Buy.loaded, Buy.money = UI().FlipTargets() or {}, GetMoney()
+				SortRows() -- keeps the selected item (by id), the sort and Buy.offset
+			end
+		end
+	end
+	if LiveSell and not Sell.pending then
+		LiveSell = nil
+		if SellP and SellP:IsShown() and Sell.queue then Rebuild(true) end -- your price and quantity fields stay
+	end
+	if (LiveBuy or LiveSell) and not LiveTimer then
+		LiveTimer = true
+		C_Timer.After(1, function() LiveTimer = nil; ApplyLive() end)
+	end
+end
+function T.OnScanLive()
+	LiveBuy, LiveSell = true, true
+	ApplyLive()
+end
+T.ApplyLive = ApplyLive
+
+-- Scan progress in the AF Buy / AF Sell status line (the AF tab has its own bar), cleared when the scan ends.
+local ScanSaid = {}
+function T.OnScanProgress()
+	local Text = Scan.Busy() and Scan.Status()
+	if not Text then return end
+	if BuyP and BuyP:IsShown() and not Buy.state then SayBuy(Text); ScanSaid.buy = Text end
+	if SellP and SellP:IsShown() and not Sell.pending then SaySell(Text); ScanSaid.sell = Text end
+end
+function T.ClearScanStatus()
+	if ScanSaid.buy and BuyP and BuyP.Status:GetText() == ScanSaid.buy then SayBuy("") end
+	if ScanSaid.sell and SellP and SellP.Status:GetText() == ScanSaid.sell then SaySell("") end
+	ScanSaid = {}
 end
 
 -- Events --------------------------------------------------------------------------------------------------------

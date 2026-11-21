@@ -1447,7 +1447,12 @@ function L.RefreshAHPanel()
 	if not Busy then P.QuickInfo:SetText("Quick Scan: fresh prices for everything.  Full Scan: also measures sales (scan 15+ min apart).") end
 	P.Result:SetText(AF.Scan.LastResult or "No scan yet this session.")
 end
+-- A quick scan read more items (throttled): refresh AF Buy / AF Sell with them.
+function L.ScanLive()
+	if AF.Trade and AF.Trade.OnScanLive then AF.Trade.OnScanLive() end
+end
 function L.ScanProgress()
+	if AF.Trade and AF.Trade.OnScanProgress then AF.Trade.OnScanProgress() end
 	if not (AH.Panel and AH.Panel:IsShown()) then return end
 	local P = AH.Panel
 	local Text, F = AF.Scan.Status()
