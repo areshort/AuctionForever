@@ -1288,6 +1288,14 @@ ok(L('AuctionForeverFrame.FarmBar.Prof:IsShown()') and 'not known' in str(L('Auc
 X('''Tip = { lines = {} }
   function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
   for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end''')
+short = [str(v) for v in L('Tip.lines').values()]
+ok(any('Shift: details' in t for t in short) and any('Tier ' in t and 'Expected per craft' in t for t in short)
+   and not any('First Aid' in t or '(vendor)' in t for t in short),
+   f'farm row tooltip without Shift: tier, expected and sell rate only, details behind Shift: {short}')
+X('''IsShiftKeyDown = function() return true end; Tip = { lines = {} }
+  function Tip:AddLine(T) self.lines[#self.lines + 1] = T end
+  for _, R in ipairs(AF_NS.UI.CraftRows()) do if R.id == 118 then AF_NS.UI.FarmTooltip(R, Tip) end end
+  IsShiftKeyDown = function() return false end''')
 tip = [str(v) for v in L('Tip.lines').values()]
 ok(any('First Aid' in t for t in tip) and any('yellow 55' in t for t in tip) and any('(vendor)' in t for t in tip)
    and any('(AH)' in t for t in tip) and any('Sell rate 90%' in t for t in tip) and any('Tier ' in t and 'by expected earnings (price x sell rate); sells 120/day' in t for t in tip)

@@ -337,5 +337,13 @@ ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 672, sellThrough = 0.88, hoursW
 ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 13, sellThrough = 0.87 }}), 13, 19)") == 'Auction', 'steady seller, small 2 h deposit: Auction')
 ok(L(f"{C}.Recommend(MakeItem({{ vendorForTest = 207, sellThrough = 0.9, hoursWithSales = 5 }}), 207, 1080)") == 'Auction', 'slow but usually sells: Auction')
 X(f"{C}.Deposit = OldDepF")
+# A loss in coin colors: a red minus and the amount (it used to show -11s 94c as "88s 06c").
+neg = str(L(f"{C}.MoneyColor(-1194)"))
+ok(neg.startswith('|cffff4040-|r') and '11s' in neg and '94c' in neg and '88s' not in neg, 'MoneyColor shows a loss as -11s 94c: ' + neg)
+ok('-' not in str(L(f"{C}.MoneyColor(1194)")), 'positive amounts have no minus')
+# Your flips: two real buys (crates at a loss, leather at a small gain) add up to a loss.
+X('''FDB = { buys = { { 1795164538, 248687, 40, 4937, 54.575 }, { 1795164671, 2319, 43, 3999, 35 } },
+ mysales = { { 1795208902, 248687, 30, 2850, "sold" }, { 1795208902, 2319, 128, 12800, "sold" }, { 1795218499, 248687, 10, 1000, "sold" } } }''')
+ok(L(f"{C}.FlipResults(FDB, 1795220000, 7).profit") == -1194, 'flip results: real buys and sales come to -11s 94c')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

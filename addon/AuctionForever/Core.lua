@@ -751,6 +751,8 @@ local GOLD, SILVER, COPPER = "|cffffd700", "|cffc7c7cf", "|cffeda55f"
 function Core.MoneyColor(C)
 	if not C then return "-" end
 	C = math.floor(C + 0.5)
+	-- A loss: a red minus and the amount. (Splitting a negative into coins showed -11s 94c as "88s 06c".)
+	if C < 0 then return "|cffff4040-|r" .. Core.MoneyColor(-C) end
 	local G, S, Cp = math.floor(C / 10000), math.floor(C / 100) % 100, C % 100
 	local P = {}
 	if G > 0 then P[#P + 1] = GOLD .. G .. "g|r" end

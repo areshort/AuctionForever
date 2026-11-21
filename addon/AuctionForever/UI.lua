@@ -364,6 +364,15 @@ function L.FarmTooltip(E, Tip)
 	Tip = Tip or GameTooltip
 	local function Line(T, R, G, B) Tip:AddLine(T, R or 1, G or 1, B or 1, true) end
 	Tip:AddLine(" ")
+	-- Without Shift: just the tier and the expected earnings; the full breakdown is behind Shift (like the item
+	-- tooltip's "Shift: details").
+	if not IsShiftKeyDown() then
+		local T = E.tier and TIER_INFO[E.tier]
+		Tip:AddLine(string.format("%sExpected %s %s, sells %s", T and (T[3] .. "Tier " .. E.tier .. "|r: ") or "",
+			E.spell and "per craft" or "each", Money(E.expected), L.RateText(E.rate)), 1, 1, 1, true)
+		Tip:AddLine("|cff808080Shift: details|r")
+		return
+	end
 	if E.spell then
 		local Prof = (AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?"
 		local Need = (E.req and E.req > 0) and ("needs " .. E.req) or "needed rank not in the game data"
@@ -1036,8 +1045,12 @@ function L.CreateWindow()
 			GameTooltip:SetItemByID(self.id)
 			if Tab == 1 and self.entry then L.FarmTooltip(self.entry) end
 			GameTooltip:Show()
+			self:RegisterEvent("MODIFIER_STATE_CHANGED") -- pressing or releasing Shift redraws it
 		end)
-		R:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		R:SetScript("OnEvent", function(self)
+			if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
+		end)
+		R:SetScript("OnLeave", function(self) self:UnregisterEvent("MODIFIER_STATE_CHANGED"); GameTooltip:Hide() end)
 		Rows[r] = R
 	end
 	Frame.Rows = Rows
