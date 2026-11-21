@@ -1051,6 +1051,12 @@ sp = L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._po
 ok(sp is not None and sp[1] == 'LEFT' and L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points][2] == AuctionForeverBuyPanel.Skip') and sp[3] == 'RIGHT'
    and L('AuctionForeverBuyPanel.Status._width') == 350,
    'AF Buy status message sits beside the buttons, 350 wide (long messages no longer run down over the bid bar)')
+# Roomier AF Buy table: below the summary lines with a gap, full window width, columns 10 apart.
+rp = L('AuctionForeverBuyPanel.Rows[1]._points[1]')
+c2 = L('AuctionForeverBuyPanel.Rows[1].Cells[2]._points[1]')
+c7w = L('AuctionForeverBuyPanel.Rows[1].Cells[7]._width')
+ok(rp[3] == -82 and c2[4] == 24 + 220 + 10 and c7w == 130 and L('AuctionForeverBuyPanel.Results._points[1][3]') == -38,
+   f'AF Buy table: starts at -82 under the summary, Item 220 wide, columns 10 apart, Status 130 wide ({list(rp.values())}, {list(c2.values())}, {c7w})')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
 cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[6]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))

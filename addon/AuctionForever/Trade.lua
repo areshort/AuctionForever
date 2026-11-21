@@ -72,7 +72,7 @@ local function Button(Parent, Label, X, Y, W, OnClick)
 	return B
 end
 -- A list of clickable rows: icon + cells, mouse wheel scrolls.
-local function RowList(Parent, X, Y, Width, Count, Cols, OnPick)
+local function RowList(Parent, X, Y, Width, Count, Cols, OnPick, Gap)
 	local Rows = {}
 	for r = 1, Count do
 		local R = CreateFrame("Button", nil, Parent)
@@ -95,7 +95,7 @@ local function RowList(Parent, X, Y, Width, Count, Cols, OnPick)
 			FS:SetJustifyH("LEFT")
 			FS:SetWordWrap(false)
 			R.Cells[c] = FS
-			CX = CX + W + 6
+			CX = CX + W + (Gap or 6)
 		end
 		R.row = r
 		R:SetScript("OnClick", function(self) OnPick(self.row) end)
@@ -148,7 +148,7 @@ local function SyncBar(S, Off, Total)
 end
 T.ScrollBar, T.SyncBar = ScrollBar, SyncBar -- the AuctionForever window uses them too
 -- Column headers; with OnClick(c) they are buttons (click to sort), the text in .Label. Returns them.
-local function Header(Parent, X, Y, Cols, Names, OnClick)
+local function Header(Parent, X, Y, Cols, Names, OnClick, Gap)
 	local CX = X + 24
 	local Out = {}
 	for c, W in ipairs(Cols) do
@@ -171,7 +171,7 @@ local function Header(Parent, X, Y, Cols, Names, OnClick)
 			H:SetText(Names[c])
 		end
 		Out[c] = H
-		CX = CX + W + 6
+		CX = CX + W + (Gap or 6)
 	end
 	return Out
 end
@@ -184,7 +184,9 @@ local function RecordBuy(id, Qty, Total, Resell)
 end
 
 -- AF Buy ------------------------------------------------------------------------------------------------------
-local BUY_COLS = { 180, 26, 46, 122, 76, 72, 78 }
+-- AF Buy uses the auction house window's full width (about 930 wide): roomier columns, 10 apart.
+local BUY_COLS = { 220, 34, 60, 150, 90, 100, 130 }
+local BUY_GAP, BUY_W = 10, 868 -- 24 (icon) + columns + 6 gaps
 
 local function SayBuy(Msg) if BuyP then BuyP.Status:SetText(Msg or "") end end
 local function ResetPurchase(Cancel)
@@ -505,18 +507,19 @@ local function BuildBuy()
 		end, function() ResetPurchase(true) end, function() T.RefreshBuyPrices() end)
 	local P = BuyP
 	Text(P, "GameFontNormalLarge", 20, -14):SetText("AF Buy: flip targets")
-	P.Budget = Text(P, "GameFontHighlightSmall", 300, -6)
-	P.Target = Text(P, "GameFontHighlightSmall", 300, -19)
-	P.Results = Text(P, "GameFontHighlightSmall", 300, -32)
-	P.Headers = Header(P, 14, -44, BUY_COLS, BUY_NAMES, function(c) T.BuyHeaderClick(c) end)
-	P.Rows = RowList(P, 14, -60, 660, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end)
+	-- The summary lines 15 apart, then a clear gap before the table.
+	P.Budget = Text(P, "GameFontHighlightSmall", 300, -8)
+	P.Target = Text(P, "GameFontHighlightSmall", 300, -23)
+	P.Results = Text(P, "GameFontHighlightSmall", 300, -38)
+	P.Headers = Header(P, 14, -64, BUY_COLS, BUY_NAMES, function(c) T.BuyHeaderClick(c) end, BUY_GAP)
+	P.Rows = RowList(P, 14, -82, BUY_W, ROWS, BUY_COLS, function(r) T.SelectBuy(r + (Buy.offset or 0)) end, BUY_GAP)
 	P:EnableMouseWheel(true)
 	P:SetScript("OnMouseWheel", function(_, Delta)
 		Buy.offset = math.max(0, math.min(math.max(0, #Buy.rows - ROWS), (Buy.offset or 0) - Delta * 3))
 		T.DrawBuy()
 	end)
-	P.Bar = ScrollBar(P, 678, -60, function(V) Buy.offset = V; T.DrawBuy() end)
-	P.Empty = Text(P, "GameFontDisable", 20, -66, 600) -- one line in the table, where the first row would be
+	P.Bar = ScrollBar(P, 14 + BUY_W + 4, -82, function(V) Buy.offset = V; T.DrawBuy() end)
+	P.Empty = Text(P, "GameFontDisable", 20, -88, 600) -- one line in the table, where the first row would be
 	P.Buy = Button(P, "Buy", 20, -420, 200, function() T.BuyClick() end)
 	-- Pinned by its bottom just above the buttons: longer text grows upward instead of running into them.
 	P.Detail = Text(P, "GameFontHighlight", 20, -380, 640)
