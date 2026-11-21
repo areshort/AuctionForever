@@ -312,6 +312,80 @@ function Farm.Craft(Product, Recipe, Env)
 	return Row
 end
 
+-- Buying the mats for N crafts of one recipe row (Farm.Craft), for AF Buy. N is the most crafts that:
+--   the mats listed now allow (matCrafts);
+--   the product's sales support within Opts.hours (AH route: Opts.share of the measured sales per hour, less what
+--   you already hold; the vendor route has no such limit, only Opts.maxCrafts);
+--   cost no more than Opts.cap (one item's share of the budget);
+--   still pay for the last craft (mats get dearer up the price ladders).
+-- Returns nil when not even one craft fits, or the plan's expected profit is under Opts.need(cost, row).
+-- The plan: { craft, crafts, makes, units, cost (AH mats + vendor goods), profit (expected), route, resell (per
+-- unit: post price or vendor price), saleEach (expected per craft), mats = { {id, qty, upTo, cost} } (AH, in recipe
+-- order), vendorGoods = { {id, qty, cost} }, vendorCost }.
+local function UpTo(I, Qty)
+	local Got, Top = 0, nil
+	for _, Step in ipairs(I and I.ladder or {}) do
+		if Got >= Qty then break end
+		Got, Top = Got + Step[2], Step[1]
+	end
+	return Top
+end
+function Farm.CraftPlan(Row, Opts, Env)
+	local E = Env and Env.cache and Env or Default(Env)
+	Opts = Opts or {}
+	if not Row or Row.excluded or Row.buyExcluded or not Row.expected or not Row.cost or not Row.route then return nil end
+	local Vendor = Row.route == "Vendor"
+	local Each = Vendor and (Row.vendorSell or 0) * Row.makes or (Row.ahExpected + Row.cost)
+	if Each <= 0 then return nil end
+	local Max = Row.matCrafts or 0
+	if not Vendor then
+		local I = E.info(Row.id)
+		local Units = (I and I.perHour or 0) * (Opts.share or 1) * (Opts.hours or 8) - (I and I.held or 0)
+		Max = math.min(Max, math.floor(Units / Row.makes))
+	end
+	Max = math.min(Max, Opts.maxCrafts or 1000)
+	if Max < 1 then return nil end
+	local function Cost(N)
+		local C = 0
+		for _, R in ipairs(Row.reagents) do
+			if R.source == "vendor" then C = C + R.each * R.n * N
+			else C = C + (Farm.BuyCost(E.info(R.id), R.n * N)) end
+		end
+		return C
+	end
+	local Cap = Opts.cap or math.huge
+	-- Both limits only tighten as N grows (cost rises, the last craft's mats never get cheaper): binary search.
+	local function Fits(N)
+		local C = Cost(N)
+		return C <= Cap and C - Cost(N - 1) <= Each
+	end
+	local Lo, Hi = 0, Max
+	while Lo < Hi do
+		local Mid = math.floor((Lo + Hi + 1) / 2)
+		if Fits(Mid) then Lo = Mid else Hi = Mid - 1 end
+	end
+	local N = Lo
+	if N < 1 then return nil end
+	local Mats, Goods, VCost = {}, {}, 0
+	for _, R in ipairs(Row.reagents) do
+		local Q = R.n * N
+		if R.source == "vendor" then
+			Goods[#Goods + 1] = { id = R.id, qty = Q, cost = R.each * Q }
+			VCost = VCost + R.each * Q
+		else
+			local I = E.info(R.id)
+			Mats[#Mats + 1] = { id = R.id, qty = Q, upTo = UpTo(I, Q), cost = (Farm.BuyCost(I, Q)) }
+		end
+	end
+	local Total = Cost(N)
+	local Profit = math.floor(Each * N - Total + 1e-6)
+	local Need = Opts.need and Opts.need(Total, Row) or 0
+	if Profit < Need then return nil end
+	return { craft = true, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
+		route = Row.route, resell = Vendor and Row.vendorSell or Row.price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
+		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, buyQty = N, buyUpTo = 0 }
+end
+
 -- Every recipe in Env.recipes whose product has auction data. Returns the buy-mats ranking (expected a craft), the
 -- value-added ranking (added a craft), and every row (with .excluded / .buyExcluded reasons). Filter(row) -> false
 -- drops a recipe (e.g. only professions you have).

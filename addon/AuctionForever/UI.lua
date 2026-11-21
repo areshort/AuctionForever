@@ -378,6 +378,94 @@ function L.CraftRows()
 	L.CraftFiltered = Filtered
 	return CraftCache.rows
 end
+-- Craft plans for AF Buy -----------------------------------------------------------------------------------------
+-- Do you know a recipe? In this order:
+--   "spell":  the game says you know the recipe's spell (IsPlayerSpell / C_SpellBook.IsSpellKnown);
+--   "window": what your profession window showed the last time you opened it (saved per character);
+--   "rank":   neither knows: your profession rank is at least the recipe's required rank (trainer recipes need 0).
+-- Returns known, how, your rank in that profession (nil when you don't have it or the game doesn't say).
+function L.RecipeKnown(Spell, Line, Req, Mine)
+	local Rank = Mine and Mine[Line]
+	local IPS, SB = rawget(_G, "IsPlayerSpell"), rawget(_G, "C_SpellBook")
+	local Ok, Yes = false, false
+	if IPS then Ok, Yes = pcall(IPS, Spell) end
+	if not (Ok and Yes) and SB and SB.IsSpellKnown then Ok, Yes = pcall(SB.IsSpellKnown, Spell) end
+	if Ok and Yes then return true, "spell", Rank end
+	local C = Char()
+	local Seen = C.recipes and C.recipes[Spell]
+	if Seen ~= nil then return Seen, "window", Rank end
+	if Rank and Rank >= (Req or 0) then return true, "rank", Rank end
+	return false, Mine and "rank" or nil, Rank
+end
+-- A profession window is open: remember which of AF's recipes you have learned (C_TradeSkillUI.GetRecipeInfo only
+-- answers for the open profession).
+function L.LearnRecipes()
+	local TS = rawget(_G, "C_TradeSkillUI")
+	if not (TS and TS.GetRecipeInfo and AF_Recipes) then return end
+	local C = Char()
+	C.recipes = C.recipes or {}
+	local N = 0
+	for _, List in pairs(AF_Recipes) do
+		for _, Rc in ipairs(List) do
+			local Ok, Info = pcall(TS.GetRecipeInfo, Rc[1])
+			if Ok and type(Info) == "table" and Info.learned ~= nil then
+				if C.recipes[Rc[1]] ~= (Info.learned and true or false) then N = N + 1 end
+				C.recipes[Rc[1]] = Info.learned and true or false
+			end
+		end
+	end
+	if N > 0 then L.RecipeVersion = (L.RecipeVersion or 0) + 1 end
+end
+-- AF Buy's "Show all recipes" box (off: only recipes you know).
+function L.ShowAllRecipes() return Account().allRecipes == true end
+function L.SetShowAllRecipes(On) Account().allRecipes = On and true or nil end
+-- Craft plans: buy the mats on the AH, craft, sell the products (AH or vendor). One row per product (its best
+-- recipe), shaped like a flip target row: { id, craft = recipe row, info, flip = plan (Farm.CraftPlan), known,
+-- knownHow, rank }. Only recipes you know (L.RecipeKnown) unless Show all recipes is on; only commodity mats (AF buys
+-- them like commodity flips). N crafts fit one item's share of the flip budget, like a flip.
+local CraftPlanCache
+function L.CraftTargets()
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
+	local Budget = L.FlipBudget()
+	local All = L.ShowAllRecipes()
+	local Key = string.format("%s:%d:%s:%d", DataKey(), Budget, tostring(All), L.RecipeVersion or 0)
+	if CraftPlanCache and CraftPlanCache.key == Key then return CraftPlanCache.rows end
+	local Mine = L.MyProfessions()
+	local MinProfit = Core.MinFlipProfitFor(Budget)
+	local Env = FarmEnv()
+	local Opts = { cap = Budget * Core.ItemShare(Budget), share = Core.PlanRateShare, hours = Core.FlipMaxHours,
+		-- the same bar as a flip: the vendor route is a sure sale (like a vendor buy), the AH route needs the return
+		need = function(Cost, Row)
+			if Row.route == "Vendor" then return Core.MinVendorProfit end
+			return Core.FlipNeed(Cost, MinProfit, Row.status)
+		end }
+	local Best = {}
+	local _, _, Rows = Farm.Crafts(Env)
+	for _, R in ipairs(Rows) do
+		if not R.excluded and not R.buyExcluded and (R.expected or 0) > 0 then
+			local Known, How, Rank = L.RecipeKnown(R.spell, R.skill, R.req, Mine)
+			if Known or All then
+				local Ok = true
+				for _, Rg in ipairs(R.reagents) do if Rg.source ~= "vendor" and not Flippable(Rg.id) then Ok = false end end
+				local P = Ok and Farm.CraftPlan(R, Opts, Env)
+				if P then
+					local B = Best[R.id]
+					if not B or P.profit > B.flip.profit then
+						Best[R.id] = { id = R.id, craft = R, info = Env.info(R.id), flip = P, best = P, now = { [P] = true },
+							plan = false, known = Known, knownHow = How, rank = Rank }
+					end
+				end
+			end
+		end
+	end
+	local Out = {}
+	for _, E in pairs(Best) do Out[#Out + 1] = E end
+	table.sort(Out, function(a, b) if a.flip.profit ~= b.flip.profit then return a.flip.profit > b.flip.profit end return a.id < b.id end)
+	CraftPlanCache = { key = Key, rows = Out }
+	return Out
+end
+
 -- All view: Gather + Drop + one row per crafted item (its best craft row; a plain sell row, Kind "Crafted", when no
 -- craft pays or its profession is filtered out: nothing you hold goes missing; common crafted gear left out), tiered
 -- over the combined list. Each row is a view of the cached row with its own tier (the same row has another tier in
@@ -1589,6 +1677,8 @@ end
 -- Events ---------------------------------------------------------------------------------------------------------
 local Events = CreateFrame("Frame")
 Events:RegisterEvent("PLAYER_LOGIN")
+Events:RegisterEvent("TRADE_SKILL_SHOW")
+Events:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
 Events:RegisterEvent("PLAYER_LOGOUT")
 Events:RegisterEvent("CHAT_MSG_LOOT")
 Events:RegisterEvent("CHAT_MSG_MONEY")
@@ -1631,6 +1721,8 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 		end
+	elseif Event == "TRADE_SKILL_SHOW" or Event == "TRADE_SKILL_LIST_UPDATE" then
+		pcall(L.LearnRecipes) -- never let this break the profession window
 	elseif Event == "OWNED_AUCTIONS_UPDATED" then
 		L.ReadOwnedAuctions()
 	elseif Event == "AUCTION_HOUSE_SHOW" then

@@ -631,6 +631,98 @@ if real:
     ok(L('AF_NS.Trade.SellIndex()') == 1, f'Skip walks the queue and wraps back to the start ({n} items)')
     X('Click(AuctionForeverSellPanel.QueueRows[2])')
     ok(n < 2 or L('AF_NS.Trade.SellIndex()') == 2, 'clicking a queue row selects it')
+    # ---- Craft plans in AF Buy ------------------------------------------------------------------------------------
+    # One recipe (Tailoring 50): 2 x mat 990102 + 1 x mat 990103 from the AH, 1 Coarse Thread (2320) from a vendor.
+    X("""local function Copy(t, seen) if type(t) ~= "table" then return t end seen = seen or {} if seen[t] then return seen[t] end
+        local c = {}; seen[t] = c; for k, v in pairs(t) do c[k] = Copy(v, seen) end return c end
+      CraftSavedDB = Copy(AuctionForeverDB); CraftSavedData = AuctionForeverData; CraftSavedRecipes = AF_Recipes
+      CraftSavedChar = Copy(AuctionForeverChar)
+      AuctionForeverDB.fresh = nil -- (a newer full scan would say these test items have nothing listed)
+      local F = { "low", "qty", "med", "hi", "med24", "medAll", "perHour", "medHour", "hoursSeen", "hoursWithSales", "sales",
+        "sellThrough", "qtyDayAgo", "newHour", "lows", "lowHi24", "ladder" }
+      AuctionForeverData = { v = 1, time = os.time() + 7, hours = 72, fields = F, names = {},
+        items = {
+          [990101] = { 1400, 30, 1400, 1500, 1400, 1400, 40, 40, 72, 70, 500, 1, 30, nil, nil, nil, { { 1400, 30 } } },
+          [990102] = { 100, 120, 150, 200, 150, 150, 10, 10, 72, 70, 500, 1, 120, nil, nil, nil, { { 100, 10 }, { 200, 10 }, { 500, 100 } } },
+          [990103] = { 300, 50, 300, 300, 300, 300, 10, 10, 72, 70, 500, 1, 50, nil, nil, nil, { { 300, 50 } } } },
+        info = { [990101] = { 1, 1, 1 }, [990102] = { 1, 1, 1 }, [990103] = { 1, 1, 1 } } }
+      AF_Recipes = { [990101] = { { 7101, 197, 50, 1, { 990102, 2, 990103, 1, 2320, 1 }, 0, 60, 80 } } }
+      KnownSpells = {}
+      IsPlayerSpell = function(s) return KnownSpells[s] == true end
+      AF_NS.UI.SetShowAllRecipes(false)
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+    ok(L('#AF_NS.UI.CraftTargets()') == 0, "a recipe you don't know (no spell, no profession info): no craft plan")
+    X('AF_NS.UI.SetShowAllRecipes(true)')
+    ok(L('#AF_NS.UI.CraftTargets()') == 1 and L('AF_NS.UI.CraftTargets()[1].known') == False, 'Show all recipes: the plan shows, marked not known')
+    X('AF_NS.UI.SetShowAllRecipes(false); KnownSpells[7101] = true; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+    ok(L('#AF_NS.UI.CraftTargets()') == 1 and L('AF_NS.UI.CraftTargets()[1].knownHow') == 'spell', 'the game says you know the recipe spell: the plan shows')
+    # Without the spell answer: your profession rank against the recipe's required rank; a profession window's answer wins.
+    X("""KnownSpells[7101] = nil; C_SkillInfo = { GetSkillLineInfoByID = function(id) if id == 197 then return { rank = SkillRank } end end }
+      SkillRank = 75; AF_NS.Scan.Version = AF_NS.Scan.Version + 1""")
+    ok(L('#AF_NS.UI.CraftTargets()') == 1 and L('AF_NS.UI.CraftTargets()[1].knownHow') == 'rank', 'Tailoring 75, recipe needs 50: probably known')
+    X('SkillRank = 40; AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+    ok(L('#AF_NS.UI.CraftTargets()') == 0, 'Tailoring 40, recipe needs 50: not known')
+    X("""SkillRank = 75; C_TradeSkillUI = { GetRecipeInfo = function(s) if s == 7101 then return { learned = false } end end }
+      FireEvent("TRADE_SKILL_SHOW")""")
+    ok(L('AuctionForeverChar.recipes[7101]') == False and L('#AF_NS.UI.CraftTargets()') == 0, 'your profession window says not learned: no plan (beats the rank guess)')
+    X('C_TradeSkillUI.GetRecipeInfo = function(s) if s == 7101 then return { learned = true } end end; FireEvent("TRADE_SKILL_LIST_UPDATE")')
+    ok(L('#AF_NS.UI.CraftTargets()') == 1 and L('AF_NS.UI.CraftTargets()[1].knownHow') == 'window', 'learned in the window: the plan shows')
+    # The row in AF Buy (no flips right now): mats for N, the resale, the profit, "craft: Tailoring 50", the tier.
+    X("""FlipTargets = {}; Click(AuctionForeverBuyTab); AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1)
+      CE = AF_NS.Trade.SelectedBuy(); CF = CE and CE.flip""")
+    cells = [str(L(f'AuctionForeverBuyPanel.Rows[1].Cells[{c}]:GetText()')) for c in range(1, 8)]
+    n = L('CF and CF.crafts')
+    ok(L('CE ~= nil and CE.craft ~= nil') and n and n > 0 and cells[3].startswith('mats for ' + str(n) + ': ') and 'craft: Tailoring 50' in cells[6]
+       and cells[4].startswith('AH ') and cells[4].endswith(' each') and '(c)' in cells[0], f'craft row: {cells}')
+    tier = L('(AF_NS.Trade.Tier(CF))')
+    ret = L('CF.profit / CF.cost')
+    ok(tier in cells[1] and ret > 0 and ('Tier ' + tier) in str(L('AuctionForeverBuyPanel.Detail:GetText()')), f'tier by expected return (profit / mats cost): {tier}, {ret:.0%}')
+    ok(L('CF.crafts <= 50 and CF.mats[1].qty == 2 * CF.crafts and CF.mats[2].qty == CF.crafts and CF.vendorGoods[1].qty == CF.crafts'),
+       f"N within the mats listed (50 of mat 990103): {n}; each mat bought for N crafts")
+    det = str(L('AuctionForeverBuyPanel.Detail:GetText()')).split('\n')
+    ok(len(det) == 3 and det[1].startswith('Buy ' + str(L('CF.mats[1].qty'))) and ('craft ' + str(n)) in det[1] and 'sell on the AH at' in det[1]
+       and 'from a vendor' in det[1] and det[2].startswith('You know this recipe (seen in your Tailoring window'), f'detail lines: {det}')
+    # Buying: one mat at a time, each with its own price check and Confirm.
+    X('Calls = {}; Click(AuctionForeverBuyPanel.Buy)')
+    c = L('LastCall("StartCommoditiesPurchase")')
+    ok(c is not None and c[2] == 990102 and c[3] == L('CF.mats[1].qty'), f'Buy starts the first mat only ({c and c[2]} x {c and c[3]})')
+    X('FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].upTo, CF.mats[1].cost)')
+    ok('Confirm' in str(L('AuctionForeverBuyPanel.Buy:GetText()')), 'mat price fine: Confirm')
+    X('Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
+    ok(L('LastCall("ConfirmCommoditiesPurchase")[2]') == 990102 and 'next mat' in str(L('AuctionForeverBuyPanel.Buy:GetText()')).lower()
+       and L('AF_NS.Trade.CraftRun() and AF_NS.Trade.CraftRun().step') == 2, 'first mat bought: Buy goes on to the next mat')
+    X('BuysBefore = #(AuctionForeverDB.buys or {}); Click(AuctionForeverBuyPanel.Buy)')
+    c = L('LastCall("StartCommoditiesPurchase")')
+    ok(c[2] == 990103, 'second click: the second mat')
+    X('FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo, CF.mats[2].cost); Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")')
+    total = L('CF.mats[1].cost + CF.mats[2].cost + CF.vendorCost')
+    ok(L('AF_NS.Trade.CraftRun() == nil') and L('#AuctionForeverDB.crafts') >= 1 and L('AuctionForeverDB.crafts[#AuctionForeverDB.crafts][2]') == 990101
+       and L('AuctionForeverDB.crafts[#AuctionForeverDB.crafts][4]') == total, 'all mats bought: the craft is recorded (product, crafts, total cost)')
+    held = L('(AF_NS.Core.Holding(AuctionForeverDB, 990101))')
+    paid = L('select(2, AF_NS.Core.Holding(AuctionForeverDB, 990101))')
+    ok(held == L('CF.units') and paid == -(-total // L('CF.units')), f'the product\'s cost basis is the mats (AF Sell\'s "You paid"): {held} at {paid} each')
+    ok(L('(AF_NS.Core.Holding(AuctionForeverDB, 990102))') == 0, "mats used for the craft aren't left as purchases of their own")
+    # A mat's price rose past the plan's max: stopped, nothing more bought; the mats bought so far stay as yours.
+    X("""AuctionForeverDB.fresh = nil; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy(); AF_NS.Trade.SelectBuy(1); CF = AF_NS.Trade.SelectedBuy().flip
+      Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[1].upTo, CF.mats[1].cost)
+      Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PURCHASE_SUCCEEDED")
+      Calls = {}; Click(AuctionForeverBuyPanel.Buy); FireEvent("COMMODITY_PRICE_UPDATED", CF.mats[2].upTo + 1, CF.mats[2].cost * 2)""")
+    ok(L('LastCall("CancelCommoditiesPurchase") ~= nil') and L('LastCall("ConfirmCommoditiesPurchase") == nil') and L('AF_NS.Trade.CraftRun() == nil')
+       and 'went up' in str(L('AuctionForeverBuyPanel.Status:GetText()')), 'price rose: cancelled, run stopped: ' + str(L('AuctionForeverBuyPanel.Status:GetText()')))
+    ok(L('(AF_NS.Core.Holding(AuctionForeverDB, 990102))') == L('CF.mats[1].qty'), 'stopped part way: the mats bought are recorded as yours (for AF Sell)')
+    # Show all recipes box on AF Buy
+    X('AuctionForeverDB.fresh = nil; AF_NS.UI.SetShowAllRecipes(false); AuctionForeverChar.recipes[7101] = false; AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()')
+    ok(L('#AF_NS.Trade.BuyRows()') == 0, 'unknown recipe, box off: not listed')
+    X('Click(AuctionForeverBuyPanel.AllRecipes)')
+    ok(L('AF_NS.UI.ShowAllRecipes()') and L('#AF_NS.Trade.BuyRows()') == 1 and "don't know this recipe" in str(L('AuctionForeverBuyPanel.Detail:GetText()'))
+       and 'Show all recipes' in str(L('AuctionForeverBuyPanel.AllRecipesLabel:GetText()')), 'ticking Show all recipes lists it, saying you don\'t know it')
+    X('Click(AuctionForeverBuyPanel.AllRecipes)')
+    ok(not L('AF_NS.UI.ShowAllRecipes()') and L('#AF_NS.Trade.BuyRows()') == 0, 'unticking hides it again')
+    X("""for k in pairs(AuctionForeverDB) do AuctionForeverDB[k] = nil end; for k, v in pairs(CraftSavedDB) do AuctionForeverDB[k] = v end
+      for k in pairs(AuctionForeverChar) do AuctionForeverChar[k] = nil end; for k, v in pairs(CraftSavedChar) do AuctionForeverChar[k] = v end
+      AuctionForeverData = CraftSavedData; AF_Recipes = CraftSavedRecipes; IsPlayerSpell = nil; C_SkillInfo = nil; C_TradeSkillUI = nil
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1; AF_NS.Trade.RefreshBuy()""")
+
     # ---- A quick scan feeds AF Buy / AF Sell as it reads items (at most every 2 s); a full scan only at the end ----
     X("""local function Copy(t, seen) if type(t) ~= "table" then return t end seen = seen or {} if seen[t] then return seen[t] end
         local c = {}; seen[t] = c; for k, v in pairs(t) do c[k] = Copy(v, seen) end return c end

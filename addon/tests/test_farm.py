@@ -271,5 +271,39 @@ if real:
     Buy, Added, All = L(f'{F}.Crafts()')
     ok(len(Buy) > 0 and len(Added) > 0, f'real data: {len(Buy)} buy-mats crafts and {len(Added)} value-added crafts rank')
 
+# --- Craft plans (AF Buy): N crafts limited by the mats listed, the product's sales, the budget, and the last craft
+# still paying. Product 600 posts at 970 (sells 100%, no deposit): 921.5 expected a craft. Mats: 2 x 601 (10 at 1s,
+# 10 at 2s, 100 at 5s) + 1 x 602 from a vendor (10c).
+X('''MakeItem(600, { med = 1000, med24 = 1000, medAll = 1000, sellThrough = 1, perHour = 2 })
+  MakeItem(601, { ladder = { {100, 10}, {200, 10}, {500, 100} }, qty = 120 })
+  CEnv = Env({ vendor = { [602] = 10 } })
+  CRec = { 7001, 171, 50, 1, { 601, 2, 602, 1 }, 0, 60, 80 }
+  CRow = AF_NS.Farm.Craft(600, CRec, CEnv)
+  function CPlan(Opts, Row) return AF_NS.Farm.CraftPlan(Row or CRow, Opts, CEnv) end''')
+P = L('CPlan({ share = 0.75, hours = 8 })')
+ok(P and P.crafts == 10 and P.cost == 3100 and P.profit == 6115 and P.route == 'AH',
+   f"N stops where the next craft's mats (2 at 5s + 10c) cost more than it earns: {P and P.crafts} crafts, cost {P and P.cost}, profit {P and P.profit} (want 10, 3100, 6115)")
+ok(P and P.mats[1].id == 601 and P.mats[1].qty == 20 and P.mats[1].upTo == 200 and P.mats[1].cost == 3000
+   and P.vendorGoods[1].id == 602 and P.vendorGoods[1].qty == 10 and P.vendorGoods[1].cost == 100 and P.vendorCost == 100,
+   'plan lists each AH mat (qty, buy up to, cost) and the vendor goods')
+X('Items[600].perHour = 0.5')
+P = L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, CRec, CEnv))')
+ok(P and P.crafts == 3 and P.profit == 2134, f"sales limit: 0.5 sold/h x 75% x 8 h = 3 crafts ({P and P.crafts}, profit {P and P.profit})")
+X('Items[600].perHour = 2')
+P = L('CPlan({ share = 0.75, hours = 8, cap = 1100 })')
+ok(P and P.crafts == 5 and P.cost == 1050, f"budget: 5 crafts cost 10s 50c, 6 would cost 12s 60c (cap 11s): {P and P.crafts}")
+X('Items[601].ladder = { {100, 3} }; Items[601].qty = 3')
+P = L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, CRec, CEnv))')
+ok(P and P.crafts == 1, f"mats listed: 3 units allow 1 craft ({P and P.crafts})")
+X('Items[601].ladder = {}; Items[601].qty = 0')
+ok(L('CPlan({ share = 0.75, hours = 8 }, AF_NS.Farm.Craft(600, CRec, CEnv))') is None, 'no mats listed: no plan')
+X('Items[601].ladder = { {100, 10}, {200, 10}, {500, 100} }; Items[601].qty = 120')
+ok(L('CPlan({ share = 0.75, hours = 8, need = function(c) return c * 10 end })') is None, "under the profit it needs: no plan")
+X('CEnvV = Env({ vendor = { [602] = 10 }, vendorSell = function(id) return id == 600 and 1500 or nil end }); Items[600].perHour = 0.5')
+P = L('AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvV), { share = 0.75, hours = 8 }, CEnvV)')
+ok(P and P.route == 'Vendor' and P.crafts == 60 and P.resell == 1500 and P.profit == 1500 * 60 - 53600,
+   f"vendor route: no sales limit, up to the mats listed (each craft still pays at 5s mats): {P and P.crafts} crafts, profit {P and P.profit}")
+X('Items[600].perHour = 2')
+
 print(f'\n{fails} failed' if fails else '\nall passed')
 sys.exit(1 if fails else 0)
