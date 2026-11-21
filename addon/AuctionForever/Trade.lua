@@ -523,7 +523,11 @@ local function BuildBuy()
 	P.Detail:ClearAllPoints()
 	P.Detail:SetPoint("BOTTOMLEFT", P.Buy, "TOPLEFT", 0, 6)
 	P.Skip = Button(P, "Next", 230, -420, 80, function() T.SelectBuy(Buy.sel + 1) end)
-	P.Status = Text(P, "GameFontHighlightSmall", 480, -425, 190)
+	-- Beside the buttons, centred on them and wide enough for two lines: a long message no longer runs down over
+	-- the auction house's money/bid bar below the panel.
+	P.Status = Text(P, "GameFontHighlightSmall", 320, -420, 350)
+	P.Status:ClearAllPoints()
+	P.Status:SetPoint("LEFT", P.Skip, "RIGHT", 12, 0)
 end
 
 -- AF Sell -----------------------------------------------------------------------------------------------------

@@ -1047,6 +1047,10 @@ ok(L('AF_NS.Trade.Rows()[1].plan') == True, 'back to plan order: plan first')
 dp = L('AuctionForeverBuyPanel.Detail._points[#AuctionForeverBuyPanel.Detail._points]')
 ok(dp is not None and dp[1] == 'BOTTOMLEFT' and L('AuctionForeverBuyPanel.Detail._points[#AuctionForeverBuyPanel.Detail._points][2] == AuctionForeverBuyPanel.Buy') and dp[3] == 'TOPLEFT',
    'AF Buy detail text sits on top of the buttons (long text grows upward)')
+sp = L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points]')
+ok(sp is not None and sp[1] == 'LEFT' and L('AuctionForeverBuyPanel.Status._points[#AuctionForeverBuyPanel.Status._points][2] == AuctionForeverBuyPanel.Skip') and sp[3] == 'RIGHT'
+   and L('AuctionForeverBuyPanel.Status._width') == 350,
+   'AF Buy status message sits beside the buttons, 350 wide (long messages no longer run down over the bid bar)')
 # Amounts in the AF Buy table use the coin colors (also on rows you can't afford yet; only their name is greyed).
 X('AF_NS.Trade.DrawBuy()')
 cr = [(L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[4]:GetText()'), L(f'AuctionForeverBuyPanel.Rows[{i}].Cells[6]:GetText()'), L(f'AF_NS.Trade.Rows()[{i}]'))

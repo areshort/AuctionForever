@@ -33,6 +33,7 @@ function Methods:CreateTexture() return NewObj("Texture") end
 function Methods:SetPoint(...) self._points[#self._points + 1] = { ... } end
 function Methods:GetPoint() return "CENTER", nil, "CENTER", 10, 20 end
 function Methods:GetWidth() return 140 end
+function Methods:SetWidth(W) self._width = W end
 function Methods:GetCenter() return 500, 500 end
 function Methods:GetEffectiveScale() return 1 end
 function Methods:SetFrameLevel(n) self._level = n end
