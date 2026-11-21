@@ -29,6 +29,8 @@ jobs:
         run: |
           mkdir -p data
           gh release download data -p state.json.gz -D data || echo "No previous state yet"
+          # Safety net: the state as it was before this run, published as state.prev.json.gz (one rolling copy).
+          if [ -f data/state.json.gz ]; then cp data/state.json.gz data/state.prev.json.gz; fi
       - name: Collect house 110
         id: collect
         env:
@@ -41,6 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view data >/dev/null 2>&1 || gh release create data --title "Latest auction data" --notes "Updated by the collector. AuctionForeverData.lua is what the add-on reads."
+          if [ -f data/state.prev.json.gz ]; then gh release upload data data/state.prev.json.gz --clobber; fi
           gh release upload data data/state.json.gz data/AuctionForeverData.lua --clobber
       - name: Keep the schedule alive
         # GitHub pauses scheduled workflows after 60 days without commits; an empty commit every 30 quiet days prevents that.

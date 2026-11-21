@@ -1,5 +1,5 @@
 """Offline tests for the collector's sold/expired logic and history. Run: python -I test_collector.py"""
-import os, sys, tempfile
+import gzip, json, os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import collector as C
 
@@ -189,13 +189,36 @@ ok(C.load_state(st6)['names'] == {'10113': "Wolf Rider's Belt"}, 'names looked u
 d5 = tempfile.mkdtemp()
 st7, out7 = os.path.join(d5, 's.gz'), os.path.join(d5, 'o.lua')
 old_ls = {'70': [10113, 9000, 1, 2, 'i'], '71': [10113, 3000, 1, 2, 'i'], '20': [17, 100, 50, 2, 'c']}
-C.save_state(st7, {'histv': 2, 'fmt': 2, 'hourly': {'10113': [[1, 3000, 2, 5, 500, 0, 1.0, 0]]}, 'soldprices': {'10113': [[1, 3000, 5]]},
-                   'daily': {}, 'compared': [[1, 1.0]], 'listings': old_ls, 'time': 2_000_000, 'timed': True})
+old_ls['72'] = [4444, 700, 1, 2, 'i']  # plain gear (no suffix): sold by the next snapshot
+C.save_state(st7, {'histv': 2, 'fmt': 2, 'hourly': {'10113': [[1, 3000, 2, 5, 500, 0, 1.0, 0]], '17': [[1_999_000, 100, 60, 3, 300, 0, 1.0, 0]],
+                                                    '4444': [[1_999_000, 700, 1, 1, 700, 0, 1.0, 0]]},
+                   'soldprices': {'10113': [[1, 3000, 5]], '17': [[1_999_000, 100, 3]], '4444': [[1_999_000, 700, 1]]},
+                   'daily': {'17': [[22, 100, 40, 0]], '10113': [[22, 3000, 2, 0]]}, 'compared': [[1_999_000, 1.0]], 'listings': old_ls,
+                   'time': 2_000_000, 'timed': True, 'lastDay': 23})
 C.run(st7, out7, items1, [good(20, 17, 100, 30, 'LONG')], now_ts=2_003_600, names_fn=lambda ids: {})
 s7 = C.load_state(st7)
 ok(s7['histv'] == C.HISTV and '10113' not in s7['soldprices'] and not any(k.startswith('10113') for k in s7['soldprices'])
    and s7['soldprices'].get('17', [[0, 0, 0]])[-1][1:] == [100, 20],
    f"format change: old suffix-mixed history dropped, item auctions not compared once, commodities still compared ({sorted(s7['soldprices'])})")
+ok(s7['hourly']['17'][0] == [1_999_000, 100, 60, 3, 300, 0, 1.0, 0] and s7['soldprices']['17'][0] == [1_999_000, 100, 3] and s7['daily']['17'] == [[22, 100, 40, 0]]
+   and s7['hourly']['4444'][0][0] == 1_999_000 and '10113' not in s7['daily'] and s7['compared'][0] == [1_999_000, 1.0],
+   'format 2 -> 3: items without suffix versions keep their history (hourly, sold prices, daily, compared hours)')
+ok([p[1:] for p in s7['soldprices']['4444']] == [[700, 1], [700, 1]], f"plain gear still compared at the migration: its sale counted ({s7['soldprices']['4444']})")
+# ---- Restoring history a run dropped (2026-11-21): put in front of the state's own rows, once, suffix items left out.
+d9 = tempfile.mkdtemp()
+rp = os.path.join(d9, 'history-test.json.gz')
+with gzip.open(rp, 'wt', encoding='utf-8') as f:
+    json.dump({'hourly': {'17': [[10, 100, 50, 1, 100, 0, 1.0, 0], [20, 100, 50, 1, 100, 0, 1.0, 0]], '10113': [[10, 1, 1, 1, 1, 0, 1.0, 0]]},
+               'soldprices': {'17': [[10, 100, 1]]}, 'daily': {'17': [[0, 100, 5, 0]]}, 'compared': [[10, 1.0], [20, 1.0]],
+               'names': {'17': 'Thing'}, 'details': {'17': [5, 1]}}, f)
+sr = {'histv': C.HISTV, 'hourly': {'17': [[20, 100, 50, 0, 0, 0, 0, 0], [30, 100, 50, 2, 200, 0, 1.0, 0]]}, 'soldprices': {'17': [[30, 100, 2]]},
+      'daily': {}, 'compared': [[30, 1.0]], 'names': {}, 'details': {}}
+n9 = C.restore_history(sr, {10113}, rp)
+ok(n9 == 3 and [r[0] for r in sr['hourly']['17']] == [10, 20, 30] and sr['hourly']['17'][1][3] == 0 and sr['soldprices']['17'] == [[10, 100, 1], [30, 100, 2]]
+   and sr['daily']['17'] == [[0, 100, 5, 0]] and '10113' not in sr['hourly'] and sr['compared'] == [[10, 1.0], [20, 1.0], [30, 1.0]]
+   and sr['names'] == {'17': 'Thing'} and sr['restored'] == 'history-test.json.gz',
+   f"restore: older rows go in front (the state's own row of the same hour wins), suffix items left out ({n9} rows)")
+ok(C.restore_history(sr, {10113}, rp) == 0 and len(sr['hourly']['17']) == 3, 'restore happens once')
 # ---- Items the game data API doesn't know: vendor price unknown (nil), not 0; asked again once a day.
 asked = []
 def api(ids):

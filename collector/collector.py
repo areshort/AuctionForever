@@ -365,6 +365,8 @@ def lua(v):
     raise TypeError(type(v))
 
 
+# History a collector run dropped, put back once by restore_history (see there).
+RESTORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restore', 'history-2026-11-21.json.gz')
 SFX_CHUNK = 400  # suffix items per chunk of the data file (see write_lua)
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
           'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24', 'lowRange24']
@@ -436,26 +438,78 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
-def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None):
+def suffix_ids(listing_map):
+    """Item IDs that have random-suffix versions among these listings (keyed "itemID:bonus")."""
+    return {key_parts(v[0])[0] for v in listing_map.values() if isinstance(v[0], str) and ':' in v[0]}
+
+
+def migrate_history(state, sfx):
+    """History from before HISTV 3 (suffix versions under one plain item ID): only those items' history is mixed,
+    so only theirs is dropped; every other item keeps its hourly, sold-price and daily rows."""
+    if state.get('histv', 1) < 2:
+        # Older still (cancels counted as sales): every item's history is wrong, so all of it goes.
+        for k in ('hourly', 'soldprices', 'daily', 'compared', 'lastDay'):
+            state.pop(k, None)
+        state['histv'] = HISTV
+        return
+    drop = {str(i) for i in sfx}
+    for store in ('hourly', 'soldprices', 'daily'):
+        for k in drop & set(state.get(store, {})):
+            del state[store][k]
+    state['histv'] = HISTV
+
+
+def restore_history(state, sfx, path=None):
+    """Once: put back history a collector run dropped (HISTV 3 first dropped every item's history, 2026-11-21).
+    Restored rows older than the state's own first row of each item go in front of it; suffix items' mixed history
+    stays out; missing names are added. Marked in the state so it happens only once. Returns rows restored."""
+    if not os.path.exists(path) or state.get('restored') == os.path.basename(path):
+        return 0
+    with gzip.open(path, 'rt', encoding='utf-8') as f:
+        old = json.load(f)
+    skip = {str(i) for i in sfx}
+    n = 0
+    for store in ('hourly', 'soldprices', 'daily'):
+        cur = state.setdefault(store, {})
+        for k, rows in old.get(store, {}).items():
+            if k in skip:
+                continue
+            mine = cur.get(k, [])
+            first = min((r[0] for r in mine), default=float('inf'))
+            add = [r for r in rows if r[0] < first]
+            if add:
+                cur[k] = add + mine
+                n += len(add)
+    seen = {c[0] for c in state.get('compared', [])}
+    state['compared'] = sorted([c for c in old.get('compared', []) if c[0] not in seen] + state.get('compared', []))
+    for store in ('names', 'details'):
+        for k, v in old.get(store, {}).items():
+            state.setdefault(store, {}).setdefault(k, v)
+    state['restored'] = os.path.basename(path)
+    return n
+
+
+def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None, restore_path=None):
     now_ts = now_ts or time.time()
     if items is None:
         items, goods = fetch()
         names_fn = names_fn or fetch_names
     state = load_state(state_path)
+    now = listings(items, goods)
+    sfx = suffix_ids(now)
     reset = state.get('histv') != HISTV
     if reset:
-        # History counted under older rules is dropped once; listings and timing are kept so the next comparison counts.
-        for k in ('hourly', 'soldprices', 'daily', 'compared', 'lastDay'):
-            state.pop(k, None)
-        state['histv'] = HISTV
+        migrate_history(state, sfx)
     for k in ('hourly', 'soldprices', 'daily'):
         state.setdefault(k, {})  # may be missing after a reset (or a reset saved by an older run)
-    now = listings(items, goods)
+    restored = restore_history(state, sfx, restore_path) if restore_path else 0
+    if restored:
+        print(f'house {HOUSE}: restored {restored} history rows')
     prev = state.get('listings')
     if prev is not None and prev == now:
         # Blizzard hasn't published a new snapshot yet: change nothing, so this isn't counted as an hour of no sales.
         added = update_names(state, market(now), names_fn, now_ts)
-        if state.get('fmt') != FMT or added or reset:
+        if state.get('fmt') != FMT or added or reset or restored:
             # ...but a data file written by an older collector is rewritten right away in the current format.
             state['fmt'] = FMT
             save_state(state_path, state)
@@ -474,9 +528,11 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
     else:
         hours_for_rate = hours
     if hours_for_rate and reset:
-        # After a history reset the previous item auctions may be keyed the old way (suffix versions under the plain
-        # ID): only commodities are compared this once, or every suffixed listing would look sold and posted again.
-        ev = compare({k: v for k, v in prev.items() if v[4] == 'c'}, {k: v for k, v in now.items() if v[4] == 'c'}, hours_for_rate)
+        # After the HISTV 3 migration the previous auctions of suffix items are keyed the old way (every version under
+        # the plain ID): those items aren't compared this once, or every one of their listings would look sold and
+        # posted again. Everything else is compared as usual.
+        def keep(v): return key_parts(v[0])[0] not in sfx
+        ev = compare({k: v for k, v in prev.items() if keep(v)}, {k: v for k, v in now.items() if keep(v)}, hours_for_rate)
     else:
         ev = compare(prev, now, hours_for_rate) if hours_for_rate else {}
     mk = market(now)
@@ -499,7 +555,7 @@ def run(state_path, out_path, items=None, goods=None, now_ts=None, names_fn=None
 
 if __name__ == '__main__':
     d = sys.argv[1] if len(sys.argv) > 1 else '.'
-    changed = run(os.path.join(d, 'state.json.gz'), os.path.join(d, 'AuctionForeverData.lua'))
+    changed = run(os.path.join(d, 'state.json.gz'), os.path.join(d, 'AuctionForeverData.lua'), restore_path=RESTORE_FILE)
     # Tell the workflow whether there's anything new to upload.
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
