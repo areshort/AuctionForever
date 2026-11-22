@@ -2500,6 +2500,22 @@ if real:
         X('RawN = 0; TooltipPostCalls[1](GameTooltip, { id = 2589 })')
         ok(L('RawN') <= 2 and L('AF_NS.UI.ItemTier(2589)') is not None, f"lists ready: the tooltip's Tier is there, one valuation ({L('RawN')})")
     X('AF_NS.Farm.Raw = RealRaw')
+# ---- Local scan history: 24 h, pruned for every item at login and logout ------------------------------------------
+X("""PrNow = time()
+  local function W(h, sold) return { PrNow - h * 3600, 0.5, sold, sold * 100, 2, 100, 50, 3 } end
+  AuctionForeverDB.obs[990950] = { W(30, 4), W(20, 6), W(1, 5) }
+  AuctionForeverDB.obs[990951] = { W(30, 4), W(26, 1) }
+  AuctionForeverDB.obs[990952] = { W(3, 2), W(2, 7) }
+  AuctionForeverDB.obs[990953] = {}
+  Recent = AuctionForeverDB.obs[990952]
+  FireEvent("PLAYER_LOGIN")""")
+ok(L('AF_NS.Scan.KEEP_HOURS') == 24, f"scan windows kept 24 h ({L('AF_NS.Scan.KEEP_HOURS')})")
+ok(L('#AuctionForeverDB.obs[990950]') == 2 and L('AuctionForeverDB.obs[990950][1][3]') == 6 and L('AuctionForeverDB.obs[990951] == nil') and L('AuctionForeverDB.obs[990953] == nil'),
+   'login: windows over 24 h old dropped for every item (a 30 h one too), lists left empty removed')
+ok(L('AuctionForeverDB.obs[990952] == Recent and #Recent == 2'), 'items with only recent windows untouched (same rates)')
+X('AuctionForeverDB.obs[990952] = { { PrNow - 30 * 3600, 0.5, 1, 100, 1, 100, 50, 0 }, Recent[1], Recent[2] }; FireEvent("PLAYER_LOGOUT")')
+ok(L('#AuctionForeverDB.obs[990952]') == 2 and L('AuctionForeverDB.obs[990952][1][3]') == 2, 'logout: pruned again before the game saves')
+X('for _, id in ipairs({ 990950, 990951, 990952, 990953 }) do AuctionForeverDB.obs[id] = nil end')
 undef =sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)

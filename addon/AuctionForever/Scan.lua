@@ -18,7 +18,10 @@ local MIN_WINDOW = 2 / 60   -- hours: never measure a window shorter than 2 min
 local FAIR_WINDOW = 0.25    -- hours: a window this long counts whatever it holds (15 min)
 local MIN_EVENTS = 10       -- separate purchases that make a shorter window count
 Scan.MIN_EVENTS = MIN_EVENTS
-local KEEP_HOURS = 72
+-- Scan windows (AuctionForeverDB.obs) are kept 24 h (was 72 h: the SavedVariables grew to about 15 MB, slow to load
+-- and save on every /reload). Older sales history comes from the cloud data (its hours, med24/medAll, lowHi24...).
+local KEEP_HOURS = 24
+Scan.KEEP_HOURS = KEEP_HOURS
 local KEEP_OBS = 30
 local WAIT_SHARE = 0.3      -- full scan bar: the first 30% is waiting for the server, the rest reading listings
 local RESEND = { 20, 40, 60 } -- full scan: ask again after this many seconds of silence (asking every 10 s got
@@ -795,7 +798,34 @@ function Scan.Quick(Silent, OnDone)
 	return true
 end
 
+-- Windows older than KEEP_HOURS, for every item (a scan only trims the items it sees again), at login and logout:
+-- the saved file holds 24 h of scan history. Lists left empty are removed. Returns the windows dropped.
+function Scan.PruneObs(Now)
+	local S = AuctionForeverDB
+	if type(S) ~= "table" or type(S.obs) ~= "table" then return 0 end
+	local Cut, Dropped = (Now or time()) - KEEP_HOURS * 3600, 0
+	for id, O in pairs(S.obs) do
+		if type(O) ~= "table" then
+			S.obs[id] = nil
+		else
+			local Old = false
+			for _, X in ipairs(O) do if type(X) ~= "table" or (X[1] or 0) < Cut then Old = true break end end
+			if Old then
+				local Kept = {}
+				for _, X in ipairs(O) do if type(X) == "table" and (X[1] or 0) >= Cut then Kept[#Kept + 1] = X end end
+				Dropped = Dropped + #O - #Kept
+				S.obs[id] = #Kept > 0 and Kept or nil
+			elseif #O == 0 then
+				S.obs[id] = nil
+			end
+		end
+	end
+	return Dropped
+end
+
 local Events = CreateFrame("Frame")
+Events:RegisterEvent("PLAYER_LOGIN")
+Events:RegisterEvent("PLAYER_LOGOUT")
 Events:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
 Events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 Events:RegisterEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
@@ -823,6 +853,7 @@ function ReadReplicate(Late)
 	Notify("ScanProgress")
 end
 Events:SetScript("OnEvent", function(_, Event, Arg)
+	if Event == "PLAYER_LOGIN" or Event == "PLAYER_LOGOUT" then Scan.PruneObs() return end
 	local LateOk = Event == "REPLICATE_ITEM_LIST_UPDATE" and Scan.WaitGaveUp and Started and GetTime() - Started < LATE_OK
 	if Event == "REPLICATE_ITEM_LIST_UPDATE" and (Mode == "full-wait" or (LateOk and not Mode)) then
 		ReadReplicate(Mode ~= "full-wait")
