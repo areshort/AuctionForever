@@ -70,6 +70,7 @@ function B.NewItems()
 	local Seen = DB().briefSeen
 	local Now, New, N = {}, {}, 0
 	for id in pairs(D.items) do
+		if Farm.Yield then Farm.Yield() end -- (in the background at login: see B.PrintLater)
 		local I = Core.Info(id)
 		if Notable(id, I) then
 			Now[id] = true
@@ -91,45 +92,54 @@ function B.NewItems()
 	return New
 end
 
--- The brief's lines (without the color and prefix).
-function B.Lines()
-	local Out = {}
+-- The brief is worked out in steps (each adds its line to Ctx.out): one after the other for "/af brief"
+-- (B.Lines), or as background jobs at login (B.PrintLater: the flip plan, the craft plans, the Farm lists and the
+-- new-item check together took over a second in one frame). The same steps, so the same lines.
+-- Safe steps: an error leaves their line out (as a pcall did); any other step's error: no brief.
+local function Start()
 	local D = AuctionForeverData
-	if type(D) ~= "table" or type(D.items) ~= "table" then return { "No auction data yet: scan at the auction house." } end
+	if type(D) ~= "table" or type(D.items) ~= "table" then return { out = { "No auction data yet: scan at the auction house." }, done = true } end
 	local Age = math.max(0, math.floor((time() - (D.time or time())) / 60))
-	Out[1] = string.format("Data %d min old (%d h history).", Age, D.hours or 0)
+	return { out = { string.format("Data %d min old (%d h history).", Age, D.hours or 0) } }
+end
+B.STEPS = {
 	-- Buy: the flip plan for your gold now.
-	local Ok = pcall(function() UI().FlipTargets() end)
-	local P = Ok and UI().LastPlan
-	if P and (P.count or 0) > 0 and (P.profit or 0) >= B.MIN_PLAN_PROFIT then
-		Out[#Out + 1] = string.format("Buy: %d flip%s, %s in plan. Check the AF Buy tab.", P.count, P.count == 1 and "" or "s", Core.MoneyDelta(P.profit))
-	end
+	{ safe = true, fn = function(Ctx)
+		UI().FlipTargets()
+		local P = UI().LastPlan
+		if P and (P.count or 0) > 0 and (P.profit or 0) >= B.MIN_PLAN_PROFIT then
+			Ctx.out[#Ctx.out + 1] = string.format("Buy: %d flip%s, %s in plan. Check the AF Buy tab.", P.count, P.count == 1 and "" or "s", Core.MoneyDelta(P.profit))
+		end
+	end },
 	-- Craft: the best plan for a recipe this character knows (Show all doesn't count), by profit a craft.
-	local Best
-	local Ok2, Crafts = pcall(function() return UI().CraftTargets(true) end)
-	for _, E in ipairs(Ok2 and Crafts or {}) do
-		local F = E.flip
-		if E.known and not F.blocked and not F.onCooldown and (F.craftProfit or 0) >= B.MIN_CRAFT_PROFIT
-			and (not Best or F.craftProfit > Best.flip.craftProfit) then Best = E end
-	end
-	if Best then
-		Out[#Out + 1] = string.format("Craft: %s %s per craft, mats under target.", UI().ItemName(Best.id), Core.MoneyDelta(Best.flip.craftProfit))
-	end
+	{ safe = true, fn = function(Ctx)
+		local Best
+		for _, E in ipairs(UI().CraftTargets(true) or {}) do
+			local F = E.flip
+			if E.known and not F.blocked and not F.onCooldown and (F.craftProfit or 0) >= B.MIN_CRAFT_PROFIT
+				and (not Best or F.craftProfit > Best.flip.craftProfit) then Best = E end
+		end
+		if Best then
+			Ctx.out[#Ctx.out + 1] = string.format("Craft: %s %s per craft, mats under target.", UI().ItemName(Best.id), Core.MoneyDelta(Best.flip.craftProfit))
+		end
+	end },
 	-- Gather: the best item this character's gathering professions bring in.
-	local Mine = B.MyGathering()
-	if next(Mine) then
+	{ fn = function(Ctx)
+		local Mine = B.MyGathering()
+		if not next(Mine) then return end
 		local G, GP
 		for _, R in ipairs(UI().GatherRows() or {}) do
 			local Prof = B.GatherProfession(R.id)
 			if Prof and Mine[Prof] and (R.expected or 0) >= B.MIN_GATHER_EACH and (not G or R.expected > G.expected) then G, GP = R, Prof end
 		end
 		if G then
-			Out[#Out + 1] = string.format("Gather: %s ~%s each, %d sold/day (%s).", UI().ItemName(G.id), Money(math.floor(G.expected)), math.floor((G.salesDay or 0) + 0.5), GP)
+			Ctx.out[#Ctx.out + 1] = string.format("Gather: %s ~%s each, %d sold/day (%s).", UI().ItemName(G.id), Money(math.floor(G.expected)), math.floor((G.salesDay or 0) + 0.5), GP)
 		end
-	end
+	end },
 	-- New on the AH since last time.
-	local New = B.NewItems()
-	if #New > 0 then
+	{ fn = function(Ctx)
+		local New = B.NewItems()
+		if #New == 0 then return end
 		local Names = {}
 		for i, X in ipairs(New) do
 			if i > B.NEW_MAX_NAMES then break end
@@ -139,10 +149,32 @@ function B.Lines()
 			end
 			Names[#Names + 1] = Name
 		end
-		Out[#Out + 1] = "New on the AH: " .. table.concat(Names, ", ") .. "."
+		Ctx.out[#Ctx.out + 1] = "New on the AH: " .. table.concat(Names, ", ") .. "."
+	end },
+}
+local function Finish(Ctx)
+	if #Ctx.out == 1 then Ctx.out[2] = "Nothing big today." end
+	return Ctx.out
+end
+-- The brief's lines (without the color and prefix), worked out now.
+function B.Lines()
+	local Ctx = Start()
+	if Ctx.done then return Ctx.out end
+	for _, S in ipairs(B.STEPS) do
+		if S.safe then pcall(S.fn, Ctx) else S.fn(Ctx) end
 	end
-	if #Out == 1 then Out[2] = "Nothing big today." end
-	return Out
+	return Finish(Ctx)
+end
+-- The same lines worked out in the background (a few ms a frame); OnLines(lines) when ready, nothing on an error.
+function B.LinesLater(OnLines)
+	local Ctx = Start()
+	if Ctx.done then OnLines(Ctx.out) return end
+	local Failed = false
+	for _, S in ipairs(B.STEPS) do
+		UI().Background(function() if not Failed then S.fn(Ctx) end end, nil, nil, true,
+			function() if not S.safe then Failed = true end end)
+	end
+	UI().Background(function() end, function() if not Failed then OnLines(Finish(Ctx)) end end, nil, true)
 end
 
 local function Say(Text)
@@ -153,6 +185,10 @@ local function Say(Text)
 end
 function B.Print()
 	for _, Ln in ipairs(B.Lines()) do Say(Ln) end
+end
+-- The login brief: worked out in the background, printed when it's all ready.
+function B.PrintLater()
+	B.LinesLater(function(Lines) for _, Ln in ipairs(Lines) do Say(Ln) end end)
 end
 function B.Enabled() return DB().briefOff ~= true end
 -- "/af brief" prints it; "/af brief off" / "on" turns the login print off or on.
@@ -168,6 +204,6 @@ local Events = CreateFrame("Frame")
 Events:RegisterEvent("PLAYER_ENTERING_WORLD")
 Events:SetScript("OnEvent", function(_, _, IsInitialLogin, IsReloadingUi)
 	if IsInitialLogin and not IsReloadingUi and B.Enabled() then
-		C_Timer.After(B.DELAY, function() pcall(B.Print) end)
+		C_Timer.After(B.DELAY, function() pcall(B.PrintLater) end)
 	end
 end)

@@ -606,6 +606,7 @@ function L.CraftTargets(KnownOnly)
 	local Best = {}
 	local _, _, Rows = Farm.Crafts(Env)
 	for _, R in ipairs(Rows) do
+		if Farm.Yield then Farm.Yield() end
 		-- (with Show all, also recipes that lose money at today's listings: shown "over target" with each mat's target)
 		if not R.excluded and ((not R.buyExcluded and (R.expected or 0) > 0) or (All and R.buyExcluded == Farm.LOSS)) then
 			local Known, How, Rank = L.RecipeKnown(R.spell, R.skill, R.req, Mine)
@@ -684,33 +685,52 @@ end
 -- Working out the Farm lists (every item in the data, every recipe) takes about a second. Done on the spot, that
 -- froze the game 5 s after every /reload (the name preload) and on the first tooltip after each scan (its Tier
 -- line). Here it runs in the background, a few ms a frame: the same code (Farm.Yield pauses its loops), the same rows.
+-- Background jobs run one at a time, in order, each in a coroutine that pauses at Farm.Yield (the loops over the
+-- data: Farm.RawFarms, Farm.Crafts, the flip and craft plans, the brief's new items) once the frame's budget is used.
+-- Farm.Yield is only set while a job runs: the same code called directly never pauses.
 L.BG_BUDGET = 0.004
-local BG, BGDeadline, BGDone
+local Jobs = {} -- { co, done = { fn, ... }, key, quiet, fail }
+local BGDeadline
 local BGFrame = CreateFrame("Frame")
 local function BGYield()
-	if coroutine.running() == BG and GetTimePreciseSec() > BGDeadline then coroutine.yield() end
+	local J = Jobs[1]
+	if J and coroutine.running() == J.co and GetTimePreciseSec() > BGDeadline then coroutine.yield() end
 end
 local function BGStep(self)
+	local J = Jobs[1]
+	if not J then self:SetScript("OnUpdate", nil) return end
 	BGDeadline = GetTimePreciseSec() + L.BG_BUDGET
 	Farm.Yield = BGYield
-	local Ok, Err = coroutine.resume(BG)
+	local Res = { coroutine.resume(J.co) }
 	Farm.Yield = nil
-	if Ok and coroutine.status(BG) ~= "dead" then return end
-	self:SetScript("OnUpdate", nil)
-	BG = nil
-	local Done = BGDone or {}
-	BGDone = nil
-	if not Ok then print("|cffffd100AuctionForever:|r list error: " .. tostring(Err)) return end
-	for _, Fn in ipairs(Done) do Fn() end
+	if Res[1] and coroutine.status(J.co) ~= "dead" then return end
+	table.remove(Jobs, 1)
+	if not Jobs[1] then self:SetScript("OnUpdate", nil) end
+	if not Res[1] then
+		if not J.quiet then print("|cffffd100AuctionForever:|r background error: " .. tostring(Res[2])) end
+		if J.fail then J.fail(Res[2]) end
+		return
+	end
+	for _, Fn in ipairs(J.done) do Fn(unpack(Res, 2)) end
 end
--- Start (or join) the background build; OnDone (optional) runs when the lists are ready.
-function L.BuildListsLater(OnDone)
-	if OnDone then BGDone = BGDone or {}; BGDone[#BGDone + 1] = OnDone end
-	if BG then return end
-	BG = coroutine.create(function() L.AllRows() end)
+-- Queue Fn as a background job; OnDone(Fn's results) when it's finished. Key: joins a queued job with the same key.
+-- Quiet: no chat message on an error; OnFail(error) instead.
+function L.Background(Fn, OnDone, Key, Quiet, OnFail)
+	if Key then
+		for _, J in ipairs(Jobs) do
+			if J.key == Key then if OnDone then J.done[#J.done + 1] = OnDone end return end
+		end
+	end
+	Jobs[#Jobs + 1] = { co = coroutine.create(Fn), done = { OnDone }, key = Key, quiet = Quiet, fail = OnFail }
 	BGFrame:SetScript("OnUpdate", BGStep)
 end
-function L.BuildingLists() return BG ~= nil end
+-- Start (or join) the background build of the Farm lists; OnDone (optional) runs when they're ready.
+function L.BuildListsLater(OnDone) L.Background(function() L.AllRows() end, OnDone, "lists") end
+function L.BuildingLists()
+	for _, J in ipairs(Jobs) do if J.key == "lists" then return true end end
+	return false
+end
+function L.BackgroundBusy() return Jobs[1] ~= nil end
 function L.FarmData()
 	local V = L.FarmView
 	if V == "craft" then return L.CraftRows() elseif V == "gather" then return L.GatherRows() elseif V == "drop" then return L.DropRows() end
@@ -788,6 +808,7 @@ function L.FlipTargets()
 			local O = Core.FlipOptions(I, Cap, MinProfit)
 			if #O > 0 then Cands[#Cands + 1] = { id = id, options = O } end
 		end
+		if Farm.Yield then Farm.Yield() end -- (a background job: see L.Background)
 	end
 	-- Listings under the vendor price (any item, gear too): a sure profit, so they may use the whole budget.
 	local CandOf = {}
@@ -802,6 +823,7 @@ function L.FlipTargets()
 	for id in pairs(D.items) do VIds[id] = true end
 	for id in pairs(type(D.sfx) == "table" and D.sfx or {}) do VIds[id] = true end
 	for id in pairs(VIds) do
+		if Farm.Yield then Farm.Yield() end
 		local Raw = D.items[id]
 		local Low = LowAt and type(Raw) == "table" and Raw[LowAt] or nil
 		local F = Fresh and Fresh[id]

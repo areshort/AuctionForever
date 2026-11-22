@@ -2173,9 +2173,21 @@ X("""BriefMsgs = {}
 def msgs(): return [str(v) for v in L('BriefMsgs').values()]
 
 
+# The login brief is worked out in the background: frames are run until it's done (PumpBG).
+X('''function PumpBG(Max)
+  local N, Longest = 0, 0
+  if not AF_NS.UI.BackgroundBusy then return N, Longest end -- (older code: no background jobs)
+  while AF_NS.UI.BackgroundBusy() and N < (Max or 100000) do
+    N = N + 1
+    local S = os.clock()
+    for _, f in ipairs(AllFramesForTest) do local U = f._scripts and f._scripts.OnUpdate if U then U(f, 1 / 60) end end
+    Longest = math.max(Longest, os.clock() - S)
+  end
+  return N, Longest
+end''')
 X('FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(4)')
 before = msgs()
-X('AdvanceTime(2)')
+X('AdvanceTime(2); PumpBG()')
 m1 = msgs()
 X('AdvanceTime(30)')
 p1 = [plain(x) for x in m1]
@@ -2221,7 +2233,7 @@ ok(L('AuctionForeverDB.briefSeen[9000001] == nil and AuctionForeverDB.briefSeen[
 # /af brief off / on
 X('BriefMsgs = {}; SlashCmdList.AUCTIONFOREVER("brief off"); BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(30)')
 ok(L('AuctionForeverDB.briefOff') == True and msgs() == [], '/af brief off: no login brief')
-X('SlashCmdList.AUCTIONFOREVER("brief on"); BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(30)')
+X('SlashCmdList.AUCTIONFOREVER("brief on"); BriefMsgs = {}; FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(30); PumpBG()')
 ok(L('AuctionForeverDB.briefOff') is None and len(msgs()) >= 2, '/af brief on: back on')
 # The real craft list: a character with one profession (the one the most rows need) and Show all on; the brief asks
 # for the recipes it knows only.
@@ -2500,6 +2512,29 @@ if real:
         X('RawN = 0; TooltipPostCalls[1](GameTooltip, { id = 2589 })')
         ok(L('RawN') <= 2 and L('AF_NS.UI.ItemTier(2589)') is not None, f"lists ready: the tooltip's Tier is there, one valuation ({L('RawN')})")
     X('AF_NS.Farm.Raw = RealRaw')
+# ---- Login brief on the real data: worked out in the background, the same lines, no long frame --------------------
+if real:
+    X("""BriefMsgs = {}
+      DEFAULT_CHAT_FRAME = { AddMessage = function(self, m) BriefMsgs[#BriefMsgs + 1] = m end }
+      BrSaved = { seen = AuctionForeverDB.briefSeen, si = C_SkillInfo }
+      C_SkillInfo = { GetSkillLineInfoByID = function(id) if id == 186 or id == 182 then return { rank = 300 } end end }
+      local Seen = {} local n = 0
+      for id in pairs(AuctionForeverData.items) do n = n + 1 if n % 3 ~= 0 then Seen[id] = true end end
+      BrSeen = Seen
+      local function Copy(T) local C = {} for k, v in pairs(T) do C[k] = v end return C end
+      AuctionForeverDB.briefSeen = Copy(BrSeen); AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+      SyncLines = AF_NS.Brief.Lines()
+      AuctionForeverDB.briefSeen = Copy(BrSeen); AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+      PumpBG()
+      BrT0 = os.clock(); FireEvent("PLAYER_ENTERING_WORLD", true, false); AdvanceTime(AF_NS.Brief.DELAY + 0.5); BrTimer = os.clock() - BrT0
+      BrFrames, BrLongest = PumpBG()""")
+    sync = [str(v) for v in L('SyncLines').values()]
+    got = [x for x in msgs()]
+    want = ['|cffff80ff[AF] ' + s.replace('|r', '|r|cffff80ff') + '|r' for s in sync]
+    ok(len(sync) >= 3 and got == want, f'login brief in the background: the same lines as working it out at once ({len(sync)} lines): {[plain(x) for x in got]} / {[plain(x) for x in want]}')
+    tm, fr, lg = L('BrTimer'), L('BrFrames'), L('BrLongest')
+    ok(tm < 0.1 and fr > 5 and lg < 0.1, f'login brief: no long frame (timer {1000 * tm:.0f} ms, then {fr} frames, longest {1000 * lg:.0f} ms)')
+    X('AuctionForeverDB.briefSeen, C_SkillInfo = BrSaved.seen, BrSaved.si; DEFAULT_CHAT_FRAME = nil')
 # ---- Local scan history: 24 h, pruned for every item at login and logout ------------------------------------------
 X("""PrNow = time()
   local function W(h, sold) return { PrNow - h * 3600, 0.5, sold, sold * 100, 2, 100, 50, 3 } end
