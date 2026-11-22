@@ -182,7 +182,10 @@ Farm.Rank = Split
 function Farm.RawFarms(Ids, Env)
 	local E = Default(Env)
 	local Rows = {}
-	for _, id in ipairs(Ids) do Rows[#Rows + 1] = Farm.Raw(id, E) end
+	for _, id in ipairs(Ids) do
+		Rows[#Rows + 1] = Farm.Raw(id, E)
+		if Farm.Yield then Farm.Yield() end -- (set only while the UI builds the lists in the background)
+	end
 	return Split(Rows, "expected")
 end
 
@@ -517,6 +520,7 @@ function Farm.Crafts(Env, Filter)
 		for _, Recipe in ipairs(List) do
 			local R = Farm.Craft(Product, Recipe, E)
 			if not Filter or Filter(R) then All[#All + 1] = R end
+			if Farm.Yield then Farm.Yield() end
 		end
 	end
 	local Buy, Added = {}, {}

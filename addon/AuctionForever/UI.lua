@@ -389,12 +389,9 @@ function L.MyProfessions()
 	end
 	return Any and Out or nil
 end
--- Craft view: recipes that pay one way or the other (buy mats profit, or value added over selling your mats).
-function L.CraftRows()
-	local D = AuctionForeverData
-	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
+-- The Craft view's cache key: the data, and the professions it's filtered to. Returns key, Mine, Filtered.
+local function CraftKey()
 	local Mine = L.MyProfessions()
-	L.ProfessionsKnown = Mine ~= nil
 	local Filtered = (not L.CraftAll) and Mine ~= nil
 	local PKey = "all"
 	if Filtered then
@@ -403,7 +400,14 @@ function L.CraftRows()
 		table.sort(T)
 		PKey = table.concat(T, ",")
 	end
-	local Key = DataKey() .. ":" .. PKey
+	return DataKey() .. ":" .. PKey, Mine, Filtered
+end
+-- Craft view: recipes that pay one way or the other (buy mats profit, or value added over selling your mats).
+function L.CraftRows()
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" or not AF_Recipes then return {} end
+	local Key, Mine, Filtered = CraftKey()
+	L.ProfessionsKnown = Mine ~= nil
 	if not (CraftCache and CraftCache.key == Key) then
 		local _, _, All = Farm.Crafts(FarmEnv(), Filtered and function(R) return Mine[R.skill] ~= nil end or nil)
 		local Rows = {}
@@ -668,6 +672,45 @@ function L.AllRows()
 	end
 	return AllCache.rows
 end
+-- Are the Farm lists (L.AllRows) worked out for the current data, without working anything out?
+function L.ListsReady()
+	local D = AuctionForeverData
+	if type(D) ~= "table" or type(D.items) ~= "table" then return true end
+	if not (RawCache and RawCache.key == DataKey() and AllCache and AllCache.raw == RawCache.rows) then return false end
+	if not (GatherCache and GatherCache.src == RawCache.rows and DropCache and DropCache.src == RawCache.rows) then return false end
+	if AF_Recipes and not (CraftCache and CraftCache.key == CraftKey() and AllCache.c == CraftCache.rows) then return false end
+	return true
+end
+-- Working out the Farm lists (every item in the data, every recipe) takes about a second. Done on the spot, that
+-- froze the game 5 s after every /reload (the name preload) and on the first tooltip after each scan (its Tier
+-- line). Here it runs in the background, a few ms a frame: the same code (Farm.Yield pauses its loops), the same rows.
+L.BG_BUDGET = 0.004
+local BG, BGDeadline, BGDone
+local BGFrame = CreateFrame("Frame")
+local function BGYield()
+	if coroutine.running() == BG and GetTimePreciseSec() > BGDeadline then coroutine.yield() end
+end
+local function BGStep(self)
+	BGDeadline = GetTimePreciseSec() + L.BG_BUDGET
+	Farm.Yield = BGYield
+	local Ok, Err = coroutine.resume(BG)
+	Farm.Yield = nil
+	if Ok and coroutine.status(BG) ~= "dead" then return end
+	self:SetScript("OnUpdate", nil)
+	BG = nil
+	local Done = BGDone or {}
+	BGDone = nil
+	if not Ok then print("|cffffd100AuctionForever:|r list error: " .. tostring(Err)) return end
+	for _, Fn in ipairs(Done) do Fn() end
+end
+-- Start (or join) the background build; OnDone (optional) runs when the lists are ready.
+function L.BuildListsLater(OnDone)
+	if OnDone then BGDone = BGDone or {}; BGDone[#BGDone + 1] = OnDone end
+	if BG then return end
+	BG = coroutine.create(function() L.AllRows() end)
+	BGFrame:SetScript("OnUpdate", BGStep)
+end
+function L.BuildingLists() return BG ~= nil end
 function L.FarmData()
 	local V = L.FarmView
 	if V == "craft" then return L.CraftRows() elseif V == "gather" then return L.GatherRows() elseif V == "drop" then return L.DropRows() end
@@ -1875,6 +1918,8 @@ end
 -- warming up, no sales measured).
 local TierScores
 function L.ItemTier(Key)
+	-- (not worked out on the spot: the lists are built in the background, no tier until they're ready)
+	if not L.ListsReady() then L.BuildListsLater() return nil end
 	local R = Farm.Raw(Key, FarmEnv())
 	local X = R.expected
 	if R.excluded then
@@ -2063,12 +2108,17 @@ Events:SetScript("OnEvent", function(_, Event, Msg)
 		local S = Session.Current()
 		if S then S.runningSince = nil end -- a clock never runs across logins
 		L.CreateMinimapButton()
+		-- Names: your bag items 5 s in; the Farm list's top rows once the lists are built in the background (working
+		-- them out here, with the flip plan and the quick scan list, was a second-long freeze after every /reload).
 		C_Timer.After(5, function()
 			local Ids = {}
-			for i, R in ipairs(L.FarmRows()) do if i > 60 then break end Ids[#Ids + 1] = R.id end
-			for _, R in ipairs(L.FlipRows()) do Ids[#Ids + 1] = R.id end
-			for _, id in ipairs(L.QuickList()) do Ids[#Ids + 1] = id end -- includes your bag items (the AF Sell queue)
+			for id in pairs(L.BagCounts()) do Ids[#Ids + 1] = id end
 			L.Preload(Ids)
+			L.BuildListsLater(function()
+				local Top = {}
+				for i, R in ipairs(L.FarmRows()) do if i > 60 then break end Top[#Top + 1] = R.id end
+				L.Preload(Top)
+			end)
 		end)
 		if TooltipDataProcessor and Enum and Enum.TooltipDataType then
 			TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)

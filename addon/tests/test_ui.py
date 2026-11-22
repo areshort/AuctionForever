@@ -2473,7 +2473,34 @@ ok(rc is not None and rc[1] == 19566 and rc[2] == 165 and rc[3] == 250 and list(
 ok(L('AF_Recipes[17202] and AF_Recipes[17202][1][6]') == 17716, 'SnowMaster 9000 (Engineering tool): Snowball from Ice Cold Milk')
 ok(L('AF_NS.Farm.Source(3577)') == 'Crafted' and L('AF_Recipes[3577] ~= nil'), 'Gold Bar is Crafted (Smelt Gold was dropped: the test-spell filter matched "old" in "Gold")')
 ok(L('AF_NS.Farm.Source(4289)') == 'Vendor' and L('AF_NS.Farm.Source(2320)') == 'Vendor', 'vendor-sold goods (Salt, thread) are "Vendor", not Gather or Drop')
-undef = sorted(set(str(v) for v in L('UndefinedReads').values()))
+# ---- Load and tooltip cost: the Farm lists (every item, every recipe) are never worked out on the spot -------------
+if real:
+    X("""RawN = 0; RealRaw = AF_NS.Farm.Raw
+      AF_NS.Farm.Raw = function(...) RawN = RawN + 1 return RealRaw(...) end
+      AF_NS.Scan.Version = AF_NS.Scan.Version + 1 -- (new auction data: every list is stale)
+      FireEvent("PLAYER_LOGIN"); AdvanceTime(6)""")
+    n_login = L('RawN')
+    ok(n_login < 100, f'/reload: the 5 s name preload works out no lists ({n_login} item valuations, was the whole data file)')
+    X('RawN = 0; TooltipPostCalls[1](GameTooltip, { id = 2589 })')
+    n_tip = L('RawN')
+    ok(n_tip < 100 and L('AF_NS.UI.BuildingLists and AF_NS.UI.BuildingLists()'), f'first tooltip after new data: no list built on the spot ({n_tip} valuations), built in the background')
+    if L('AF_NS.UI.BuildingLists ~= nil'):
+        # The background build: a few ms a frame (the budget), the same rows as working it out at once.
+        X("""BGSteps, RawN = 0, 0
+          AF_NS.UI.BG_BUDGET = 0.0005
+          local function Frames() for _, f in ipairs(AllFramesForTest) do local U = f._scripts and f._scripts.OnUpdate if U then U(f, 1 / 60) end end end
+          while AF_NS.UI.BuildingLists() and BGSteps < 100000 do BGSteps = BGSteps + 1; Frames() end
+          AF_NS.UI.BG_BUDGET = 0.004
+          BGRows = {} for i, R in ipairs(AF_NS.UI.AllRows()) do BGRows[i] = tostring(R.id) .. R.tier end""")
+        ok(L('BGSteps') > 5 and L('AF_NS.UI.ListsReady()'), f"lists built over {L('BGSteps')} frames, then ready")
+        X("""AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+          FGRows = {} for i, R in ipairs(AF_NS.UI.AllRows()) do FGRows[i] = tostring(R.id) .. R.tier end
+          Same = #BGRows == #FGRows; for i = 1, #FGRows do if BGRows[i] ~= FGRows[i] then Same = false end end""")
+        ok(L('Same') and L('#FGRows') > 100, f"background build = the same rows and tiers as building at once ({L('#BGRows')} rows)")
+        X('RawN = 0; TooltipPostCalls[1](GameTooltip, { id = 2589 })')
+        ok(L('RawN') <= 2 and L('AF_NS.UI.ItemTier(2589)') is not None, f"lists ready: the tooltip's Tier is there, one valuation ({L('RawN')})")
+    X('AF_NS.Farm.Raw = RealRaw')
+undef =sorted(set(str(v) for v in L('UndefinedReads').values()))
 ok(not undef, 'no reads of undefined globals from add-on code: ' + (', '.join(undef) or 'none'))
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

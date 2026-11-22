@@ -1,6 +1,7 @@
 -- Minimal fake WoW API for offline tests: frames accept any method call; scripts and events are recorded.
 local Clock = 1000
 function GetTime() return Clock end
+GetTimePreciseSec = os.clock -- (real time: background work budgets; tests that need it fixed set their own)
 time = os.time; date = os.date
 local AllFrames = {}
 AllFramesForTest = AllFrames
