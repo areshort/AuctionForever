@@ -132,6 +132,16 @@ rows3[5][1] = 5  # one stray cheap listing
 nl3 = C.item_numbers('96', {'hourly': {'96': rows3}, 'soldprices': {}, 'daily': {}}, {}, 1_000_000 + 11 * 3600)
 ok(nl3['lowRange24'] == [100, 100, 100] and nl2['lowRange24'] is None,
    f"one stray cheap listing doesn't widen the range ({nl3['lowRange24']}); under 12 hours: none ({nl2['lowRange24']})")
+# ---- Spike guard: median of the hourly lowest price, one vote per hour. 51 h at 10, then 21 h at 60 (a burst):
+# the hourly median stays 10, however many units sold at 60. Two snapshots in one hour count once (the later one).
+sp_rows = [[2_000_000 + i * 3600, 10 if i < 51 else 60, 5, 0, 0, 0, 1.0, 0] for i in range(72)]
+sp_rows.append([2_000_000 + 71 * 3600 + 600, 60, 5, 0, 0, 0, 1.0, 0])
+ns = C.item_numbers('95', {'hourly': {'95': sp_rows}, 'soldprices': {'95': [[2_000_000 + 70 * 3600, 60, 500]]}, 'daily': {}},
+                    {}, 2_000_000 + 71 * 3600 + 600)
+ok(ns['lowMed'] == 10 and ns['medAll'] == 60, f"hourly-low median ignores a 21 h burst ({ns['lowMed']}); sold median doesn't ({ns['medAll']})")
+ok(C.item_numbers('95', {'hourly': {'95': sp_rows[:11]}, 'soldprices': {}, 'daily': {}}, {}, 2_000_000 + 10 * 3600)['lowMed'] is None,
+   'under 12 hours of lows: no hourly-low median')
+ok('lowMed' in C.FIELDS, 'lowMed is written to the data file')
 # ---- Sales rate over 4-hour blocks: a real rate for items sold one at a time; a single buyout stays out.
 gearrows = [[1_000_000 + i * 3600, 500, 3, [1, 0, 1, 3, 0, 2][i % 6], 0, 0, 1.0, 0] for i in range(24)]  # 1.17/h
 br = C.block_rate(gearrows)

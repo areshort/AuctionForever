@@ -394,5 +394,23 @@ P = L("AF_NS.Farm.CraftPlan(AF_NS.Farm.Craft(600, CRec, CEnvFl), { share = 0.75,
 ok(P and P.route == 'Vendor' and P.resell == 400, f"flooded but the vendor pays: a vendor-route plan ({P and P.route}, {P and P.crafts} crafts)")
 X("Items[600].status = nil")
 
+# --- Spike guard: lowMed (the median hourly lowest price over the window) caps the sale price, and an item whose last
+# day is 3x it is flagged. Like EZ-Thro Wrap: 10s most hours, sold at 38s after an evening's jump.
+X('MakeItem(650, { med = 3800, med24 = 3900, medAll = 3800, low = 2600, lowMed = 1000, sellThrough = 1, dep = 0 })')
+ok(near(L(f'{F}.SalePrice(Items[650])'), 1000 * 0.97), f"sale price capped at the hourly-low median: {L(f'{F}.SalePrice(Items[650])')} (want 970)")
+ok(L(f'{F}.Spike(Items[650])') is True, 'last day at 3.9x the hourly-low median: a spike')
+R = L(f'{F}.Raw(650, Env({{ postPrice = function() return 2599, 24 end }}))')
+notes = [R.notes[i] for i in range(1, len(R.notes) + 1)]
+ok(R.price == 1000 and R.capped and any('tripled in 24 h' in n for n in notes) and R.spike,
+   f"Farm row: valued at 10s, not AF Sell's 26s, and says the price tripled ({R.price}, {notes})")
+X('CRowSp = AF_NS.Farm.Craft(650, { 7650, 202, 1, 1, { 601, 1 }, 0, 60, 80 }, Env())')
+notes = [L(f'CRowSp.notes[{i}]') for i in range(1, int(L('#CRowSp.notes')) + 1)]
+ok(L('CRowSp.price') <= 1000 and any('product price tripled' in n for n in notes), f"Craft row: product capped and flagged ({L('CRowSp.price')}, {notes})")
+# Old data files have no lowMed: no cap, no flag. Steady items (hourly low near the sold median) are unchanged.
+X('MakeItem(651, { med = 3800, med24 = 3900, medAll = 3800, low = 2600, sellThrough = 1 })')
+ok(near(L(f'{F}.SalePrice(Items[651])'), 3800 * 0.97) and L(f'{F}.Spike(Items[651])') is False, 'no lowMed (old data): no cap, no flag')
+X('MakeItem(652, { med = 888, med24 = 888, medAll = 889, low = 799, lowMed = 892, sellThrough = 1 })')
+ok(near(L(f'{F}.SalePrice(Items[652])'), 888 * 0.97) and L(f'{F}.Spike(Items[652])') is False, 'Iron Strut-like (lowMed 892 >= sold 888): unchanged, no flag')
+
 print(f'\n{fails} failed' if fails else '\nall passed')
 sys.exit(1 if fails else 0)

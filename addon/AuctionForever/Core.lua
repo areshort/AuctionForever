@@ -643,11 +643,14 @@ function Core.VolatileBuyMax(I)
 	return math.floor(R[1] + Core.VolatileBuyShare * (R[3] - R[1]))
 end
 -- Highest resale price the data backs: what buyers paid in the last day and over the longer window (both); for a
--- volatile item also no more than the 24 h median of the lowest price.
+-- volatile item also no more than the 24 h median of the lowest price; and never more than the spike cap (the
+-- median hourly lowest price over the whole window, lowMed: one burst of buying doesn't raise it; see Farm.SpikeCap).
 function Core.ResaleCap(I)
 	local A, B = I.med24 or I.med, I.medAll or I.med
 	local Cap = (A and B) and math.min(A, B) or A or B
 	if Cap and Core.Volatile(I) and I.lowRange24[2] then Cap = math.min(Cap, I.lowRange24[2]) end
+	local M = I.lowMed
+	if Cap and type(M) == "number" and M > 0 then Cap = math.min(Cap, M) end
 	return Cap
 end
 

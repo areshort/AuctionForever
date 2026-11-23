@@ -87,12 +87,32 @@ function Farm.Status(I)
 	return "good"
 end
 
+-- Spike guard. lowMed (from the cloud data) = the median of the hourly lowest price over the whole window, one vote
+-- per hour. Both sold-price medians weigh units, so one burst of buying at a spike moves them (EZ-Thro Wrap sat at
+-- 8-11s for two days, jumped to 60-98s for an evening, and both medians read 38s after); lowMed doesn't. A sale is
+-- valued at no more than it. Old data files have no lowMed: no cap.
+Farm.SpikeRatio = 3
+function Farm.SpikeCap(I)
+	local M = I and I.lowMed
+	if type(M) == "number" and M > 0 then return M end
+	return nil
+end
+-- The last day's prices (its sold median or the cheapest listing) are SpikeRatio times lowMed or more.
+function Farm.Spike(I)
+	local M = Farm.SpikeCap(I)
+	if not M then return false end
+	return math.max(I.med24 or 0, I.low or 0) >= Farm.SpikeRatio * M
+end
+Farm.SPIKE_NOTE = "price tripled in 24 h: valued at its usual lowest price"
+
 -- Market price planned for a sale: the lower of the last-day and the longer median sold (a falling price counts at
--- its new level), else the cheapest listing; at Haircut.
+-- its new level), else the cheapest listing; never above the spike cap; at Haircut.
 function Farm.SalePrice(I)
 	local A, B = I.med24 or I.med, I.medAll or I.med
 	local P = (A and B) and math.min(A, B) or A or B or I.low
 	if not P then return nil end
+	local M = Farm.SpikeCap(I)
+	if M and P > M then P = M end
 	return P * Farm.Haircut
 end
 -- Fallback post price and duration (the UI passes AF Sell's own suggestion).
@@ -117,6 +137,8 @@ function Farm.Expected(I, S, E, Qty)
 	local Cap = E.priceCap and E.priceCap(I)
 	local Capped
 	if type(Cap) == "number" and Cap > 0 and P > Cap then P, Capped = Cap, true end
+	local M = Farm.SpikeCap(I)
+	if M and P > M then P, Capped = M, true end
 	local Rate, Ch = Farm.SellRate(I)
 	local Dep = E.deposit and E.deposit(I, H, Qty)
 	local Known = type(Dep) == "number"
@@ -132,6 +154,7 @@ local function StatusNotes(Row, S, I, Prefix)
 	if S == "falling" then Row.notes[#Row.notes + 1] = Prefix .. "price falling" end
 	if S == "slow" then Row.notes[#Row.notes + 1] = Prefix .. "slow: sells in bursts" end
 	if S == "early" then Row.notes[#Row.notes + 1] = Prefix .. "early: few hours of sales" end
+	if Farm.Spike(I) then Row.notes[#Row.notes + 1] = Prefix .. Farm.SPIKE_NOTE; Row.spike = true end
 	if not Farm.SellRate(I) then
 		Row.notes[#Row.notes + 1] = string.format("%ssell rate not measured yet: counted as %d%%", Prefix, Farm.UnknownRate * 100)
 	end

@@ -410,5 +410,15 @@ ok(not L(f"{C}.Volatile(MakeItem({{ lowRange24 = {{ 900, 1000, 1100 }} }}))") an
    and not L(f"{C}.Volatile(MakeItem())"), 'a calm range (or none yet): no volatile rule, resale as before')
 ok(L(f"{C}.Resale(VI, 10, 6000) == nil") and L(f"{C}.Resale(VI, 10, 5000) ~= nil") and L(f"{C}.Resale(VI, 10, 5000).resell") == 700,
    'live price check: a volatile item at more than its buy limit is cancelled; at the limit it resells at the middle')
+# Spike guard: resale never above lowMed, the median hourly lowest price (a burst of buying at a spike raises both
+# sold medians, not it). Old data (no lowMed): as before. A flip planned on spike medians resells at the usual price.
+ok(L(f"{C}.ResaleCap(MakeItem({{ med24 = 3900, medAll = 3800, lowMed = 1000 }}))") == 1000
+   and L(f"{C}.ResaleCap(MakeItem({{ med24 = 3900, medAll = 3800 }}))") == 3800
+   and L(f"{C}.ResaleCap(MakeItem({{ med24 = 888, medAll = 889, lowMed = 892 }}))") == 888,
+   'resale capped at the hourly-low median (38s sold, 10s usual -> 10s); no lowMed or a steady item: unchanged')
+SpOld = L(f"{C}.Resale(MakeItem({{ med24 = 3000, medAll = 3000, hi = 3200, ladder = {{ {{500, 10}}, {{2950, 300}} }} }}), 10, 5000)")
+SpNew = L(f"{C}.Resale(MakeItem({{ med24 = 3000, medAll = 3000, hi = 3200, lowMed = 900, ladder = {{ {{500, 10}}, {{2950, 300}} }} }}), 10, 5000)")
+ok(SpOld is not None and SpOld.resell == 2949 and (SpNew is None or SpNew.resell <= 900),
+   f"flip on a spike: planned at 29.49s before, at most the usual 9s now ({SpOld and SpOld.resell} -> {SpNew and SpNew.resell})")
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

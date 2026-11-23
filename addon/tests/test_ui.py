@@ -2273,6 +2273,7 @@ X("""SfxSaved = { sfx = AuctionForeverData.sfx, info = AuctionForeverData.info[9
     for i, V in pairs(AuctionForeverData.items[2589]) do R[i] = type(V) == "table" and {} or V end
     for _, N in ipairs({ "low", "med", "hi", "med24", "medAll" }) do R[Idx[N]] = Price end
     R[Idx.qty] = Qty; R[Idx.ladder] = { { Price, Qty } }; R[Idx.lows] = { Price, Price, Price }; R[Idx.lowHi24] = Price
+    if Idx.lowMed then R[Idx.lowMed] = Price end -- (not Linen Cloth's: data files with the spike guard)
     return R
   end
   AuctionForeverData.sfx = { [990201] = { [12719] = Row(90000, 3), [12722] = Row(30000, 4) } }
@@ -2370,6 +2371,19 @@ X("""AuctionForeverData.sfx, AuctionForeverData.info[990201], AuctionForeverDB.f
 X('VE = { id = 2589, info = { lowRange24 = { 400, 700, 1000 }, sellThrough = 1, perHour = 10 }, flip = { buyQty = 10, qty = 10, buyUpTo = 500, cost = 5000, resell = 700, profit = 1450, hours = 12, chance = 1, volatile = true } }')
 pt = plain(str(L('AF_NS.Trade.PaneText(VE)')))
 ok('Volatile' in pt and '4s 00c to 10s 00c' in pt and '(7s 00c)' in pt, 'AF Buy detail says volatile: ' + pt.replace(chr(10), ' / '))
+# Spike guard: an item whose last day is 3x its usual (hourly-low median) price says so in the AF Buy detail (flip and
+# craft) and in the item tooltip; others don't.
+X('SE = { id = 2589, info = { med24 = 3900, low = 2600, lowMed = 1000, sellThrough = 1, perHour = 10 }, flip = { buyQty = 10, qty = 10, buyUpTo = 500, cost = 5000, resell = 1000, profit = 1450, hours = 12, chance = 1 } }')
+pt = plain(str(L('AF_NS.Trade.PaneText(SE)')))
+ok('Price tripled in 24 h' in pt and '10s 00c' in pt and 'tripled' not in plain(str(L('AF_NS.Trade.PaneText(VE)'))),
+   'AF Buy flip detail warns of a spike (usual 10s): ' + pt.replace(chr(10), ' / '))
+X('''SpInfo = AF_NS.Core.Info
+  AF_NS.Core.Info = function(id, ...) local I = SpInfo(id, ...) if id == 2589 and I then local C = {} for k, v in pairs(I) do C[k] = v end
+    C.lowMed = math.floor((C.med24 or C.low or 300) / 4); return C end return I end''')
+tls = [[plain(str(x)) for x in v.values()] for v in L('AF_NS.UI.TooltipLines(2589)').values()]
+ok(tls[-1][0] == 'Warning' and 'price tripled in 24 h' in tls[-1][1], f'tooltip warns of a spike: {tls[-1]}')
+X('AF_NS.Core.Info = SpInfo')
+ok(not any('tripled' in str(r) for r in [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]), 'no spike: no warning line')
 # ---- Unknown vendor price (item not loaded, and the data file doesn't name it): not known, never 0 ---------------
 X('if not rawget(_G, "GetTimePreciseSec") then GetTimePreciseSec = function() return 0 end end')
 X("""UVSaved = { gi = C_Item.GetItemInfo, info = AuctionForeverData.info[990647], item = AuctionForeverData.items[990647],

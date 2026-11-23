@@ -1983,13 +1983,17 @@ function L.TooltipLines(id, Count, InBags, Key, Bound)
 		RecText = RecText .. " (" .. Why .. ")"
 	end
 	local Ok, Tier = pcall(L.ItemTier, Key or id)
-	return {
+	local Out = {
 		{ "Tier", (Ok and Tier) and L.TierText(Tier) or "-" },
 		{ "Vendor" .. Tag, (V == nil and "not known yet") or (V > 0 and Core.MoneyColor(V * N)) or "-" },
 		{ "AH" .. Tag, Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data" },
 		{ "Rec" .. Tag, RecText },
 		{ "Source", AF.Farm.Source(id) },
 	}
+	if I and AF.Farm.Spike(I) then
+		Out[#Out + 1] = { "|cffff8040Warning|r", "|cffff8040price tripled in 24 h|r (usual " .. Core.MoneyColor(AF.Farm.SpikeCap(I)) .. ")" }
+	end
+	return Out
 end
 -- Is the hovered item soulbound? A bag slot is asked directly; otherwise the tooltip's own "Soulbound" line.
 function L.TooltipBound(Tip, TData)

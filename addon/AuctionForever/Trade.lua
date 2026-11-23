@@ -1179,6 +1179,12 @@ local function PlanOf(E)
 	local R = (Run and Run.key == K and Run) or (LastRun and LastRun.key == K and LastRun) or nil
 	return R and R.plan or E.flip, R
 end
+-- A warning line when the item's price tripled in the last day (Farm.Spike): the plan values it at its usual
+-- lowest price, not at the spike. "" otherwise.
+function T.SpikeLine(I)
+	if not (I and AF.Farm.Spike(I)) then return "" end
+	return "\n|cffff8040Price tripled in 24 h: valued at its usual lowest price (" .. Money(AF.Farm.SpikeCap(I)) .. "), not the spike.|r"
+end
 -- Panel text above the lines: what it is (craft: product x N, profession, how known), then the evidence.
 function T.PaneText(E)
 	local F = PlanOf(E)
@@ -1191,6 +1197,7 @@ function T.PaneText(E)
 			Out = Out .. "\n|cffff8040Volatile: its lowest price ranged " .. Money(R[1] or 0) .. " to " .. Money(R[3] or 0)
 				.. " over 24 h. Bought only near the bottom, resold at no more than the middle (" .. Money(R[2] or 0) .. ").|r"
 		end
+		Out = Out .. T.SpikeLine(E.info or Core.Info(E.id))
 		if Need then
 			Out = Out .. "\n" .. (F.vendor and ("Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Money(Core.MinKeep) .. " always kept).")
 				or ("A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Money(Core.MinKeep) .. "; one item may use only part of it)."))
@@ -1213,6 +1220,7 @@ function T.PaneText(E)
 	elseif F.blocked then
 		Ev = Ev .. "\n|cffffd100Product " .. F.blocked .. ": not sold on the AH by a craft plan (shown because Show all recipes is on).|r"
 	end
+	Ev = Ev .. T.SpikeLine(Core.Info(E.id))
 	if not E.known then Ev = Ev .. "\n" .. NotKnownLine(E) end
 	return Head .. "\n" .. Ev
 end

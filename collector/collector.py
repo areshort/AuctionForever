@@ -349,6 +349,18 @@ def item_numbers(k, state, mk, now_ts):
     if len(day_rows) >= 12:
         ds = sorted(r[1] for r in day_rows)
         low_range24 = [ds[int(q * (len(ds) - 1) + 0.5)] for q in (0.1, 0.5, 0.9)]
+    # Spike guard: the median of the hourly lowest price over the whole window, one vote per hour (12+ hours). Both
+    # sold-price medians weigh units, so one burst of buying at a spike moves them; this doesn't. The add-on values
+    # sales at no more than it, and warns when the last day's prices are three times it.
+    by_hour = {}
+    for r in all_rows:
+        if r[1] is not None:
+            by_hour[int(r[0] // 3600)] = r[1]
+    low_med = None
+    if len(by_hour) >= 12:
+        hl = sorted(by_hour.values())
+        n = len(hl)
+        low_med = hl[n // 2] if n % 2 else (hl[n // 2 - 1] + hl[n // 2]) / 2
     return {
         'low': m['low'] if m else None,
         'qty': qty_now,
@@ -360,6 +372,7 @@ def item_numbers(k, state, mk, now_ts):
         'qtyDayAgo': qty_24h_ago[0] if qty_24h_ago else None,
         'newHour': new_hour,
         'lows': lows, 'lowHi24': low_hi24, 'lowRange24': low_range24, 'blockHour': block_rate(all_rows),
+        'lowMed': low_med,
         'daily': state['daily'].get(k, []),
     }
 
@@ -388,7 +401,7 @@ def lua(v):
 RESTORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restore', 'history-2026-11-21.json.gz')
 SFX_CHUNK = 400  # suffix items per chunk of the data file (see write_lua)
 FIELDS = ['low', 'qty', 'med', 'hi', 'med24', 'medAll', 'perHour', 'medHour', 'hoursSeen', 'hoursWithSales', 'sales',
-          'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24', 'lowRange24', 'blockHour']
+          'sellThrough', 'qtyDayAgo', 'newHour', 'lows', 'lowHi24', 'lowRange24', 'blockHour', 'lowMed']
 
 
 def write_lua(path, state, mk, now_ts):
