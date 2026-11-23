@@ -34,6 +34,11 @@ Core.MaxBuyUnits = 100
 Core.MinVendorPurchase = 1000
 Core.FlipMaxHours = 8           -- a flip never buys more than the cautious resale speed sells in this many hours
 Core.FlipMinHours = 4           -- hours of sales data an item needs before it's a flip target (two 2 h posting cycles)
+-- Weak sellers aren't flipped (Fable review, checked on 72 h of hourly data): sell-through under FlipMinSellThrough
+-- (35% losers, 14% return, against 10% and 26%), or more listed than FlipMaxCoverHours of sales (29% losers, 15%
+-- return, against 11% and 25%). Farm values and craft plans keep the wider rules (Status: 0.6 = slow, 24 h = flooded).
+Core.FlipMinSellThrough = 0.5
+Core.FlipMaxCoverHours = 12
 -- Flips plan their profit at this share of the resale price. Flips are commodities only, and commodity buyers fill
 -- cheapest first (newest first at the same price), so matching the lowest price sells; the small haircut is for
 -- being undercut by a few copper now and then, not for a race to the bottom.
@@ -591,14 +596,17 @@ function Core.MinFlipProfitFor(Budget)
 	return Core.MinFlipProfit -- the same at any budget (MinFlipReturn guards against bad estimates)
 end
 
--- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer), and
--- isn't a falling knife: lowest price FallingKnife under the 3-day median and dropping over the last snapshots (a new,
+-- Status for flipping: like Status, but an item also needs FlipMinHours of data (a few hours can be one buyer), sells
+-- through FlipMinSellThrough ("weak seller" otherwise), has no more listed than FlipMaxCoverHours of sales ("flooded"),
+-- and isn't a falling knife: lowest price FallingKnife under the 3-day median and dropping over the last snapshots (a new,
 -- lower price level, not a bargain). "slow" sellers (sales in bursts, or many expiring) can be flipped too: their
 -- options are marked .slow (a risk label; sell-through already lowers their expected profit).
 function Core.FlipStatus(I)
 	local S = Core.Status(I)
 	if S ~= "good" and S ~= "slow" then return S end
 	if (I.hoursSeen or 0) < Core.FlipMinHours then return "warming up" end
+	if I.sellThrough and I.sellThrough < Core.FlipMinSellThrough then return "weak seller" end
+	if (I.qty or 0) > Core.FlipMaxCoverHours * (I.perHour or 0) then return "flooded" end
 	local Base, Lw = I.medAll or I.med, I.lows
 	if I.low and Base and I.low < (1 - Core.FallingKnife) * Base and type(Lw) == "table" and #Lw >= 3
 		and Lw[#Lw - 2] > Lw[#Lw - 1] and Lw[#Lw - 1] > Lw[#Lw] then

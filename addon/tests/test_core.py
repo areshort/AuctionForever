@@ -110,8 +110,8 @@ lua.execute(f'EO = {C}.FlipOptions(MakeItem(), 500000)')
 ok(L('#EO') == 1 and L('EO[1].profit') == 2870, f"profit counts the chance of selling: {L('#EO')} options, {L('EO[1] and EO[1].profit')}")
 # Never buy more than the cautious resale speed sells in 8 h: 15/h planned -> at most 120. (Without the cap, buying
 # the 9s 50c level too would be offered: 150 units, 10 h of sales.)
-# (MaxBuyUnits raised here: this is about the hours limit.)
-lua.execute(f"{C}.MaxBuyUnits = 1000; Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 250, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000); {C}.MaxBuyUnits = 100")
+# (MaxBuyUnits raised here: this is about the hours limit. 240 listed: 12 h of sales, the most a flip allows.)
+lua.execute(f"{C}.MaxBuyUnits = 1000; Big = {C}.FlipOptions(MakeItem({{ perHour = 20, medHour = 20, sellThrough = 1, qty = 240, ladder = {{ {{400, 60}}, {{450, 60}}, {{950, 30}}, {{1000, 100}} }} }}), 10000000); {C}.MaxBuyUnits = 100")
 ok(L('#Big') >= 1 and max(L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)) <= 120,
    f"flip size capped at 8 h of resale: {[L(f'Big[{i}].buyQty') for i in range(1, int(L('#Big')) + 1)]}")
 # Other sellers posting more than sells doesn't stop a flip: resale speed is measured sales x 0.75 (flooded items are
@@ -420,5 +420,16 @@ SpOld = L(f"{C}.Resale(MakeItem({{ med24 = 3000, medAll = 3000, hi = 3200, ladde
 SpNew = L(f"{C}.Resale(MakeItem({{ med24 = 3000, medAll = 3000, hi = 3200, lowMed = 900, ladder = {{ {{500, 10}}, {{2950, 300}} }} }}), 10, 5000)")
 ok(SpOld is not None and SpOld.resell == 2949 and (SpNew is None or SpNew.resell <= 900),
    f"flip on a spike: planned at 29.49s before, at most the usual 9s now ({SpOld and SpOld.resell} -> {SpNew and SpNew.resell})")
+# Weak sellers aren't flipped (D): sell-through under 0.5, or more listed than 12 h of sales (Status still allows 24 h
+# and calls 0.5-0.6 "slow"; Farm values and craft plans keep those rules).
+ok(L(f"{C}.FlipStatus(MakeItem({{ sellThrough = 0.45 }}))") == 'weak seller' and L(f"{C}.Status(MakeItem({{ sellThrough = 0.45 }}))") == 'slow'
+   and L(f"{C}.FlipStatus(MakeItem({{ sellThrough = 0.55 }}))") == 'slow',
+   'sell-through 0.45: no flip ("weak seller", still "slow" for Farm); 0.55: a slow flip as before')
+ok(L(f"{C}.FlipStatus(MakeItem({{ qty = 600, qtyDayAgo = 600 }}))") == 'flooded' and L(f"{C}.Status(MakeItem({{ qty = 600, qtyDayAgo = 600 }}))") == 'good'
+   and L(f"{C}.FlipStatus(MakeItem({{ qty = 480, qtyDayAgo = 480 }}))") == 'good',
+   '600 listed at 40 sold/h (15 h of sales): no flip; 480 (12 h): a flip; Farm status unchanged')
+ok(L(f"#{C}.FlipOptions(MakeItem({{ sellThrough = 0.45 }}), 500000)") == 0 and L(f"#{C}.FlipOptions(MakeItem(), 500000)") > 0
+   and L(f"{C}.Resale(MakeItem({{ qty = 600, qtyDayAgo = 600 }}), 10, 5000)") is None and L(f"{C}.Resale(MakeItem(), 10, 5000)") is not None,
+   'no flip options and no live resale for a weak seller or a flooded one')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)
