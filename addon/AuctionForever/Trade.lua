@@ -866,11 +866,62 @@ function T.SetSellDuration(Idx)
 	T.UpdateDeposit()
 end
 
+-- The item's place in your bags for the post calls. The queue keeps the slots it saw when it was built, but items
+-- move (sorted, split, used, mailed, sold) and an ItemLocation for a slot that no longer holds the item makes the
+-- game's AH calls throw ("Usage: ... GetItemCommodityStatus(item)"), so each slot is checked first: it still holds
+-- this item (the same version, for suffix gear) and the game says the item exists there (C_Item.DoesItemExist, what
+-- Blizzard's own sell frame checks). Stale slots: the bags are searched again and G.locs / G.count refreshed.
+-- Returns the location, or nil and why: "gone" (not in your bags any more) or "reagent" (only in the reagent bag,
+-- and the game won't give a location there).
+local function SlotHolds(G, Bag, Slot)
+	local Info = C_Container.GetContainerItemInfo(Bag, Slot)
+	if not (Info and Info.itemID == G.id) then return nil end
+	if G.key and Core.LinkKey(Info.hyperlink, G.id) ~= G.key then return nil end
+	return Info
+end
+local function Usable(IL, Bag, Slot)
+	local Ok, Loc = pcall(IL.CreateFromBagAndSlot, IL, Bag, Slot)
+	if not (Ok and Loc) then return nil end
+	local Exists = C_Item and C_Item.DoesItemExist
+	if Exists then
+		local Ok2, Yes = pcall(Exists, Loc)
+		if not (Ok2 and Yes) then return nil end
+	end
+	return Loc
+end
 local function Location(G)
-	local L1 = G.locs[1]
 	local IL = rawget(_G, "ItemLocation") -- the game's; read safely in case it isn't loaded
-	if not (IL and IL.CreateFromBagAndSlot and L1) then return nil end
-	return IL:CreateFromBagAndSlot(L1[1], L1[2])
+	if not (IL and IL.CreateFromBagAndSlot) then return nil, "gone" end
+	for _, L1 in ipairs(G.locs or {}) do
+		if SlotHolds(G, L1[1], L1[2]) then
+			local Loc = Usable(IL, L1[1], L1[2])
+			if Loc then return Loc end
+		end
+	end
+	-- Stale: look through the bags again.
+	local Locs, Count, Reagent = {}, 0, false
+	local RB = rawget(_G, "Enum") and Enum.BagIndex and Enum.BagIndex.ReagentBag or 5
+	for Bag = 0, UI().LastBag() do
+		for Slot = 1, C_Container.GetContainerNumSlots(Bag) or 0 do
+			local Info = SlotHolds(G, Bag, Slot)
+			if Info then Locs[#Locs + 1] = { Bag, Slot }; Count = Count + (Info.stackCount or 1) end
+		end
+	end
+	G.locs = Locs
+	if Count > 0 then G.count = Count end
+	for _, L1 in ipairs(Locs) do
+		local Loc = Usable(IL, L1[1], L1[2])
+		if Loc then return Loc end
+		if L1[1] == RB then Reagent = true end
+	end
+	return nil, Reagent and "reagent" or "gone"
+end
+T.SellLocation = Location
+-- The game's commodity status for a location (nil when it can't say; never throws).
+local function CommodityStatus(Loc)
+	if not (Loc and C_AuctionHouse.GetItemCommodityStatus) then return nil end
+	local Ok, Kind = pcall(C_AuctionHouse.GetItemCommodityStatus, Loc)
+	return Ok and Kind or nil
 end
 
 function T.UpdateDeposit()
@@ -880,7 +931,7 @@ function T.UpdateDeposit()
 	local D
 	local Loc = Location(G)
 	if Loc and Qty > 0 then
-		local Kind = C_AuctionHouse.GetItemCommodityStatus and C_AuctionHouse.GetItemCommodityStatus(Loc)
+		local Kind = CommodityStatus(Loc)
 		if Kind == COMMODITY and C_AuctionHouse.CalculateCommodityDeposit then D = C_AuctionHouse.CalculateCommodityDeposit(G.id, Dur, Qty)
 		elseif Kind == ITEM and C_AuctionHouse.CalculateItemDeposit then D = C_AuctionHouse.CalculateItemDeposit(Loc, Dur, Qty) end
 	end
@@ -1050,9 +1101,20 @@ function T.PostClick()
 	Qty = Qty and math.floor(Qty)
 	if not Qty or Qty < 1 then SaySell("Enter how many to post.") return end
 	if Qty > G.count then SaySell("You only have " .. G.count .. ".") return end
-	local Loc = Location(G)
-	if not Loc then SaySell("Couldn't find the item in your bags.") return end
-	local Kind = C_AuctionHouse.GetItemCommodityStatus(Loc)
+	local Loc, Why = Location(G)
+	if not Loc then
+		if Why == "reagent" then
+			SaySell("The game won't hand over this item in your reagent bag right now: move it to another bag, then click Post.")
+			return
+		end
+		local Idx = Sell.idx
+		Sell.queue = T.BuildQueue()
+		T.SelectSell(math.max(1, math.min(Idx, #Sell.queue)))
+		SaySell("Couldn't find the item in your bags.")
+		return
+	end
+	if Qty > G.count then SaySell("You only have " .. G.count .. ".") return end
+	local Kind = CommodityStatus(Loc)
 	local Needs
 	if Kind == COMMODITY then
 		Needs = C_AuctionHouse.PostCommodity(Loc, Dur, Qty, Price)

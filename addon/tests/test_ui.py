@@ -727,6 +727,40 @@ if real:
     ok(L('LastCall("PostCommodity") == nil') and 'what you paid' in str(L('AuctionForeverSellPanel.Status:GetText()')), 'below what you paid: not posted on the first click')
     X('Click(AuctionForeverSellPanel.Post)')
     ok(L('LastCall("PostCommodity") ~= nil'), 'second click posts at a loss on purpose')
+    # Items move after the queue is built. Like the game: a location for a slot that doesn't hold the item makes
+    # GetItemCommodityStatus throw, and C_Item.DoesItemExist says whether a location holds an item.
+    X('''StSaved = { gics = C_AuctionHouse.GetItemCommodityStatus, die = C_Item.DoesItemExist, bag = {}, cc = C_Container }
+      for i, v in pairs(Bag) do StSaved.bag[i] = v end
+      function StHeld(loc) local C = C_Container.GetContainerItemInfo(loc.bag, loc.slot) return C and C.itemID end
+      C_Item.DoesItemExist = function(loc) return StHeld(loc) ~= nil end
+      C_AuctionHouse.GetItemCommodityStatus = function(loc)
+        if not StHeld(loc) then error("Usage: local isCommodity = C_AuctionHouse.GetItemCommodityStatus(item)") end
+        return StHeld(loc) == 14047 and 1 or 2 end
+      AF_NS.Trade.SelectSellId(2589); Sell2589 = AF_NS.Trade.SelectedSell()
+      Bag[1], Bag[3], Bag[8] = nil, nil, { itemID = 2589, stackCount = 25, isBound = false }''')
+    X('StOk, StErr = pcall(AF_NS.Trade.UpdateDeposit)')
+    ok(L('StOk') is True, f"deposit line with the item's old slots empty: no error ({L('StErr')})")
+    X('Calls = {}; AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("2"); StOk, StErr = pcall(Click, AuctionForeverSellPanel.Post)')
+    c = L('LastCall("PostCommodity")')
+    ok(L('StOk') is True and c is not None and L('LastCall("PostCommodity")[2].slot') == 8 and c[4] == 2,
+       f"item moved to another slot: found there and posted from slot 8 ({L('StErr')}, {c and L('LastCall(\"PostCommodity\")[2].slot')})")
+    ok(L('Sell2589.locs[1][2]') == 8, 'the queue keeps the new slot')
+    X('Bag[8] = nil; Calls = {}; AF_NS.Trade.SelectSellId(2589); AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("2"); StOk, StErr = pcall(Click, AuctionForeverSellPanel.Post)')
+    ok(L('StOk') is True and L('LastCall("PostCommodity") == nil and LastCall("PostItem") == nil')
+       and "Couldn't find the item in your bags." in str(L('AuctionForeverSellPanel.Status:GetText()'))
+       and not any(L(f'AF_NS.Trade.SellQueue()[{i}].id') == 2589 for i in range(1, int(L('#AF_NS.Trade.SellQueue()')) + 1)),
+       f"item gone: nothing posted, says so, the queue is rebuilt without it ({L('StErr')}, {L('AuctionForeverSellPanel.Status:GetText()')})")
+    # Only in the reagent bag, and the game gives no location there: says so plainly.
+    X('''Bag[9] = { itemID = 2589, stackCount = 6, isBound = false }
+      C_Container = { GetContainerNumSlots = function(b) return (b == 0 or b == 5) and 12 or 0 end,
+        GetContainerItemInfo = function(b, s) if b == 5 and s == 11 then return { itemID = 2589, stackCount = 6, isBound = false } end return b == 0 and Bag[s] or nil end }
+      Click(AuctionForeverBuyTab); Click(AuctionForeverSellTab); AF_NS.Trade.SelectSellId(2589); Bag[9] = nil
+      C_Item.DoesItemExist = function(loc) return false end
+      Calls = {}; AF_NS.Trade.SetSellPrice(47); AuctionForeverSellPanel.Qty:SetText("2"); StOk, StErr = pcall(Click, AuctionForeverSellPanel.Post)''')
+    ok(L('StOk') is True and L('LastCall("PostCommodity") == nil') and 'reagent bag' in str(L('AuctionForeverSellPanel.Status:GetText()')),
+       f"only in the reagent bag and the game won't take it: not posted, says why ({L('StErr')}, {L('AuctionForeverSellPanel.Status:GetText()')})")
+    X('''C_Container = StSaved.cc; C_AuctionHouse.GetItemCommodityStatus = StSaved.gics; C_Item.DoesItemExist = StSaved.die
+      for i = 1, 12 do Bag[i] = StSaved.bag[i] end''')
     # Expired twice since you bought it: stop reposting at your cost; suggest the market price and say so.
     X("""AuctionForeverDB.mysales = AuctionForeverDB.mysales or {}
       NSales = #AuctionForeverDB.mysales
