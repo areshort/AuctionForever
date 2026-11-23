@@ -105,6 +105,18 @@ function Farm.Spike(I)
 end
 Farm.SPIKE_NOTE = "price tripled in 24 h: valued at its usual lowest price"
 
+-- Worst case for a sale: the product's 10th-percentile lowest price over the last 24 h (lowRange24[1], from the cloud
+-- data), never above the price it's valued at (P). nil when not known (under 12 hours watched, or old data). A craft's
+-- margin at it separates steady crafts from lucky snapshots (Flash Bomb: +11s at the median, -1.7s in the worst
+-- tenth of hours; Iron Strut: +2.8s and +2.1s).
+function Farm.WorstPrice(I, P)
+	local R = I and I.lowRange24
+	local W = type(R) == "table" and R[1]
+	if type(W) ~= "number" or W <= 0 then return nil end
+	if P and P < W then W = P end
+	return W
+end
+
 -- Market price planned for a sale: the lower of the last-day and the longer median sold (a falling price counts at
 -- its new level), else the cheapest listing; never above the spike cap; at Haircut.
 function Farm.SalePrice(I)
@@ -341,7 +353,12 @@ function Farm.Craft(Product, Recipe, Env)
 		Row.route = Sale and "AH" or "Vendor"
 	else
 		Row.cost = Cost
-		if Sale then Row.ahProfit, Row.ahExpected = Net - Cost, Sale - Cost end
+		if Sale then
+			Row.ahProfit, Row.ahExpected = Net - Cost, Sale - Cost
+			-- products sold at the worst-tenth price after the cut, minus the mats
+			local W = Farm.WorstPrice(I, Row.price)
+			if W then Row.worstProfit = math.floor(W * (1 - Farm.Cut) * Row.makes - Cost + 1e-6) end
+		end
 		if VS and MatCrafts >= 1 then Row.vendorProfit = VS * Row.makes - Cost end
 		if Row.vendorProfit and (not Row.ahExpected or Row.vendorProfit > Row.ahExpected) then
 			Row.route, Row.profit, Row.expected = "Vendor", Row.vendorProfit, Row.vendorProfit
@@ -355,6 +372,10 @@ function Farm.Craft(Product, Recipe, Env)
 	if Row.route == "Vendor" then Row.vendorRoute = true end
 	if Sale and not DepKnown then Row.notes[#Row.notes + 1] = "deposit not known (counted as 0)" end
 	if Sale then StatusNotes(Row, S, I, "product ") end
+	if Row.route == "AH" and Row.worstProfit and Row.worstProfit < 0 then
+		Row.worstLoss = true
+		Row.notes[#Row.notes + 1] = "loses in the cheapest tenth of hours (product at its 24 h 10th-percentile low)"
+	end
 	return Row
 end
 
@@ -526,7 +547,11 @@ function Farm.CraftPlan(Row, Opts, Env)
 	end
 	for _, M in ipairs(Mats) do M.target = Target[M.id] end
 	for _, X in ipairs(List) do if X.source == "AH" then X.target = Target[X.id] end end
+	-- Worst case per craft (AH): the products at the 24 h 10th-percentile low after the cut, minus these mats.
+	local WP = not Vendor and Farm.WorstPrice(I, Price) or nil
+	local Worst = WP and math.floor(WP * (1 - Farm.Cut) * Row.makes - PerCraft + 1e-6) or nil
 	return { craft = true, craftSale = math.floor(Each + 1e-6), craftCost = math.floor(PerCraft + 0.5), craftProfit = math.floor(Each - PerCraft + 1e-6),
+		craftWorst = Worst, craftWorstPrice = WP,
 		overTarget = Forced, crafts = N, makes = Row.makes, units = N * Row.makes, cost = Total, profit = Profit,
 		route = Vendor and "Vendor" or "AH", resell = Vendor and Row.vendorSell or Price, hours = Row.hours, chance = Vendor and 1 or Row.chance,
 		saleEach = Each, mats = Mats, vendorGoods = Goods, vendorCost = VCost, list = List, buyQty = N, buyUpTo = 0, capped = Capped,

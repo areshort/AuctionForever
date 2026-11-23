@@ -412,5 +412,21 @@ ok(near(L(f'{F}.SalePrice(Items[651])'), 3800 * 0.97) and L(f'{F}.Spike(Items[65
 X('MakeItem(652, { med = 888, med24 = 888, medAll = 889, low = 799, lowMed = 892, sellThrough = 1 })')
 ok(near(L(f'{F}.SalePrice(Items[652])'), 888 * 0.97) and L(f'{F}.Spike(Items[652])') is False, 'Iron Strut-like (lowMed 892 >= sold 888): unchanged, no flag')
 
+# --- Worst case (I): the craft's margin with the product at its 24 h 10th-percentile low (lowRange24[1]). Product 660
+# posts at 970; mats 2 x 601 at 100c (the ladder) = 200c. Worst: 600 x 0.95 - 200 = 370; at 150: 142.5 - 200 < 0.
+X('''MakeItem(660, { med = 1000, med24 = 1000, medAll = 1000, sellThrough = 1, perHour = 2, lowRange24 = { 600, 900, 1000 } })
+  MakeItem(601, { ladder = { {100, 10}, {200, 10}, {500, 100} }, qty = 120 })
+  WRec = { 7660, 202, 1, 1, { 601, 2 }, 0, 60, 80 }
+  WRow = AF_NS.Farm.Craft(660, WRec, Env())''')
+ok(L('WRow.worstProfit') == 370 and not L('WRow.worstLoss'),
+   f"worst-tenth margin: 600 x 0.95 - 200 = 370 ({L('WRow.worstProfit')}), beside the profit {L('WRow.profit')}")
+WP = L("AF_NS.Farm.CraftPlan(WRow, { share = 0.75, hours = 8 }, Env())")
+ok(WP and WP.craftWorstPrice == 600 and WP.craftWorst == int(600 * 0.95 - WP.craftCost), f"AF Buy plan: worst per craft at 6s ({WP and WP.craftWorst}, mats {WP and WP.craftCost})")
+X('Items[660].lowRange24 = { 150, 900, 1000 }; WRow2 = AF_NS.Farm.Craft(660, WRec, Env())')
+notes = [L(f'WRow2.notes[{i}]') for i in range(1, int(L('#WRow2.notes')) + 1)]
+ok(L('WRow2.worstProfit') < 0 and L('WRow2.worstLoss') and any('cheapest tenth' in n for n in notes), f"loses at the worst-tenth price: flagged ({L('WRow2.worstProfit')}, {notes})")
+X('Items[660].lowRange24 = nil; WRow3 = AF_NS.Farm.Craft(660, WRec, Env())')
+ok(L('WRow3.worstProfit') is None and not L('WRow3.worstLoss'), 'no 24 h range (old data, or under 12 hours): no worst case')
+
 print(f'\n{fails} failed' if fails else '\nall passed')
 sys.exit(1 if fails else 0)

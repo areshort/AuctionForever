@@ -1288,6 +1288,9 @@ function T.PaneSummary(E)
 	if F.craft then
 		Out = Out .. "\n" .. string.format("Per craft: mats %s, sells %s (%s), profit %s", Money(F.craftCost or 0), Money(F.craftSale or 0),
 			F.route == "Vendor" and "Vendor" or "Auction", Core.MoneyDelta(F.craftProfit or 0))
+		if F.route ~= "Vendor" and F.craftWorst then
+			Out = Out .. string.format(", worst 10%% of hours %s%s", Core.MoneyDelta(F.craftWorst), F.craftWorst < 0 and " |cffff8040(loses when the price dips)|r" or "")
+		end
 	end
 	return Out
 end

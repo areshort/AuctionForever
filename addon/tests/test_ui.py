@@ -870,6 +870,11 @@ if real:
        and sm[1].startswith(f'Mats {money(L("CF.cost"))}   Profit +') and f'({tierw}, ' in sm[1] and sm[1].endswith('% return)   Leaves you ' + money(L('GetMoney() - CF.cost')))
        and sm[2] == f'Per craft: mats {money(L("CF.craftCost"))}, sells {money(L("CF.craftSale"))} (Auction), profit +{money(L("CF.craftProfit"))}',
        f'summary says what to do, the money, what it leaves you, and per craft: {sm}')
+    # Worst case beside it (the product at its 24 h 10th-percentile low): red note when it loses.
+    X('CF.craftWorst = -170; CEsum = AF_NS.Trade.PaneSummary(CE); CF.craftWorst = 95; CEsum2 = AF_NS.Trade.PaneSummary(CE); CF.craftWorst = nil')
+    s1, s2 = plain(str(L('CEsum'))).split('\n')[2], plain(str(L('CEsum2'))).split('\n')[2]
+    ok(s1.endswith(', worst 10% of hours -1s 70c (loses when the price dips)') and s2.endswith(', worst 10% of hours +95c'),
+       f'AF Buy per craft: the worst-tenth margin beside the profit ({s1} / {s2})')
     # Per craft and each mat's target: one craft sells 13s 29c (after the cut and sell rate), needs a 10% return, so
     # its mats may cost 1208c; mats at their planned average: 2 x 430c + 300c + 10c (vendor) = 11s 70c.
     ok(L('CF.craftSale') == 1329 and L('CF.craftCost') == 1170 and L('CF.craftProfit') == 159 and L('CF.mats[1].target') == 449 and L('CF.mats[2].target') == 338
@@ -2389,6 +2394,12 @@ ftl = farmtip('{ id = 2589, spike = true, expected = 100, salesDay = 5, source =
 ok(any('Price tripled in 24 h' in x for x in ftl), f'Farm row tooltip warns of a spike: {ftl[-1:]}')
 X('AF_NS.Core.Info = SpInfo')
 ok(not any('tripled' in x for x in farmtip('{ id = 2589, expected = 100, salesDay = 5, source = "Drop" }')), 'Farm row tooltip: no spike, no warning')
+# Farm Craft tooltip: the worst-tenth margin beside Profit/craft, and a warning when it loses.
+ftw = farmtip('{ id = 2589, spell = 1, skill = 197, expected = 100, profit = 280, route = "AH", worstProfit = -170, worstLoss = true, salesDay = 5, reagents = {} }')
+ok(any(x.startswith('Profit/craft: +2s 80c (AH)   worst 10%: -1s 70c') for x in ftw) and any('Loses in the cheapest tenth of hours' in x for x in ftw),
+   f'Farm craft tooltip: worst 10% beside the profit, flagged when it loses: {ftw[-2:]}')
+ftw2 = farmtip('{ id = 2589, spell = 1, skill = 197, expected = 100, profit = 280, route = "AH", worstProfit = 210, salesDay = 5, reagents = {} }')
+ok(any(x.endswith('worst 10%: +2s 10c') for x in ftw2) and not any('Loses' in x for x in ftw2), 'a steady craft: worst 10% shown, no warning')
 ok(not any('tripled' in str(r) for r in [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]), 'no spike: no warning line')
 # ---- Unknown vendor price (item not loaded, and the data file doesn't name it): not known, never 0 ---------------
 X('if not rawget(_G, "GetTimePreciseSec") then GetTimePreciseSec = function() return 0 end end')

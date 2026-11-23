@@ -774,7 +774,11 @@ function L.FarmTooltip(E, Tip)
 			(Src == "Owned" or Src == "Bank") and "-" or Money(Rg.each)) }
 	end
 	for _, X in ipairs(L.BySource(Lines)) do Tip:AddLine(X.text, 0.8, 0.8, 0.8) end
-	if E.buyExcluded then Line("Profit/craft", "-") else Line("Profit/craft", Core.MoneyDelta(E.profit) .. " (" .. (E.route or "AH") .. ")") end
+	if E.buyExcluded then Line("Profit/craft", "-") else Line("Profit/craft", Core.MoneyDelta(E.profit) .. " (" .. (E.route or "AH") .. ")"
+		.. (E.route == "AH" and E.worstProfit and ("   worst 10%: " .. Core.MoneyDelta(E.worstProfit)) or "")) end
+	if not E.buyExcluded and E.route == "AH" and E.worstLoss then
+		Tip:AddLine("Loses in the cheapest tenth of hours (the product at its 24 h 10th-percentile low): a lucky price, not a steady margin", 1, 0.5, 0.25, true)
+	end
 	if (E.vendorProfit or 0) > 0 then Line("Sell to vendor", Core.MoneyDelta(E.vendorProfit) .. " a craft") end
 	if E.matCrafts and E.matCrafts < math.huge then Line("Mats on AH", E.matCrafts .. " crafts") end
 end
