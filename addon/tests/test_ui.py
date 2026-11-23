@@ -2382,7 +2382,13 @@ X('''SpInfo = AF_NS.Core.Info
     C.lowMed = math.floor((C.med24 or C.low or 300) / 4); return C end return I end''')
 tls = [[plain(str(x)) for x in v.values()] for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok(tls[-1][0] == 'Warning' and 'price tripled in 24 h' in tls[-1][1], f'tooltip warns of a spike: {tls[-1]}')
+def farmtip(row):
+    X(f'TipLines = {{}}; AF_NS.UI.FarmTooltip({row}, GameTooltip)')
+    return [plain(x) for x in L('TipLines').values()]
+ftl = farmtip('{ id = 2589, spike = true, expected = 100, salesDay = 5, source = "Drop" }')
+ok(any('Price tripled in 24 h' in x for x in ftl), f'Farm row tooltip warns of a spike: {ftl[-1:]}')
 X('AF_NS.Core.Info = SpInfo')
+ok(not any('tripled' in x for x in farmtip('{ id = 2589, expected = 100, salesDay = 5, source = "Drop" }')), 'Farm row tooltip: no spike, no warning')
 ok(not any('tripled' in str(r) for r in [list(v.values()) for v in L('AF_NS.UI.TooltipLines(2589)').values()]), 'no spike: no warning line')
 # ---- Unknown vendor price (item not loaded, and the data file doesn't name it): not known, never 0 ---------------
 X('if not rawget(_G, "GetTimePreciseSec") then GetTimePreciseSec = function() return 0 end end')

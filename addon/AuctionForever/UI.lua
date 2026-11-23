@@ -760,6 +760,10 @@ function L.FarmTooltip(E, Tip)
 	Line("Sell rate", E.vendorRoute and "|cff1eff00vendor|r" or L.RateText(E.rate))
 	Line("Sales/day", string.format("%.0f", E.salesDay or 0))
 	Line("Source", Craft and ("Crafted (" .. ((AF_RecipeSkills and AF_RecipeSkills[E.skill]) or "?") .. ")") or (E.source or "?"))
+	if E.spike then
+		local I = Core.Info(E.key or E.id)
+		Tip:AddLine("Price tripled in 24 h: valued at its usual lowest price" .. (I and Farm.SpikeCap(I) and (" (" .. Money(Farm.SpikeCap(I)) .. ")") or ""), 1, 0.5, 0.25, true)
+	end
 	if not Craft then return end
 	local Held = L.BagCounts()
 	local Lines = {}
