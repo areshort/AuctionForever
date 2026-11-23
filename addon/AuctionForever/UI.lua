@@ -869,6 +869,19 @@ function L.FlipTargets()
 			end
 		end
 	end
+	-- Vendor to AH (Core.VendorFlip): goods vendors sell, bought at the vendor in a batch of 8 h of sales and auctioned.
+	for id, V in pairs(AF_RecipeVendor or {}) do
+		if Farm.Yield then Farm.Yield() end
+		if D.items[id] then
+			local I = Info[id] or Core.Info(id)
+			Info[id] = I
+			local O = I and Core.VendorFlip(I, V, Cap)
+			if O then
+				if not CandOf[id] then CandOf[id] = { id = id, options = {} }; Cands[#Cands + 1] = CandOf[id] end
+				table.insert(CandOf[id].options, O)
+			end
+		end
+	end
 	local Plan = Core.Plan(Cands, Budget)
 	-- Every row knows: the cheapest way in (start) and the gold that takes (need), and the most profitable way
 	-- (best) and its gold (bestNeed). Options within your budget now are in .now.
@@ -971,7 +984,7 @@ function L.LogFlips(Now)
 	local Cur = {}
 	for _, R in ipairs(L.FlipRows()) do
 		local F = R.flip
-		if F and not F.vendor and F.buyUpTo then Cur[R.id] = F end
+		if F and not F.vendor and not F.fromVendor and F.buyUpTo then Cur[R.id] = F end
 	end
 	local Open = {}
 	for _, E in ipairs(Log) do

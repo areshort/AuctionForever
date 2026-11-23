@@ -346,6 +346,7 @@ function T.DrawBuy()
 			R.Cells[2]:SetText(TColor .. Tier .. "|r")
 			R.Cells[3]:SetText(F.vendor and "vendor" or UI().RateText(Rate(E)))
 			R.Cells[4]:SetText(F.buyQty .. " at up to " .. Core.MoneyColor(F.buyUpTo))
+			if F.fromVendor then R.Cells[4]:SetText(F.buyQty .. " from vendor " .. Core.MoneyColor(F.buyUpTo)) end
 			R.Cells[5]:SetText((F.vendor and "vendor " or "") .. Core.MoneyColor(F.resell))
 			R.Cells[6]:SetText(Core.MoneyDelta(F.profit))
 			local Status
@@ -357,6 +358,8 @@ function T.DrawBuy()
 				Status = T.CraftStatus(E)
 			elseif Need then Status = "at " .. GoldText(Need)
 			elseif F.vendor then Status = "|cff1eff00vendor it|r"
+			elseif F.fromVendor then
+				Status = (E.plan and F == E.flip) and "|cff1eff00in plan: vendor|r" or "|cffffd100vendor, not in plan|r"
 			elseif E.plan and F == E.flip then Status = "|cff1eff00in plan|r" .. (F.slow and " |cffffd100(slow)|r" or "") .. (F.volatile and " |cffff8040(volatile)|r" or "")
 			else Status = "|cffffd100fits, not in plan|r" .. (F.slow and " (slow)" or "") .. (F.volatile and " |cffff8040(volatile)|r" or "") end
 			R.Cells[7]:SetText(Status)
@@ -372,7 +375,7 @@ function T.DrawBuy()
 	end
 	local E = T.SelectedBuy()
 	local Need = E and ShownNeed(E)
-	BuyP.Buy:SetEnabled(E ~= nil and not E.craft and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
+	BuyP.Buy:SetEnabled(E ~= nil and not E.craft and not Shown(E).fromVendor and not Need and Buy.state ~= "price" and Buy.state ~= "buying")
 	BuyP.Skip:SetEnabled(#Buy.rows > 1)
 	T.DrawPane(E, Model)
 	local R = Core.FlipResults(SaveDB(), time(), 7)
@@ -581,6 +584,7 @@ function T.BuyClick()
 		SayBuy("Buy each mat with the Buy button on its line below.")
 		return
 	end
+	if F.fromVendor then SayBuy("Buy these from a vendor, then post them with AF Sell.") return end
 	local Kind = Scan.Kind[E.id] or UI().Kind(E.id)
 	if not Kind then
 		SayBuy("Checking the current price first; click Buy again in a moment.")
@@ -1198,6 +1202,10 @@ function T.PaneText(E)
 				.. " over 24 h. Bought only near the bottom, resold at no more than the middle (" .. Money(R[2] or 0) .. ").|r"
 		end
 		Out = Out .. T.SpikeLine(E.info or Core.Info(E.id))
+		if F.fromVendor then
+			Out = Out .. string.format("\nVendor to AH: buy %d from a vendor at %s each (8 h of sales), then auction them. If all sell: %s.",
+				F.buyQty, Money(F.buyUpTo), Core.MoneyDelta(F.ifSold or 0))
+		end
 		if Need then
 			Out = Out .. "\n" .. (F.vendor and ("Needs " .. GoldText(Need) .. " gold (the cost plus the " .. Money(Core.MinKeep) .. " always kept).")
 				or ("A target once you have " .. GoldText(Need) .. " gold (the flip budget is your gold minus " .. Money(Core.MinKeep) .. "; one item may use only part of it)."))
@@ -1237,6 +1245,9 @@ T.Cheapest = Cheapest
 function T.PaneLines(E)
 	local F, R = PlanOf(E)
 	if not E.craft then
+		if F.fromVendor then
+			return { { kind = "Vendor", id = E.id, qty = F.buyQty, source = "Vendor", upTo = F.buyUpTo, listed = Cheapest(E.info or Core.Info(E.id)), cost = F.cost } }
+		end
 		return { { kind = "flip", id = E.id, qty = F.buyQty, source = "AH", upTo = F.buyUpTo, listed = Cheapest(E.info or Core.Info(E.id)), cost = F.cost } }
 	end
 	local Out, Bags = {}, nil
@@ -1582,8 +1593,8 @@ function T.DrawPane(E, M)
 			end
 		end
 	end
-	P.Buy:SetShown(not E.craft)
-	if not E.craft then
+	P.Buy:SetShown(not E.craft and not F.fromVendor)
+	if not E.craft and not F.fromVendor then
 		-- (the flip's label is set by the purchase steps; "Buy N name" when it's waiting)
 		local Txt = tostring(P.Buy:GetText() or "")
 		if Txt == "" or Txt == "Buy" or Txt:match("^Buy %d") then T.SetBuyButton(P.Buy, "Buy " .. (F.buyQty or 0), ShortItem(E.id))

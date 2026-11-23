@@ -2387,6 +2387,27 @@ X('''SpInfo = AF_NS.Core.Info
     C.lowMed = math.floor((C.med24 or C.low or 300) / 4); return C end return I end''')
 tls = [[plain(str(x)) for x in v.values()] for v in L('AF_NS.UI.TooltipLines(2589)').values()]
 ok(tls[-1][0] == 'Warning' and 'price tripled in 24 h' in tls[-1][1], f'tooltip warns of a spike: {tls[-1]}')
+# Vendor to AH (C): AF Buy lists a vendor batch as a flip bought at a vendor (Source Vendor, no AH Buy button), then
+# auctioned. Core.VendorFlip is stubbed for one vendor-sold item in the data.
+X('''VFid = nil
+  for id in pairs(AF_RecipeVendor) do if AuctionForeverData.items[id] and (not VFid or id < VFid) then VFid = id end end
+  VFSaved = AF_NS.Core.VendorFlip
+  AF_NS.Core.VendorFlip = function(I, V, Cap)
+    if I ~= AF_NS.Core.Info(VFid) and not (I and I.ladder == AF_NS.Core.Info(VFid).ladder) then return nil end
+    return { fromVendor = true, qty = 120, buyQty = 120, buyUpTo = V, cost = 120 * V, resell = 3 * V, hours = 24, durationIndex = 3,
+      profit = 2 * 120 * V, ifSold = 2 * 120 * V + 7, chance = 0.6 }
+  end
+  VFMoney = Money; Money = 10000000; AF_NS.UI.ResetBudget(); AF_NS.Scan.Version = AF_NS.Scan.Version + 1
+  VFRows = AF_NS.UI.FlipTargets(); VFE = nil
+  for _, E in ipairs(VFRows) do if E.id == VFid then VFE = E end end''')
+ok(L('VFid ~= nil and VFE ~= nil and VFE.flip.fromVendor == true'), f"AF Buy lists the vendor batch ({L('VFid')})")
+X('VFLines = AF_NS.Trade.PaneLines(VFE); VFText = AF_NS.Trade.PaneText(VFE); VFSum = AF_NS.Trade.PaneSummary(VFE)')
+vt, vs = plain(str(L('VFText'))), plain(str(L('VFSum')))
+ok(L('#VFLines == 1 and VFLines[1].kind == "Vendor" and VFLines[1].source == "Vendor" and VFLines[1].qty == 120 and VFLines[1].upTo == AF_RecipeVendor[VFid]'),
+   'detail line: Source Vendor, 120 at the vendor price')
+ok('Vendor to AH: buy 120 from a vendor' in vt and 'If all sell: +' in vt and vs.startswith('Then: Auction at'),
+   f'detail says buy at a vendor, then Auction it: {vt.splitlines()[-1]} / {vs.splitlines()[0]}')
+X('AF_NS.Core.VendorFlip = VFSaved; Money = VFMoney; AF_NS.UI.ResetBudget(); AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
 def farmtip(row):
     X(f'TipLines = {{}}; AF_NS.UI.FarmTooltip({row}, GameTooltip)')
     return [plain(x) for x in L('TipLines').values()]

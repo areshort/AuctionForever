@@ -719,6 +719,32 @@ function Core.VendorDeal(Ladder, Vendor, Cap, Item)
 	return { purchases = Item and Qty or 1, vendor = true, qty = Qty, buyQty = Qty, buyUpTo = Top, cost = Cost, resell = Vendor, hours = 0, profit = Profit, chance = 1 }
 end
 
+-- Vendor to AH: buy a batch of something vendors sell and auction it. Offered when the resale (1c under the cheapest
+-- listing, never above ResaleCap) after the cut beats the vendor price by VendorFlipMargin, and the batch earns
+-- MinVendorPurchase (10s) once sold (.ifSold); its expected profit (.profit: sell-through, unsold units at half, the
+-- deposits lost, like any flip) must make a flip's return on the cost too (FlipReturn: 10%, 20% for slow sellers). The batch is VendorFlipHours of the market's sales (fewer when
+-- the budget share Cap doesn't cover it). Same item rules as flips (FlipStatus: no weak sellers, no flooded markets). The cheap
+-- vendor goods' margins close within days as others notice (Fable review: Skin of Dwarven Stout, Dust of
+-- Deterioration, Shiny Red Apple), so the row simply goes away when the margin does.
+Core.VendorFlipMargin, Core.VendorFlipHours = 0.30, 8
+function Core.VendorFlip(I, Vendor, Cap)
+	if not I or not Vendor or Vendor <= 0 then return nil end
+	local St = Core.FlipStatus(I)
+	if St ~= "good" and St ~= "slow" then return nil end
+	local Qty = math.floor((I.perHour or 0) * Core.VendorFlipHours)
+	if Cap and Cap < math.huge then Qty = math.min(Qty, math.floor(Cap / Vendor)) end
+	if Qty < 1 then return nil end
+	local Rest = {}
+	for _, Step in ipairs(I.ladder or {}) do Rest[#Rest + 1] = Step end
+	if not Rest[1] then return nil end -- (nothing listed: no price to undercut)
+	local O = Evaluate(I, setmetatable({ perHour = ResaleSpeed(I) }, { __index = I }), Qty, Qty * Vendor, Rest)
+	if not O or O.resell * (1 - Core.Cut) - Vendor < Core.VendorFlipMargin * Vendor then return nil end
+	O.ifSold = math.floor(Qty * (O.resell * (1 - Core.Cut) - Vendor) + 1e-6)
+	if O.ifSold < Core.MinVendorPurchase or O.profit < math.ceil(Core.FlipReturn(St) * O.cost - 1e-9) then return nil end
+	O.fromVendor, O.buyUpTo, O.slow = true, Vendor, St == "slow" or nil
+	return O
+end
+
 -- Least return on the cost a flip needs: MinFlipReturnSlow for "slow" sellers, MinFlipReturn otherwise. Speed is an
 -- item (its FlipStatus is worked out) or a status string; nil = the item isn't known, so the stricter (slow) return.
 function Core.FlipReturn(Speed)
