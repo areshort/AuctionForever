@@ -2014,6 +2014,45 @@ function L.TooltipLines(id, Count, InBags, Key, Bound)
 	if I and AF.Farm.Spike(I) then
 		Out[#Out + 1] = { "|cffff8040Warning|r", "|cffff8040price tripled in 24 h|r (usual " .. Core.MoneyColor(AF.Farm.SpikeCap(I)) .. ")" }
 	end
+	for _, Ln in ipairs(L.CrateLines(id)) do Out[#Out + 1] = Ln end
+	return Out
+end
+-- Merchant's Favor price for crate values: the /af favor setting, else Core.FavorPrice.
+function L.FavorPrice()
+	local P = Account().favorPrice
+	return type(P) == "number" and P > 0 and P or Core.FavorPrice
+end
+-- A typed price in copper: "250" (copper), "2.5s", "2s50c", "0.1g"; nil when it isn't one.
+function L.ParsePrice(S)
+	S = tostring(S or ""):lower():gsub("%s+", "")
+	if S == "" then return nil end
+	if S:match("^%d+%.?%d*$") then return math.floor(tonumber(S) + 0.5) end
+	if (S:gsub("%d+%.?%d*[gsc]", "")) ~= "" then return nil end
+	local Total = 0
+	for N, U in S:gmatch("(%d+%.?%d*)([gsc])") do Total = Total + tonumber(N) * (U == "g" and 10000 or U == "s" and 100 or 1) end
+	return math.floor(Total + 0.5)
+end
+-- "/af favor 2.5s" (or 250, 2s50c...): set it; "/af favor" alone: show it.
+function L.FavorCommand(Msg)
+	local Arg = Msg:match("^favor%s*(.*)$") or ""
+	local P = Arg ~= "" and L.ParsePrice(Arg) or nil
+	if Arg ~= "" and P and P > 0 then Account().favorPrice = P end
+	if Arg ~= "" and not (P and P > 0) then print("|cffffd100AuctionForever:|r usage: /af favor 2.5s (the price of one Merchant's Favor)") return end
+	print("|cffffd100AuctionForever:|r Merchant's Favor valued at " .. Core.MoneyColor(L.FavorPrice()) .. " for crate fair values.")
+end
+-- Tooltip lines for a Waylaid Crate: its fair value, the Favor it gives, and every bundle that fills it (cheapest
+-- first, as listed now). {} for other items.
+function L.CrateLines(id)
+	local CV = Core.CrateValue(id, nil, L.FavorPrice())
+	if not CV then return {} end
+	local Out = {
+		{ "Fair value", CV.value and Core.MoneyDelta(CV.value) or "no bundle listed" },
+		{ "Favor", string.format("%d (%s) x %s", CV.favor, CV.source, Core.MoneyColor(CV.favorPrice)) .. (CV.coin > 0 and (" + " .. Core.MoneyColor(CV.coin)) or "") },
+		{ "Fill (any one)", "" },
+	}
+	for i, O in ipairs(CV.options) do
+		Out[#Out + 1] = { string.format("  %d %s", O.n, (L.ItemName(O.id))), (O.cost and Core.MoneyColor(O.cost) or "not enough listed") .. (i == 1 and O.cost and " (cheapest)" or "") }
+	end
 	return Out
 end
 -- Is the hovered item soulbound? A bag slot is asked directly; otherwise the tooltip's own "Soulbound" line.
@@ -2204,6 +2243,7 @@ SLASH_AUCTIONFOREVER2 = "/auctionforever"
 SlashCmdList.AUCTIONFOREVER = function(Msg)
 	Msg = (Msg or ""):lower()
 	if Msg:match("^brief") and AF.Brief then AF.Brief.Command(Msg) return end
+	if Msg:match("^favor") then L.FavorCommand(Msg) return end
 	if Msg:match("^keep") and AF.Bags then AF.Bags.KeepCommand(Msg) elseif Msg:match("^icon") and AF.Bags then AF.Bags.IconCommand(Msg) elseif Msg == "flip" then L.Toggle(2) elseif Msg == "sessions" then L.Toggle(3) elseif Msg == "scan" then AF.Scan.Start() elseif Msg == "quick" then AF.Scan.Quick() elseif Msg == "selftest" then AF.SelfTest.Run()
 	elseif Msg == "missed" then for _, Ln in ipairs(L.MissedSummary()) do print("|cffffd100AuctionForever:|r " .. Ln) end
 	else L.Toggle(1) end

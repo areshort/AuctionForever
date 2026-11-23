@@ -745,6 +745,48 @@ function Core.VendorFlip(I, Vendor, Cap)
 	return O
 end
 
+-- Waylaid Crate fair value: Favor x the Favor price + money back - the cheapest bundle that fills it, bought on the AH
+-- (AF_CrateFills from the game data, AF_CrateFavor from Crates.lua). Shown for information: a backtest on 72 h of
+-- hourly data (Fable review method) found no gain from using it to pick or rank crate flips (AF's crate picks
+-- had no losers; keeping only those under 70% of fair value raised the return but cut the profit by half).
+Core.FavorPrice = 250 -- copper per Merchant's Favor, the default of the /af favor setting
+-- Cost of N units from the cheapest listings up; nil when fewer are listed.
+local function LadderCost(I, N)
+	local Cost, Left = 0, N
+	for _, Step in ipairs(I and I.ladder or {}) do
+		local T = math.min(Left, Step[2])
+		Cost, Left = Cost + T * Step[1], Left - T
+		if Left <= 0 then return Cost end
+	end
+	return nil
+end
+-- nil when the item isn't a crate AF knows. Otherwise { favor, source ("reported", "expected", "confirmed"), coin,
+-- favorPrice, options = { { id, n, cost (nil: not enough listed) }, ... cheapest first }, fill (the cheapest
+-- option), value (nil when no bundle is listed) }.
+function Core.CrateValue(id, InfoFn, FavorPrice)
+	local Fills = rawget(_G, "AF_CrateFills") and AF_CrateFills[id]
+	local Fav = rawget(_G, "AF_CrateFavor") and AF_CrateFavor[id]
+	if type(Fills) ~= "table" or type(Fav) ~= "table" then return nil end
+	InfoFn = InfoFn or Core.Info
+	local Out = { favor = Fav[1], source = Fav[2] or "reported", coin = Fav[3] or 0, favorPrice = FavorPrice or Core.FavorPrice, options = {} }
+	for i = 1, #Fills - 1, 2 do
+		local O = { id = Fills[i], n = Fills[i + 1] }
+		O.cost = LadderCost(InfoFn(O.id), O.n)
+		Out.options[#Out.options + 1] = O
+	end
+	table.sort(Out.options, function(a, b)
+		if (a.cost ~= nil) ~= (b.cost ~= nil) then return a.cost ~= nil end
+		if a.cost and a.cost ~= b.cost then return a.cost < b.cost end
+		return a.id < b.id
+	end)
+	local F = Out.options[1]
+	if F and F.cost then
+		Out.fill = F
+		Out.value = math.floor(Out.favor * Out.favorPrice + Out.coin - F.cost + 0.5)
+	end
+	return Out
+end
+
 -- Least return on the cost a flip needs: MinFlipReturnSlow for "slow" sellers, MinFlipReturn otherwise. Speed is an
 -- item (its FlipStatus is worked out) or a status string; nil = the item isn't known, so the stricter (slow) return.
 function Core.FlipReturn(Speed)

@@ -1183,6 +1183,23 @@ local function PlanOf(E)
 	local R = (Run and Run.key == K and Run) or (LastRun and LastRun.key == K and LastRun) or nil
 	return R and R.plan or E.flip, R
 end
+-- Waylaid Crates: the fair value (Core.CrateValue) and what the purchase pays as a share of it, then the bundles that
+-- fill it (the cheapest three as listed now). "" for other items.
+function T.CrateLine(id, F)
+	local CV = Core.CrateValue(id, nil, UI().FavorPrice())
+	if not CV then return "" end
+	local Each = F and F.buyQty and F.buyQty > 0 and F.cost and F.cost / F.buyQty or nil
+	local Out = "\nFair value " .. (CV.value and Core.MoneyDelta(CV.value) or "unknown (no bundle listed)")
+		.. string.format(": %d Favor (%s) x %s", CV.favor, CV.source, Money(CV.favorPrice))
+		.. (CV.fill and (" - " .. CV.fill.n .. " " .. ItemName(CV.fill.id) .. " " .. Money(CV.fill.cost)) or "")
+	if CV.value and CV.value > 0 and Each then Out = Out .. string.format(". Bought at %d%% of it.", math.floor(100 * Each / CV.value + 0.5)) end
+	local Parts = {}
+	for i, O in ipairs(CV.options) do
+		if i > 3 then Parts[#Parts + 1] = "+" .. (#CV.options - 3) .. " more" break end
+		Parts[#Parts + 1] = O.n .. " " .. ItemName(O.id) .. " " .. (O.cost and Money(O.cost) or "not listed")
+	end
+	return Out .. "\nFills (any one): " .. table.concat(Parts, ", ")
+end
 -- A warning line when the item's price tripled in the last day (Farm.Spike): the plan values it at its usual
 -- lowest price, not at the spike. "" otherwise.
 function T.SpikeLine(I)
@@ -1201,7 +1218,7 @@ function T.PaneText(E)
 			Out = Out .. "\n|cffff8040Volatile: its lowest price ranged " .. Money(R[1] or 0) .. " to " .. Money(R[3] or 0)
 				.. " over 24 h. Bought only near the bottom, resold at no more than the middle (" .. Money(R[2] or 0) .. ").|r"
 		end
-		Out = Out .. T.SpikeLine(E.info or Core.Info(E.id))
+		Out = Out .. T.SpikeLine(E.info or Core.Info(E.id)) .. T.CrateLine(E.id, F)
 		if F.fromVendor then
 			Out = Out .. string.format("\nVendor to AH: buy %d from a vendor at %s each (8 h of sales), then auction them. If all sell: %s.",
 				F.buyQty, Money(F.buyUpTo), Core.MoneyDelta(F.ifSold or 0))

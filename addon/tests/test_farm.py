@@ -55,6 +55,17 @@ ok(bad == 0, f'every recipe has a known profession, makes >= 1 and reagent/count
 ok(L('(function() for _, P in pairs(AF_RecipeVendor) do if P <= 0 then return false end end return true end)()'),
    'vendor prices are positive')
 ok(L('AF_RecipeVendor[2320] == 10 and AF_RecipeVendor[3371] == 4'), 'Coarse Thread 10c, Empty Vial 4c (20c per 5)')
+# Waylaid Crate fills from the crates' spell text ($Mn = effect n-1's amount): Journeyman Parts 8 Bronze Tube, 7 Whirring
+# Bronze Gizmo, 4 Bronze Framework, 45 Gold Power Core; Expert Parts 8 Iron Strut...; Apprentice Ore 20 Copper / 20 Tin.
+cf = lambda c: [L(f'AF_CrateFills[{c}][{i}]') for i in range(1, int(L(f'#AF_CrateFills[{c}]')) + 1)]
+ok(L('(function() local N = 0 for _ in pairs(AF_CrateFills) do N = N + 1 end return N end)()') == 30
+   and cf(248707) == [4371, 8, 4375, 7, 4382, 4, 10558, 45] and cf(248710) == [4387, 8, 10559, 5, 10560, 12, 10561, 5]
+   and cf(248683) == [2770, 20, 2771, 20] and cf(248684) == [2589, 40, 2318, 20] and 11370 in cf(248697),
+   f'crate fills: 30 crates, Journeyman Parts {cf(248707)}, Expert Parts {cf(248710)}, Artisan Ore with the real Dark Iron Ore (11370)')
+run('Crates.lua')
+ok(all(b < 128 for b in open(os.path.join(ADDON, 'Crates.lua'), 'rb').read()), 'Crates.lua is ASCII')
+ok(L('(function() for c in pairs(AF_CrateFills) do local F = AF_CrateFavor[c] if not F or F[1] <= 0 or (F[2] ~= "reported" and F[2] ~= "expected" and F[2] ~= "confirmed") then return false end end return true end)()'),
+   'every crate has a Favor amount and where it comes from')
 
 
 def recipe(product, spell):

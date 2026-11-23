@@ -446,5 +446,18 @@ ok(L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.45 }}), 300, 1e12)") is None a
 VS = L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.55 }}), 350, 1e12)")
 ok(VS is None and L(f"{C}.VendorFlip(MakeItem(), 350, 1e12)") is not None,
    "a slow seller (0.55) at 3s 50c: 30% margin and 10s if all sell, but under the 20% expected return a slow flip needs: not offered")
+# Crate fair value (B): Favor x Favor price + money back - the cheapest bundle bought from the ladder.
+lua.execute('''AF_CrateFills = { [900] = { 901, 4, 902, 8, 903, 45 } }
+  AF_CrateFavor = { [900] = { 20, "reported", 0 } }
+  CrInfo = { [901] = { ladder = { {700, 2}, {900, 10} } }, [902] = { ladder = { {600, 20} } }, [903] = { ladder = { {10, 5} } } }
+  CV = AuctionForever.Core.CrateValue(900, function(id) return CrInfo[id] end, 250)''')
+ok(L('CV.value') == 20 * 250 - 3200 and L('CV.fill.id') == 901 and L('CV.fill.cost') == 3200
+   and [L(f'CV.options[{i}].id') for i in (1, 2, 3)] == [901, 902, 903] and L('CV.options[2].cost') == 4800 and L('CV.options[3].cost') is None,
+   f"fair value 20 x 2s 50c - 4 at 7s/7s/9s/9s (32s) = 18s; options cheapest first, 45 of a 5-unit ladder: not enough listed ({L('CV.value')})")
+lua.execute('''AF_CrateFavor[900] = { 20, "confirmed", 300 }; CV2 = AuctionForever.Core.CrateValue(900, function(id) return CrInfo[id] end, 300)
+  CV3 = AuctionForever.Core.CrateValue(900, function(id) return nil end, 250)''')
+ok(L('CV2.value') == 20 * 300 + 300 - 3200 and L('CV2.source') == 'confirmed' and L('CV3.value') is None and L('CV3.fill') is None
+   and L('AuctionForever.Core.CrateValue(901)') is None,
+   'money back and the Favor price count; no bundle listed: no value; not a crate: nil')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

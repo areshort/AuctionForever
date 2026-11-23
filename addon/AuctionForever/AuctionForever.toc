@@ -8,6 +8,7 @@
 Core.lua
 Recipes.lua
 Farm.lua
+Crates.lua
 Suffixes.lua
 AuctionForeverData.lua
 Scan.lua

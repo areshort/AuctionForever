@@ -2408,6 +2408,24 @@ ok(L('#VFLines == 1 and VFLines[1].kind == "Vendor" and VFLines[1].source == "Ve
 ok('Vendor to AH: buy 120 from a vendor' in vt and 'If all sell: +' in vt and vs.startswith('Then: Auction at'),
    f'detail says buy at a vendor, then Auction it: {vt.splitlines()[-1]} / {vs.splitlines()[0]}')
 X('AF_NS.Core.VendorFlip = VFSaved; Money = VFMoney; AF_NS.UI.ResetBudget(); AF_NS.Scan.Version = AF_NS.Scan.Version + 1')
+# Crate fair value (B) in the item tooltip and the AF Buy detail; /af favor sets the Favor price.
+pp = [L(f'AF_NS.UI.ParsePrice("{x}")') for x in ('2.5s', '250', '2s50c', '0.1g', '3 s', 'abc', '')]
+ok(pp == [250, 250, 250, 1000, 300, None, None], f'typed prices: {pp}')
+X('''CrSaved = AF_NS.Core.Info
+  AF_NS.Core.Info = function(id, ...) if id == 4382 then return { ladder = { {800, 10} } } elseif id == 4371 then return { ladder = { {500, 100} } } elseif id == 4375 then return { ladder = { {1000, 10} } } elseif id == 10558 then return { ladder = {} } end return CrSaved(id, ...) end''')
+cl = [[plain(str(x)) for x in v.values()] for v in L('AF_NS.UI.CrateLines(248707)').values()]
+ok(cl[0][0] == 'Fair value' and cl[0][1] == '+18s 00c' and cl[1][1] == '20 (reported) x 2s 50c' and cl[2][0] == 'Fill (any one)'
+   and cl[3] == ['  4 ' + plain(str(L('(AF_NS.UI.ItemName(4382))'))), '32s 00c (cheapest)'] and len(cl) == 3 + 4,
+   f'crate tooltip: fair value 20 x 2s 50c - 4 Bronze Framework 32s = 18s, then every bundle: {cl[:4]}')
+ok(L('#AF_NS.UI.CrateLines(2589)') == 0, 'not a crate: no crate lines')
+X('SlashCmdList.AUCTIONFOREVER("favor 3s")')
+ok(L('AF_NS.UI.FavorPrice()') == 300 and plain(str(L('AF_NS.UI.CrateLines(248707)[1][2]'))) == '+28s 00c', '/af favor 3s: fair value 20 x 3s - 32s = 28s')
+X('''SlashCmdList.AUCTIONFOREVER("favor 2.5s")
+  CrE = { id = 248707, info = { sellThrough = 1, perHour = 10 }, flip = { buyQty = 2, qty = 2, buyUpTo = 900, cost = 1800, resell = 1500, profit = 900, hours = 12, chance = 1 } }''')
+ct = plain(str(L('AF_NS.Trade.PaneText(CrE)')))
+ok('Fair value +18s 00c: 20 Favor (reported) x 2s 50c - 4 ' in ct and 'Bought at 50% of it.' in ct and 'Fills (any one): 4 ' in ct and '+1 more' in ct,
+   'AF Buy crate detail: fair value, its parts, the share paid, the bundles: ' + ct.replace(chr(10), ' / '))
+X('AF_NS.Core.Info = CrSaved')
 def farmtip(row):
     X(f'TipLines = {{}}; AF_NS.UI.FarmTooltip({row}, GameTooltip)')
     return [plain(x) for x in L('TipLines').values()]
