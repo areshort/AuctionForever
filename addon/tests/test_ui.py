@@ -255,10 +255,15 @@ if real:
     bt = str(L('AuctionForeverAHPanel.Bar.Text:GetText()'))
     ok('reading' in bt and ' of ' in bt and '%' in bt and L('AuctionForeverAHPanel.Bar:GetValue()') >= 0.3, 'progress while reading (bar past the waiting part): ' + bt)
     # The missed-flips log runs once when the scan finishes; an error in it must not break the scan.
+    # A scan's work over every item runs in the background, a few ms a frame: StepBG runs one background frame,
+    # PumpBGNow runs them until it's all done.
+    X('''function StepBG() local F = AF_NS.UI.BackgroundFrame; local U = F and F._scripts.OnUpdate; if U then U(F, 0.016) end end
+      function PumpBGNow() for _ = 1, 100000 do if not AF_NS.UI.BackgroundBusy() then break end StepBG() end end''')
     X("""LogFlipCalls, RealLogFlips = 0, AF_NS.UI.LogFlips
       AF_NS.UI.LogFlips = function(Now) LogFlipCalls = LogFlipCalls + 1; LogFlipNow = Now; error("log failed") end
-      function Pump() for _ = 1, 1000 do if not AF_NS.Scan.Busy() then break end
-          for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end end
+      function Pump() for _ = 1, 100000 do if not AF_NS.Scan.Busy() then break end
+          for _, f in ipairs(AllFramesForTest) do local u = f._scripts.OnUpdate; if u then u(f, 0.016) end end end
+        PumpBGNow() end
         Pump()
       AF_NS.UI.LogFlips = RealLogFlips""")
     ok(not L('AF_NS.Scan.Busy()'), 'full scan finished')
@@ -297,8 +302,10 @@ if real:
       table.sort(A, function(a, b) return a.unitPrice < b.unitPrice end)
       return A
     end
-    function PumpQuick() for _ = 1, 200 do if not AF_NS.Scan.Busy() then break end
-      if LastQuery then local id = LastQuery; LastQuery = nil; FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", id) end end
+    -- (a scan's work over every item runs in the background, a few ms a frame: frames are run until it's done)
+    function PumpQuick() for _ = 1, 100000 do local BG = AF_NS.UI.BackgroundBusy(); if not AF_NS.Scan.Busy() and not BG then break end
+      if LastQuery then local id = LastQuery; LastQuery = nil; FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", id) end
+      if BG then StepBG() end end
       Timers = {} end""")
     ql = list(L('AF_NS.UI.QuickList()').values())
     ok(2589 in ql and 999999 not in ql and len(ql) <= 45, f'quick list: {len(ql)} items, includes Linen from the bags, skips soulbound')
@@ -491,9 +498,10 @@ if real:
     X('Click(AuctionForeverSellTab); Click(AuctionForeverBuyTab); AF_NS.Trade.SetBuySort("profit"); AF_NS.Trade.SetBuySort("plan")')
     ok(L('TargetCalls') == 0, f"switching back to AF Buy and sorting reuse the loaded list ({L('TargetCalls')} rebuilds)")
     ok(L('AF_NS.Trade.SelectedBuy() and AF_NS.Trade.SelectedBuy().id') == 2589, 'same list after switching tabs')
-    X('AF_NS.UI.ScanDone(); AdvanceTime(0.2)')
+    # (a scan's rebuilds run in the background: PumpBGNow runs it until done)
+    X('AF_NS.UI.ScanDone(); AdvanceTime(0.2); PumpBGNow()')
     ok(L('TargetCalls') == 1, f"a finished scan rebuilds the list while AF Buy is open ({L('TargetCalls')})")
-    X('Click(AuctionForeverSellTab); AF_NS.UI.ScanDone(); AdvanceTime(0.2)')
+    X('Click(AuctionForeverSellTab); AF_NS.UI.ScanDone(); AdvanceTime(0.2); PumpBGNow()')
     ok(L('TargetCalls') == 1, 'AF Buy closed: no rebuild yet')
     X('Click(AuctionForeverBuyTab)')
     ok(L('TargetCalls') == 2, 'opening AF Buy after a scan rebuilds it once')
@@ -1155,8 +1163,8 @@ if real:
       AF_NS.Scan.Lookup = RealLookup; LastQuery = nil
       LiveSend = C_AuctionHouse.SendSearchQuery
       C_AuctionHouse.SendSearchQuery = function(k) LastQuery = k.itemID end
-      function LiveStep() local id = LastQuery; LastQuery = nil; if id then FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", id) end end
-      LiveCalls = 0
+      function LiveStep() local id = LastQuery; LastQuery = nil; if id then FireEvent("COMMODITY_SEARCH_RESULTS_UPDATED", id) end; PumpBGNow() end
+      PumpBGNow(); LiveCalls = 0
       -- the next list has a new target at the top
       FlipTargets = { { id = 2592, info = AF_NS.Core.Info(2589), flip = { buyQty = 5, buyUpTo = 30, cost = 150, resell = 200, hours = 2, durationIndex = 1, profit = 600 } }, LiveRows[1], LiveRows[2] }
       AF_NS.Scan.Lookup({ 2589, 2589, 2589, 2589 }, true)
@@ -1175,7 +1183,7 @@ if real:
     X("""for i, E in ipairs(AF_NS.Trade.BuyRows()) do if E.id == 2589 then AF_NS.Trade.SelectBuy(i) end end
       Click(AuctionForeverBuyPanel.Buy); LiveCalls = 0; AF_NS.UI.ScanLive()""")
     ok(L('LastCall("StartCommoditiesPurchase") ~= nil') and L('LiveCalls') == 0, f"purchase being priced: no rebuild ({L('LiveCalls')})")
-    X('LiveSel = AF_NS.Trade.SelectedBuy().id; FireEvent("COMMODITY_PRICE_UPDATED", 35, 350); LiveAfter = LiveCalls; AdvanceTime(1.1)')
+    X('LiveSel = AF_NS.Trade.SelectedBuy().id; FireEvent("COMMODITY_PRICE_UPDATED", 35, 350); LiveAfter = LiveCalls; AdvanceTime(1.1); PumpBGNow()')
     ok(L('LiveCalls') == L('LiveAfter') + 1 and L('AF_NS.Trade.SelectedBuy().id') == L('LiveSel'),
        f"once the purchase is done (here: cancelled, the price rose) the waiting update is applied ({L('LiveAfter')} -> {L('LiveCalls')})")
     # a full scan: no partial updates, progress shown in AF Buy's status line, the list rebuilt at the end
@@ -1189,6 +1197,42 @@ if real:
     X('Pump()')
     ok(not L('AF_NS.Scan.Busy()') and L('LiveCalls') == 1 and 'reading' not in str(L('AuctionForeverBuyPanel.Status:GetText()')),
        f"full scan done: rebuilt once, progress text cleared ({L('LiveCalls')})")
+    # No freeze when a scan finishes: the work over every item (the flip and craft plans, the near misses and busiest
+    # items of a quick scan's phase 2, the full scan's sales for every item, the flip log, the open AuctionForever
+    # window's list) runs in the background, never on the spot in an event or a frame (it was seconds with a big saved
+    # file: the game froze). Recorded: the whole-data steps called outside a background job, and item valuations
+    # (Core.Info) done on the spot (the lists, once worked out, are only shown: a few dozen at most).
+    X("""PumpBGNow(); WinWasShown = AuctionForeverFrame:IsShown(); if not WinWasShown then AF_NS.UI.Toggle(1) end; PumpBGNow()
+      OnSpot, InBG, Wrapped, InfoOnSpot = {}, {}, {}, 0
+      local function Watch(Tbl, Key, Name, Light)
+        local F = Tbl[Key]
+        Wrapped[#Wrapped + 1] = { Tbl, Key, F }
+        Tbl[Key] = function(...) if coroutine.running() then InBG[Name] = true elseif not Light then OnSpot[#OnSpot + 1] = Name end return F(...) end
+      end
+      local Info = AF_NS.Core.Info
+      Wrapped[#Wrapped + 1] = { AF_NS.Core, "Info", Info }
+      AF_NS.Core.Info = function(...) if not coroutine.running() then InfoOnSpot = InfoOnSpot + 1 end return Info(...) end
+      Watch(AF_NS.UI, "FlipTargets", "FlipTargets", true); Watch(AF_NS.UI, "CraftTargets", "CraftTargets", true)
+      Watch(AF_NS.UI, "FarmData", "FarmData", true)
+      Watch(AF_NS.UI, "NearMisses", "NearMisses"); Watch(AF_NS.UI, "LogFlips", "LogFlips")
+      Watch(AF_NS.Scan, "FinishFull", "FinishFull"); Watch(AF_NS.Scan, "BusyIds", "BusyIds")
+      -- a full scan, AF Buy and the AuctionForever window open
+      Click(AuctionForeverBuyTab); Timers = {}
+      AuctionForeverDB.lastFull = nil; AuctionForeverDB.fresh.time = nil
+      AF_NS.Scan.Start(); FireEvent("REPLICATE_ITEM_LIST_UPDATE"); Pump()
+      FullOnSpot = table.concat(OnSpot, " "); FullInfo = InfoOnSpot; FullBG = InBG.FinishFull and InBG.FlipTargets and InBG.FarmData
+      FullResult = AF_NS.Scan.LastResult
+      OnSpot, InBG, InfoOnSpot = {}, {}, 0""")
+    ok(L('FullOnSpot') == '' and L('FullInfo') < 100 and L('FullBG') and 'Full scan' in str(L('FullResult')) and not L('AF_NS.Scan.Busy()'),
+       f"full scan done: sales for every item, AF Buy and the window worked out in the background, nothing on the spot (on the spot: {L('FullOnSpot')}, {L('FullInfo')} item valuations; {L('FullResult')})")
+    X("""Page = 0; AF_NS.Scan.Quick(true)
+      FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); PumpBGNow()
+      FireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", BrowsePages[2]); PumpQuick(); PumpBGNow()
+      QuickOnSpot = table.concat(OnSpot, " "); QuickInfo = InfoOnSpot; QuickBG = InBG.NearMisses and InBG.BusyIds and InBG.LogFlips
+      for i = #Wrapped, 1, -1 do local W = Wrapped[i]; W[1][W[2]] = W[3] end
+      if not WinWasShown then AuctionForeverFrame:Hide() end""")
+    ok(L('QuickOnSpot') == '' and L('QuickInfo') < 100 and L('QuickBG') and not L('AF_NS.Scan.Busy()') and 'Busy items' in str(L('AF_NS.Scan.LastResult')),
+       f"quick scan: live AF Buy updates, the phase-2 picks, the flip log worked out in the background, nothing on the spot (on the spot: {L('QuickOnSpot')}, {L('QuickInfo')} item valuations; {L('AF_NS.Scan.LastResult')})")
     # AF Sell: rebuilt in place (selection and your typed price kept); never while a post waits for confirmation
     X("""Click(AuctionForeverSellTab); AF_NS.Trade.SelectSellId(2589); Timers = {}
       SellBuilds = 0; LiveBQ = AF_NS.Trade.BuildQueue
@@ -2591,6 +2635,9 @@ ok(L('AF_NS.Farm.Source(3577)') == 'Crafted' and L('AF_Recipes[3577] ~= nil'), '
 ok(L('AF_NS.Farm.Source(4289)') == 'Vendor' and L('AF_NS.Farm.Source(2320)') == 'Vendor', 'vendor-sold goods (Salt, thread) are "Vendor", not Gather or Drop')
 # ---- Load and tooltip cost: the Farm lists (every item, every recipe) are never worked out on the spot -------------
 if real:
+    # (background work left from the tests above is finished first; item names arriving (the preload once the lists
+    # are built) bring vendor prices that move a few values between the two builds compared here: held off)
+    X('PumpBGNow(); ListsPreload = AF_NS.UI.Preload; AF_NS.UI.Preload = function() end')
     X("""RawN = 0; RealRaw = AF_NS.Farm.Raw
       AF_NS.Farm.Raw = function(...) RawN = RawN + 1 return RealRaw(...) end
       AF_NS.Scan.Version = AF_NS.Scan.Version + 1 -- (new auction data: every list is stale)
@@ -2615,7 +2662,7 @@ if real:
         ok(L('Same') and L('#FGRows') > 100, f"background build = the same rows and tiers as building at once ({L('#BGRows')} rows)")
         X('RawN = 0; TooltipPostCalls[1](GameTooltip, { id = 2589 })')
         ok(L('RawN') <= 2 and L('AF_NS.UI.ItemTier(2589)') is not None, f"lists ready: the tooltip's Tier is there, one valuation ({L('RawN')})")
-    X('AF_NS.Farm.Raw = RealRaw')
+    X('AF_NS.Farm.Raw = RealRaw; AF_NS.UI.Preload = ListsPreload')
 # ---- Login brief on the real data: worked out in the background, the same lines, no long frame --------------------
 if real:
     X("""BriefMsgs = {}

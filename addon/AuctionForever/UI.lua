@@ -692,6 +692,7 @@ L.BG_BUDGET = 0.004
 local Jobs = {} -- { co, done = { fn, ... }, key, quiet, fail }
 local BGDeadline
 local BGFrame = CreateFrame("Frame")
+L.BackgroundFrame = BGFrame
 local function BGYield()
 	local J = Jobs[1]
 	if J and coroutine.running() == J.co and GetTimePreciseSec() > BGDeadline then coroutine.yield() end
@@ -731,6 +732,23 @@ function L.BuildingLists()
 	return false
 end
 function L.BackgroundBusy() return Jobs[1] ~= nil end
+-- A background job that's asked for again while it runs (a scan's live updates, every 2 s; each finished scan):
+-- one runs, and at most one more is kept to run after it, with the newest request. Fn's results go to OnDone.
+-- Without this every request would queue its own seconds-long job (or join one that started on older data).
+local Once = {}
+function L.LaterOnce(Name, Fn, OnDone)
+	local C = Once[Name]
+	if not C then C = {}; Once[Name] = C end
+	if C.running then C.again = { Fn, OnDone } return end
+	C.running = true
+	local function Next()
+		C.running = false
+		local A = C.again
+		C.again = nil
+		if A then L.LaterOnce(Name, A[1], A[2]) end
+	end
+	L.Background(Fn, function(...) if OnDone then OnDone(...) end; Next() end, nil, true, Next)
+end
 function L.FarmData()
 	local V = L.FarmView
 	if V == "craft" then return L.CraftRows() elseif V == "gather" then return L.GatherRows() elseif V == "drop" then return L.DropRows() end
@@ -1841,7 +1859,12 @@ function L.ScanDone()
 	if AF.Trade and AF.Trade.OnScanDone then AF.Trade.OnScanDone() end
 	if AH.Panel then AH.Panel.Bar:Hide(); AH.Panel.QuickInfo:Show() end
 	L.RefreshAHPanel()
-	if Frame and Frame:IsShown() then L.Load() end
+	-- The open AuctionForever window: its list is worked out again from the new data in the background (every item
+	-- and recipe: seconds of work, a freeze when done on the spot), then shown.
+	if Frame and Frame:IsShown() then
+		L.LaterOnce("window", function() if Tab == 1 then L.FarmData() elseif Tab == 2 then L.FlipRows() end end,
+			function() if Frame:IsShown() then L.Load() end end)
+	end
 end
 
 StaticPopupDialogs["AUCTIONFOREVER_CLEAR_SESSIONS"] = {

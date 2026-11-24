@@ -73,8 +73,21 @@ end
 
 -- A full or quick scan (both look at the whole auction house) finished: log the flips AF Buy would show now, for
 -- "/af missed". Once per finished scan; an error there must never break the scan.
+-- Work over every item (seconds with a big saved file) runs in the background, a few ms a frame (UI.Background):
+-- done on the spot when a scan finished, it froze the game. Yield: a pause point for those loops (only pauses inside
+-- a background job). Later: Fn in the background, then OnDone(results) or OnFail(error); with no UI loaded, now.
+local function Yield() local F = AF.Farm; if F and F.Yield then F.Yield() end end
+local function Later(Fn, OnDone, OnFail)
+	if AF.UI and AF.UI.Background then AF.UI.Background(Fn, OnDone, nil, true, OnFail) return end
+	local R = { pcall(Fn) }
+	if R[1] then if OnDone then OnDone(unpack(R, 2)) end elseif OnFail then OnFail(R[2]) end
+end
 local function LogFlips()
-	if AF.UI and AF.UI.LogFlips then pcall(AF.UI.LogFlips, time()) end
+	if not (AF.UI and AF.UI.LogFlips) then return end
+	local Now = time()
+	-- (the flip plan behind it is every item: background; an error there is quiet and never breaks the scan)
+	if AF.UI.LaterOnce then AF.UI.LaterOnce("logflips", function() AF.UI.LogFlips(Now) end)
+	else pcall(AF.UI.LogFlips, Now) end
 end
 
 -- { [price] = qty } -> cheapest LADDER levels { {price, qty, expiringQty}, ... }
@@ -247,7 +260,7 @@ function Scan.FinishFull(L, E, Now)
 	local D = AuctionForeverData
 	local Mine, Theirs = 0, 0
 	local Ref = nil
-	if type(D) == "table" and D.items then Ref = {}; for _, K in ipairs(AF.Core.AllKeys()) do Ref[K] = true end end
+	if type(D) == "table" and D.items then Ref = {}; for i, K in ipairs(AF.Core.AllKeys()) do Ref[K] = true; if i % 500 == 0 then Yield() end end end
 	if not Ref then Ref = {}; for id, F in pairs(S.fresh.items) do if F[2] and F[2] > 0 then Ref[id] = true end end end
 	-- (counted by item ID: a scan that can't tell suffix versions apart still sees every item)
 	local IdsMine, IdsTheirs = {}, {}
@@ -258,6 +271,7 @@ function Scan.FinishFull(L, E, Now)
 	-- A scan that saw far fewer items than expected is incomplete: keep its prices, don't measure sales from it.
 	if Theirs > 0 and Mine < 0.7 * Theirs then
 		for id, Map in pairs(L) do
+			Yield()
 			local Ladder = ToLadder(Map, E[id])
 			local Qty = 0
 			for _, N in pairs(Map) do Qty = Qty + N end
@@ -276,6 +290,7 @@ function Scan.FinishFull(L, E, Now)
 	for id in pairs(S.base) do if Versions or type(id) ~= "string" or L[id] then Check[id] = true end end
 	local Measured, WithSales, Soon = 0, 0, 0
 	for id in pairs(Check) do
+		Yield()
 		local Map = L[id]
 		if Map or S.base[id] or CloudLadder(id) then
 			local St, Sold = Scan.Observe(id, Map or {}, E[id], nil, nil, Now, nil)
@@ -292,6 +307,7 @@ local Worker = CreateFrame("Frame")
 -- reading, and the scan waits SETTLE seconds at the end for more before finishing.
 local SETTLE = 3
 local Settled, Skipped = 0, 0
+local FullDone
 local function FullStep(_, Elapsed)
 	local N = C_AuctionHouse.GetNumReplicateItems() or 0
 	if N > Total then Total, Settled = N, 0 end
@@ -325,21 +341,33 @@ local function FullStep(_, Elapsed)
 		local S = DB()
 		local Last = S.scanlog and S.scanlog[#S.scanlog]
 		if Last then Last.read = { Total, Count, Skipped } end
-		local Measured, WithSales, Partial, Soon = Scan.FinishFull(Levels, Expiring, Now)
-		Mode = nil
-		local Took = GetTime() - Started
-		if Partial then
-			Scan.LastResult = string.format("Full scan: %d listings, looked incomplete. Prices updated; sales not measured.", Count)
-		elseif Measured > 0 then
-			Scan.LastResult = string.format("Full scan: %d listings in %.0f s. Sales measured for %d items (%d sold something).", Count, Took, Measured, WithSales)
-		else
-			Scan.LastResult = string.format("Full scan: %d listings in %.0f s. Prices updated; sales are measured on a scan 15+ min after your last one.", Count, Took)
-		end
-		Say(Scan.LastResult)
+		-- Working out sales for every item: in the background (Mode "full-finish": still busy, the AH closing doesn't
+		-- stop it, everything is read already).
+		Mode = "full-finish"
+		Notify("ScanProgress")
+		local L, E = Levels, Expiring
 		Levels, Expiring = nil, nil
-		Notify("ScanDone")
-		if not Partial then LogFlips() end -- an incomplete listing would make flips look gone
+		Later(function() return Scan.FinishFull(L, E, Now) end, FullDone, function(Err)
+			Mode = nil
+			Scan.LastResult = "Full scan: working out the results failed (" .. tostring(Err) .. ")."
+			Say(Scan.LastResult)
+			Notify("ScanDone")
+		end)
 	end
+end
+FullDone = function(Measured, WithSales, Partial, Soon)
+	Mode = nil
+	local Took = GetTime() - Started
+	if Partial then
+		Scan.LastResult = string.format("Full scan: %d listings, looked incomplete. Prices updated; sales not measured.", Count)
+	elseif Measured > 0 then
+		Scan.LastResult = string.format("Full scan: %d listings in %.0f s. Sales measured for %d items (%d sold something).", Count, Took, Measured, WithSales)
+	else
+		Scan.LastResult = string.format("Full scan: %d listings in %.0f s. Prices updated; sales are measured on a scan 15+ min after your last one.", Count, Took)
+	end
+	Say(Scan.LastResult)
+	Notify("ScanDone")
+	if not Partial then LogFlips() end -- an incomplete listing would make flips look gone
 end
 
 function Scan.Busy() return Mode ~= nil end
@@ -374,6 +402,10 @@ function Scan.Status()
 		local R = (Total or 0) > 0 and Done / Total or 1
 		local F = WAIT_SHARE + (1 - WAIT_SHARE) * R
 		return string.format("Full scan: %d%% (reading %s of %s listings)", F * 100, Commas(Done), Commas(Total or 0)), F
+	elseif Mode == "full-finish" then
+		return "Full scan: 100% (working out sales)", 1
+	elseif Mode == "phase2" then
+		return "Quick scan: 80% (picking the busy items)", 0.8
 	elseif Mode == "browse" and BQ_STATE then
 		-- One bar for the whole quick scan: reading prices fills the first 80%, the busy-item lookups the rest.
 		local E = math.max(1, BQ_STATE.expected or 1)
@@ -696,6 +728,7 @@ function Scan.BusyIds(N)
 	local Rows = {}
 	if type(D) ~= "table" or type(D.items) ~= "table" then return Rows end
 	for id in pairs(D.items) do
+		Yield()
 		local I = Core.Info(id)
 		if I and (I.perHour or 0) > 0 and (I.qty or 0) > 0 then Rows[#Rows + 1] = { id, I.perHour } end
 	end
@@ -709,9 +742,10 @@ end
 -- ones, and a browse only gives their lowest price), at most NEAR of them, then the busiest items. An error working
 -- out the near misses must never break the scan.
 Scan.NEAR = 10
-function Scan.PhaseTwoIds()
+function Scan.PhaseTwoIds(Near)
 	local Out, Seen = {}, {}
-	local Ok, Near = pcall(function() return AF.UI and AF.UI.NearMisses and AF.UI.NearMisses() end)
+	local Ok = true
+	if Near == nil then Ok, Near = pcall(function() return AF.UI and AF.UI.NearMisses and AF.UI.NearMisses() end) end
 	if Ok and type(Near) == "table" then
 		for i = 1, math.min(Scan.NEAR, #Near) do
 			local id = Near[i].id
@@ -722,6 +756,7 @@ function Scan.PhaseTwoIds()
 	return Out
 end
 
+local BrowsePhaseTwo
 local function BrowseFinish(Reason)
 	local St = BQ_STATE
 	local Complete = not Reason and C_AuctionHouse.HasFullBrowseResults()
@@ -729,6 +764,7 @@ local function BrowseFinish(Reason)
 	Scan.Version = Scan.Version + 1 -- (the near misses below are worked out from the browse just applied)
 	local Took = GetTime() - St.started
 	local Done = St.onDone
+	St.reason = Reason
 	BQ_STATE, Mode, Scan.Progress = nil, nil, nil
 	if Reason and St.n == 0 then
 		Scan.LastResult = "Quick scan: " .. Reason .. "."
@@ -736,7 +772,24 @@ local function BrowseFinish(Reason)
 		Scan.LastResult = string.format("Quick scan: prices and stock for %d items in %.0f s.%s", St.n, Took, Reason and (" Stopped early: " .. Reason .. ".") or "")
 	end
 	-- Phase 2: exact lookups of the busiest items, so a quick scan minutes after a full scan measures their sales.
-	local Busy = (not Reason) and Scan.PhaseTwoIds() or {}
+	-- Picking them looks at every item (the flip plan's near misses, the busiest sellers): in the background, still
+	-- busy meanwhile (Mode "phase2").
+	if Reason then BrowsePhaseTwo(St, Done, {}) return end
+	Mode = "phase2"
+	Notify("ScanProgress")
+	local function Pick(Near)
+		Later(function() return Scan.PhaseTwoIds(Near) end, function(Busy) BrowsePhaseTwo(St, Done, Busy or {}) end,
+			function() BrowsePhaseTwo(St, Done, {}) end)
+	end
+	if AF.UI and AF.UI.NearMisses then
+		Later(function() return AF.UI.NearMisses() end, function(Near) Pick(type(Near) == "table" and Near or {}) end, function() Pick({}) end)
+	else
+		Pick({})
+	end
+end
+BrowsePhaseTwo = function(St, Done, Busy)
+	Mode = nil
+	local Reason = St.reason
 	local First = Scan.LastResult
 	if #Busy > 0 and Scan.Lookup(Busy, true, function()
 		local R = Scan.LastSummary or {}

@@ -40,10 +40,10 @@ local function Recheck(Ids, Done)
 end
 function T.OnScanDone()
 	T.ClearScanStatus()
-	-- New scan data: rebuild AF Buy's list now if it's open (not mid-purchase), or the next time it opens.
+	-- New scan data: rebuild AF Buy's list now if it's open (not mid-purchase; in the background), or the next time
+	-- it opens.
 	if Buy.loaded and not Buy.state then
-		Buy.loaded = nil
-		if BuyP and BuyP:IsShown() then T.RefreshBuy() end
+		if BuyP and BuyP:IsShown() then T.RefreshBuyLater() else Buy.loaded = nil end
 	end
 	if not Pending then return end
 	-- Let whatever just finished run its own follow-up first (e.g. a quick scan's busy-item lookups).
@@ -519,6 +519,20 @@ end
 function T.RefreshBuy()
 	Buy.loaded, Buy.money = WithCrafts(UI().FlipTargets() or {}), GetMoney()
 	SortRows()
+end
+-- The same, worked out in the background (the flip and craft plans look at every item: seconds of work, a freeze
+-- when a scan finished with AF Buy open). The list shown stays until the new one is ready; it's only put in while
+-- AF Buy is open and no purchase is under way (otherwise the next open or the end of the purchase rebuilds it).
+function T.RefreshBuyLater()
+	if not UI().LaterOnce then T.RefreshBuy() return end
+	UI().LaterOnce("buy", function() return WithCrafts(UI().FlipTargets() or {}) end, function(Rows)
+		if not (BuyP and BuyP:IsShown()) then
+			Buy.loaded = nil -- (rebuilt when AF Buy opens)
+		elseif not Buy.state and Rows then
+			Buy.loaded, Buy.money = Rows, GetMoney()
+			SortRows() -- keeps the selected item (by id), the sort and Buy.offset
+		end
+	end)
 end
 -- Sort AF Buy by a key ("plan" = the plan's order). Asc nil: gold needed lowest first, the rest highest first.
 function T.SetBuySort(Key, Asc)
@@ -1790,11 +1804,7 @@ local function ApplyLive()
 	if LiveBuy and not Buy.state then
 		LiveBuy = nil
 		if Buy.loaded then
-			Buy.loaded = nil
-			if BuyP and BuyP:IsShown() then
-				Buy.loaded, Buy.money = WithCrafts(UI().FlipTargets() or {}), GetMoney()
-				SortRows() -- keeps the selected item (by id), the sort and Buy.offset
-			end
+			if BuyP and BuyP:IsShown() then T.RefreshBuyLater() else Buy.loaded = nil end
 		end
 	end
 	if LiveSell and not Sell.pending then
