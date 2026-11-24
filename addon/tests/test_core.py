@@ -433,19 +433,25 @@ ok(L(f"#{C}.FlipOptions(MakeItem({{ sellThrough = 0.45 }}), 500000)") == 0 and L
    'no flip options and no live resale for a weak seller or a flooded one')
 # Vendor to AH (C): a batch of 8 h of sales (40/h -> 320) bought at the vendor (3s), auctioned 1c under the cheapest
 # listing (4s 99c); offered when the resale after the cut beats the vendor price by 30% and the batch earns 10s.
-VF = L(f"{C}.VendorFlip(MakeItem(), 300, 1e12)")
+VF = L(f"{C}.VendorFlip(MakeItem(), 300, 1e12, 200)")
 ok(VF is not None and VF.fromVendor and VF.buyQty == 320 and VF.buyUpTo == 300 and VF.cost == 96000 and VF.resell == 499
    and VF.ifSold == 55696 and VF.profit > 0,
    f"vendor to AH: 320 from the vendor at 3s, resold at 4s 99c ({VF and VF.buyQty}, {VF and VF.resell}, if all sell {VF and VF.ifSold}, expected {VF and VF.profit})")
-ok(L(f"{C}.VendorFlip(MakeItem(), 400, 1e12)") is None, 'margin under 30% of the vendor price (4s 74c after the cut vs 4s): not offered')
-VC = L(f"{C}.VendorFlip(MakeItem(), 300, 30000)")
-ok(VC is not None and VC.buyQty == 100 and L(f"{C}.VendorFlip(MakeItem(), 300, 1500)") is None,
+ok(L(f"{C}.VendorFlip(MakeItem(), 400, 1e12, 200)") is None, 'margin under 30% of the vendor price (4s 74c after the cut vs 4s): not offered')
+VC = L(f"{C}.VendorFlip(MakeItem(), 300, 30000, 200)")
+ok(VC is not None and VC.buyQty == 100 and L(f"{C}.VendorFlip(MakeItem(), 300, 1500, 200)") is None,
    f"budget share: 100 for 3g ({VC and VC.buyQty}); 5 for 15s earns under 10s: not offered")
-ok(L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.45 }}), 300, 1e12)") is None and L(f"{C}.VendorFlip(MakeItem({{ lowMed = 280 }}), 300, 1e12)") is None,
+ok(L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.45 }}), 300, 1e12, 200)") is None and L(f"{C}.VendorFlip(MakeItem({{ lowMed = 280 }}), 300, 1e12, 200)") is None,
    'weak seller: no vendor batch; usual price (lowMed 2s 80c) under the vendor price: none (spike guard caps the resale)')
-VS = L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.55 }}), 350, 1e12)")
-ok(VS is None and L(f"{C}.VendorFlip(MakeItem(), 350, 1e12)") is not None,
+VS = L(f"{C}.VendorFlip(MakeItem({{ sellThrough = 0.55 }}), 350, 1e12, 200)")
+ok(VS is None and L(f"{C}.VendorFlip(MakeItem(), 350, 1e12, 200)") is not None,
    "a slow seller (0.55) at 3s 50c: 30% margin and 10s if all sell, but under the 20% expected return a slow flip needs: not offered")
+# Vendor clicks (one per stack): each must earn 10s of the expected profit. 320 units in stacks of 20 = 16 clicks;
+# in stacks of 1 = 320 clicks for a few gold: not offered. Unknown stack size counts as 1.
+VP = L(f"{C}.VendorFlip(MakeItem(), 300, 1e12, 200)")
+ok(VP is not None and VP.purchases == 2, f"320 in stacks of 200: 2 vendor purchases ({VP and VP.purchases})")
+ok(L(f"{C}.VendorFlip(MakeItem(), 300, 1e12, 1)") is None and L(f"{C}.VendorFlip(MakeItem(), 300, 1e12)") is None,
+   f"320 single clicks for +{VP and VP.profit}c (under 32g): not offered; unknown stack = 1")
 # Crate fair value (B): Favor x Favor price + money back - the cheapest bundle bought from the ladder.
 lua.execute('''AF_CrateFills = { [900] = { 901, 4, 902, 8, 903, 45 } }
   AF_CrateFavor = { [900] = { 20, "reported", 0 } }

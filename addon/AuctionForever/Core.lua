@@ -726,8 +726,10 @@ end
 -- the budget share Cap doesn't cover it). Same item rules as flips (FlipStatus: no weak sellers, no flooded markets). The cheap
 -- vendor goods' margins close within days as others notice (Fable review: Skin of Dwarven Stout, Dust of
 -- Deterioration, Shiny Red Apple), so the row simply goes away when the margin does.
+-- Buying at a vendor takes one click per stack (Stack: the item's stack size; nil = 1, unknown), and every click is a
+-- purchase that must earn MinVendorPurchase (10s) of the expected profit (1,542 Mild Spices = 78 clicks for +13s: no).
 Core.VendorFlipMargin, Core.VendorFlipHours = 0.30, 8
-function Core.VendorFlip(I, Vendor, Cap)
+function Core.VendorFlip(I, Vendor, Cap, Stack)
 	if not I or not Vendor or Vendor <= 0 then return nil end
 	local St = Core.FlipStatus(I)
 	if St ~= "good" and St ~= "slow" then return nil end
@@ -741,7 +743,9 @@ function Core.VendorFlip(I, Vendor, Cap)
 	if not O or O.resell * (1 - Core.Cut) - Vendor < Core.VendorFlipMargin * Vendor then return nil end
 	O.ifSold = math.floor(Qty * (O.resell * (1 - Core.Cut) - Vendor) + 1e-6)
 	if O.ifSold < Core.MinVendorPurchase or O.profit < math.ceil(Core.FlipReturn(St) * O.cost - 1e-9) then return nil end
-	O.fromVendor, O.buyUpTo, O.slow = true, Vendor, St == "slow" or nil
+	local Clicks = math.ceil(Qty / math.max(1, math.floor(tonumber(Stack) or 1)))
+	if O.profit < Clicks * Core.MinVendorPurchase then return nil end
+	O.fromVendor, O.buyUpTo, O.slow, O.purchases = true, Vendor, St == "slow" or nil, Clicks
 	return O
 end
 

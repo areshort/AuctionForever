@@ -875,7 +875,7 @@ function L.FlipTargets()
 		if D.items[id] then
 			local I = Info[id] or Core.Info(id)
 			Info[id] = I
-			local O = I and Core.VendorFlip(I, V, Cap)
+			local O = I and Core.VendorFlip(I, V, Cap, C_Item.GetItemMaxStackSizeByID and C_Item.GetItemMaxStackSizeByID(id))
 			if O then
 				if not CandOf[id] then CandOf[id] = { id = id, options = {} }; Cands[#Cands + 1] = CandOf[id] end
 				table.insert(CandOf[id].options, O)
