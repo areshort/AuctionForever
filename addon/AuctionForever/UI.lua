@@ -2027,10 +2027,16 @@ function L.TooltipLines(id, Count, InBags, Key, Bound)
 		RecText = RecText .. " (" .. Why .. ")"
 	end
 	local Ok, Tier = pcall(L.ItemTier, Key or id)
+	local AHText = Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data"
+	if not Target and Core.GearInfo(id) then
+		-- Gear with no market data: an estimate from similar gear, marked as one (or plainly no price).
+		local E = Core.GearEstimate(id, V)
+		AHText = E and string.format("~%s (est. from %d similar)", Core.MoneyColor(E.price * N), E.n) or "no price"
+	end
 	local Out = {
 		{ "Tier", (Ok and Tier) and L.TierText(Tier) or "-" },
 		{ "Vendor" .. Tag, (V == nil and "not known yet") or (V > 0 and Core.MoneyColor(V * N)) or "-" },
-		{ "AH" .. Tag, Target and (Core.MoneyColor(Target * N) .. StaleMark(CheckedAt(id))) or "no data" },
+		{ "AH" .. Tag, AHText },
 		{ "Rec" .. Tag, RecText },
 		{ "Source", AF.Farm.Source(id) },
 	}

@@ -769,6 +769,44 @@ if real:
        f"only in the reagent bag and the game won't take it: not posted, says why ({L('StErr')}, {L('AuctionForeverSellPanel.Status:GetText()')})")
     X('''C_Container = StSaved.cc; C_AuctionHouse.GetItemCommodityStatus = StSaved.gics; C_Item.DoesItemExist = StSaved.die
       for i = 1, 12 do Bag[i] = StSaved.bag[i] end''')
+    # Gear with no market data: estimated from similar gear (Core.GearEstimate), marked as an estimate everywhere, and
+    # posted at it only on a second click; gear with nothing similar priced: "no price". (Items picked from the real
+    # data: no auction data, a vendor price, with and without an estimate.)
+    X('''GearEst, GearNone = nil, nil
+      local Ids = {} for id in pairs(AF_Gear or {}) do Ids[#Ids + 1] = id end table.sort(Ids)
+      for _, id in ipairs(Ids) do
+        if not AF_NS.Core.Info(id) and (AF_NS.UI.VendorKnown(id) or 0) > 0 then
+          local E = AF_NS.Core.GearEstimate(id, AF_NS.UI.VendorKnown(id))
+          if E and not GearEst and E.price > math.ceil(AF_NS.UI.VendorKnown(id) / 0.95) then GearEst = id end
+          if not E and not GearNone then GearNone = id end
+        end
+      end''')
+    ok(L('GearEst ~= nil and GearNone ~= nil'), f"real data has gear with no auction data, with and without similar priced gear ({L('GearEst')}, {L('GearNone')})")
+    if L('GearEst ~= nil and GearNone ~= nil'):
+        tl = L('AF_NS.UI.TooltipLines(GearEst)')
+        ah = [str(tl[i][2]) for i in range(1, len(tl) + 1) if str(tl[i][1]).startswith('AH')]
+        est = L('AF_NS.Core.GearEstimate(GearEst, AF_NS.UI.VendorKnown(GearEst))')
+        ok(len(ah) == 1 and ah[0] == '~' + str(L(f'AF_NS.Core.MoneyColor({est.price})')) + f' (est. from {est.n} similar)',
+           f'tooltip: the estimate, marked: AH {ah}')
+        tl = L('AF_NS.UI.TooltipLines(GearNone)')
+        ah = [str(tl[i][2]) for i in range(1, len(tl) + 1) if str(tl[i][1]).startswith('AH')]
+        ok(ah == ['no price'], f'tooltip: no similar gear priced: "no price" ({ah})')
+        X('''Bag[7] = { itemID = GearEst, stackCount = 1, isBound = false }; Bag[8] = { itemID = GearNone, stackCount = 1, isBound = false }
+          Click(AuctionForeverBuyTab); Click(AuctionForeverSellTab); AF_NS.Trade.SelectSellId(GearNone); GearNoneG = AF_NS.Trade.SelectedSell()
+          GearNoneHint = AuctionForeverSellPanel.Hint:GetText(); AF_NS.Trade.SelectSellId(GearEst); GearG = AF_NS.Trade.SelectedSell()''')
+        ok(L('GearG.flag') == 'estimate' and L('GearG.price') == est.price and L('AF_NS.Trade.SellPrice()') == est.price,
+           f"AF Sell: prefilled at the estimate ({L('GearG.flag')}, {L('GearG.price')})")
+        row = [str(L(f'AuctionForeverSellPanel.QueueRows[{i}].Cells[3]:GetText()')) for i in range(1, 15) if L(f'AuctionForeverSellPanel.QueueRows[{i}].id') == L('GearEst')]
+        ok(row and row[0].startswith('~') and 'Estimate: ~' in str(L('AuctionForeverSellPanel.Info:GetText()'))
+           and f"from {est.n} similar" in str(L('AuctionForeverSellPanel.Info:GetText()')) and 'Estimated price, not a market price' in str(L('AuctionForeverSellPanel.Hint:GetText()')),
+           f"AF Sell: marked as an estimate in the list, the info line and the hint ({row}; {L('AuctionForeverSellPanel.Info:GetText()')})")
+        ok(L('GearNoneG.flag') == 'noprice' and 'No price' in str(L('GearNoneHint')), f"AF Sell: no similar gear priced: says no price ({L('GearNoneG.flag')})")
+        X('Calls = {}; Click(AuctionForeverSellPanel.Post)')
+        ok(L('LastCall("PostItem") == nil and LastCall("PostCommodity") == nil') and 'estimate' in str(L('AuctionForeverSellPanel.Status:GetText()')),
+           f"first Post at the estimate: not posted, says it's an estimate ({L('AuctionForeverSellPanel.Status:GetText()')})")
+        X('Click(AuctionForeverSellPanel.Post)')
+        ok(L('LastCall("PostItem") ~= nil or LastCall("PostCommodity") ~= nil'), 'second click posts at it')
+    X('Bag[7], Bag[8] = nil, nil; Click(AuctionForeverBuyTab); Click(AuctionForeverSellTab)')
     # Expired twice since you bought it: stop reposting at your cost; suggest the market price and say so.
     X("""AuctionForeverDB.mysales = AuctionForeverDB.mysales or {}
       NSales = #AuctionForeverDB.mysales

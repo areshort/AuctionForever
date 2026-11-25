@@ -370,6 +370,91 @@ function Core.Status(I)
 	return "good"
 end
 
+-- Comparable gear: a price estimate for a weapon or armor piece with no market data, from similar gear that has one.
+-- Similar: the same kind (weapon / armor), subclass (sword, mail...), slot (robes count as chest) and quality, item
+-- level within GearBands[1] (then GearBands[2] when fewer than GearMin match), from AF_Gear (Recipes.lua, the game
+-- data). Priced: a measured sold price (median) and sales measured long enough (status good, slow, falling or
+-- flooded; not "warming up"). The estimate is the median of the GearNearest closest in item level, never below what
+-- a vendor pays after the AH cut. Random-suffix gear ("of the Bear") is matched by its base item: the data's price
+-- for an item covers all its suffix versions. Returns { price, n, band, ids, prices } or nil (no price: not gear, or
+-- too few matches).
+Core.GearBands = { 3, 5 }
+Core.GearMin = 3
+Core.GearNearest = 7
+local GEAR_PRICED = { good = true, slow = true, falling = true, flooded = true }
+-- AF_Gear's packed number -> kind (0 weapon, 1 armor), subclass, slot, quality, item level.
+function Core.GearInfo(id)
+	local P = type(AF_Gear) == "table" and AF_Gear[id]
+	if not P then return nil end
+	local Lvl = P % 1024; P = (P - Lvl) / 1024
+	local Q = P % 8; P = (P - Q) / 8
+	local Slot = P % 32; P = (P - Slot) / 32
+	local Sub = P % 32
+	return (P - Sub) / 32, Sub, Slot, Q, Lvl
+end
+local GearGroups, GearCache, GearCacheKey
+local function GearGroup(id)
+	if not GearGroups then
+		GearGroups = {}
+		for G, P in pairs(AF_Gear) do
+			local K = math.floor(P / 1024)
+			local T = GearGroups[K]
+			if not T then T = {}; GearGroups[K] = T end
+			T[#T + 1] = G
+		end
+	end
+	return GearGroups[math.floor(AF_Gear[id] / 1024)] or {}
+end
+-- The trusted market price of one gear item, or nil.
+function Core.GearPrice(id)
+	local I = Core.Info(id)
+	if not (I and I.med and I.med > 0 and GEAR_PRICED[Core.Status(I)]) then return nil end
+	return I.med
+end
+function Core.GearEstimate(id, Vendor)
+	id = Core.SplitKey(id)
+	if not (type(AF_Gear) == "table" and AF_Gear[id]) then return nil end
+	local D = AuctionForeverData
+	local Key = tostring(AF.Scan and AF.Scan.Version or 0) .. ":" .. tostring(type(D) == "table" and D.time or 0)
+	if GearCacheKey ~= Key then GearCache, GearCacheKey = {}, Key end
+	local C = GearCache[id]
+	if C == nil then
+		C = false
+		local Lvl = AF_Gear[id] % 1024
+		local Near = {}
+		for _, G in ipairs(GearGroup(id)) do
+			local Diff = math.abs(AF_Gear[G] % 1024 - Lvl)
+			if G ~= id and Diff <= Core.GearBands[#Core.GearBands] then
+				local P = Core.GearPrice(G)
+				if P then Near[#Near + 1] = { G, P, Diff } end
+			end
+		end
+		for _, Band in ipairs(Core.GearBands) do
+			local In = {}
+			for _, X in ipairs(Near) do if X[3] <= Band then In[#In + 1] = X end end
+			if #In >= Core.GearMin then
+				table.sort(In, function(a, b) if a[3] ~= b[3] then return a[3] < b[3] end return a[1] < b[1] end)
+				local Ids, Prices = {}, {}
+				for i = 1, math.min(Core.GearNearest, #In) do Ids[i], Prices[i] = In[i][1], In[i][2] end
+				local S = {}
+				for i, P in ipairs(Prices) do S[i] = P end
+				table.sort(S)
+				local N = #S
+				local Mid = N % 2 == 1 and S[(N + 1) / 2] or math.floor((S[N / 2] + S[N / 2 + 1]) / 2)
+				C = { price = Mid, n = N, band = Band, ids = Ids, prices = Prices }
+				break
+			end
+		end
+		GearCache[id] = C
+	end
+	if not C then return nil end
+	local Out = {}
+	for k, v in pairs(C) do Out[k] = v end
+	-- never below what a vendor pays (after the AH cut, so posting at it never pays less than vendoring)
+	if Vendor and Vendor > 0 then Out.price = math.max(Out.price, math.ceil(Vendor / (1 - Core.Cut))) end
+	return Out
+end
+
 -- Hours to sell MyQty at Price, given what's listed below it (buyers take the cheapest first).
 function Core.FillHours(Ladder, Price, MyQty, PerHour)
 	if not PerHour or PerHour <= 0 then return math.huge end

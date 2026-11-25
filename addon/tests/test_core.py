@@ -465,5 +465,42 @@ lua.execute('''AF_CrateFavor[900] = { 20, "confirmed", 300 }; CV2 = AuctionForev
 ok(L('CV2.value') == 20 * 300 + 300 - 3200 and L('CV2.source') == 'confirmed' and L('CV3.value') is None and L('CV3.fill') is None
    and L('AuctionForever.Core.CrateValue(901)') is None,
    'money back and the Favor price count; no bundle listed: no value; not a crate: nil')
+# ---- Comparable gear: an estimate for gear with no market data, from similar gear that sells ----
+# AF_Gear packs (((kind*32 + subclass)*32 + slot)*8 + quality)*1024 + item level (Recipes.lua, from the game data).
+lua.execute('''function Gear(Kind, Sub, Slot, Q, Lvl) return (((Kind * 32 + Sub) * 32 + Slot) * 8 + Q) * 1024 + Lvl end
+  AF_Gear = {
+    [100] = Gear(1, 2, 7, 2, 40),   -- the item to price: green leather legs, item level 40, no data
+    [101] = Gear(1, 2, 7, 2, 41), [102] = Gear(1, 2, 7, 2, 39), [103] = Gear(1, 2, 7, 2, 42), -- priced, in +-3
+    [104] = Gear(1, 2, 7, 2, 43),   -- priced, +3
+    [105] = Gear(1, 2, 7, 3, 40),   -- blue: another quality
+    [106] = Gear(1, 1, 7, 2, 40),   -- cloth: another subclass
+    [107] = Gear(1, 2, 8, 2, 40),   -- boots: another slot
+    [108] = Gear(1, 2, 7, 2, 40),   -- same, but only warming up (too few sales): not trusted
+    [109] = Gear(1, 2, 7, 2, 50),   -- too far in item level
+    [200] = Gear(0, 7, 13, 2, 30),  -- a sword with two matches in +-3 and one more at +5
+    [201] = Gear(0, 7, 13, 2, 31), [202] = Gear(0, 7, 13, 2, 33), [203] = Gear(0, 7, 13, 2, 35),
+    [300] = Gear(1, 4, 1, 2, 60),   -- a plate helm with nothing similar priced
+  }
+  GearPrices = { [101] = 1000, [102] = 1200, [103] = 5000, [104] = 900, [105] = 99999, [106] = 99999, [107] = 99999,
+    [108] = 99999, [109] = 99999, [201] = 300, [202] = 500, [203] = 700 }
+  RealInfoG = AuctionForever.Core.Info
+  AuctionForever.Core.Info = function(K)
+    local P = GearPrices[K]
+    if not P then return nil end
+    return MakeItem({ id = K, med = P, low = P, med24 = P, medAll = P, perHour = 0.5, hoursWithSales = 10, sales = K == 108 and 1 or 40,
+      qty = 3, ladder = { { P, 1 } } })
+  end''')
+lua.execute('E100 = AuctionForever.Core.GearEstimate(100, 50)')
+ok(L('E100 ~= nil') and L('E100.n') == 4 and L('E100.band') == 3 and L('E100.price') == 1100
+   and sorted(L('E100.ids').values()) == [101, 102, 103, 104],
+   f"same kind, subclass, slot and quality, item level +-3, trusted prices only: median of 900, 1000, 1200, 5000 = 1100 ({L('E100 and E100.price')}, from {L('E100 and E100.n')})")
+ok(L('AuctionForever.Core.GearEstimate(100, 2000).price') == 2106, 'never below what a vendor pays after the cut (2000 / 0.95 = 2106)')
+lua.execute('E200 = AuctionForever.Core.GearEstimate(200)')
+ok(L('E200 ~= nil') and L('E200.band') == 5 and L('E200.n') == 3 and L('E200.price') == 500,
+   f"fewer than 3 within +-3: widened to +-5 (median of 300, 500, 700) ({L('E200 and E200.price')}, +-{L('E200 and E200.band')})")
+ok(L('AuctionForever.Core.GearEstimate(300) == nil') and L('AuctionForever.Core.GearEstimate(999) == nil'),
+   'nothing similar priced, or not gear: no estimate (shown as "no price", never 0)')
+ok(L('AuctionForever.Core.GearEstimate("100:1234").price') == 1100, 'a random-suffix version is matched by its base item')
+lua.execute('AuctionForever.Core.Info = RealInfoG; AF_Gear = nil')
 print('FAILED' if fails else 'ALL PASSED', fails)
 sys.exit(1 if fails else 0)

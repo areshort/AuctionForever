@@ -834,13 +834,18 @@ function T.BuildQueue()
 				G.info = I
 				Suggest(G)
 			else
-				-- No auction data: the vendor price after the cut when it's known, else no price.
+				-- No auction data: the vendor price after the cut when it's known, else no price. Gear: an estimate
+				-- from similar gear (Core.GearEstimate), marked as one everywhere it shows, never below the vendor.
 				G.held, G.cost = Core.Holding(SaveDB(), G.id)
 				G.price = (G.vendor or 0) > 0 and Floor(G) or nil
 				G.durIdx, G.qty = 1, G.count
+				if Core.GearInfo(G.id) then
+					G.est = Core.GearEstimate(G.id, G.vendor)
+					if G.est then G.price = math.max(G.est.price, (G.vendor or 0) > 0 and Floor(G) or 1) end
+				end
 			end
 			if G.group == 2 then G.flag = "vendor"
-			elseif G.group == 3 then G.flag = I and "novendor" or "nodata" end
+			elseif G.group == 3 then G.flag = I and "novendor" or (G.est and "estimate") or (Core.GearInfo(G.id) and "noprice") or "nodata" end
 			-- Sell value: the stack by its recommended route (AH: the suggested price; vendor and no data: the
 			-- vendor price; not known: 0).
 			G.value = (G.group == 1 and (G.price or 0) or (G.vendor or 0)) * G.count
@@ -980,11 +985,13 @@ function T.DrawSell()
 			R.Cells[2]:SetText("x" .. G.count)
 			-- (the selected row: the price in the boxes, so your edit shows here too; other rows the AF suggestion,
 			-- or a gray "Vendor" (the Rec line says vendor it) / "no data" (no auction data yet))
+			-- (an estimate from similar gear: "~" in front, while it's the estimate)
 			local Picked = i + Off == Sell.idx
 			local Each = Picked and T.SellPrice() or G.price
+			local Est = G.est and Each == G.price
 			if not Picked and G.group == 2 then R.Cells[3]:SetText("|cff9d9d9dVendor|r")
-			elseif not Picked and not G.info then R.Cells[3]:SetText("|cff9d9d9dno data|r")
-			else R.Cells[3]:SetText(Each and Core.MoneyColor(Each) or "-") end
+			elseif not Picked and not G.info and not G.est then R.Cells[3]:SetText(G.flag == "noprice" and "|cff9d9d9dno price|r" or "|cff9d9d9dno data|r")
+			else R.Cells[3]:SetText(Each and ((Est and "~" or "") .. Core.MoneyColor(Each)) or "-") end
 			R.Sel:SetShown(i + Off == Sell.idx)
 		end
 	end
@@ -1001,7 +1008,9 @@ function T.DrawSell()
 	SellP.Name:SetText(NameText(G.key or G.id))
 	local Line = I and string.format("In your bags: %d     Market: %s     Sells about %.0f an hour     Status: %s",
 		G.count, Core.MoneyColor(Core.Market(I)), I.perHour or 0, UI().StatusText(Core.Status(I)))
-		or string.format("In your bags: %d     No auction data yet", G.count)
+		or (G.est and string.format("In your bags: %d     No auction data. Estimate: ~%s each from %d similar items (same slot, type, quality, item level +-%d)",
+			G.count, Core.MoneyColor(G.est.price), G.est.n, G.est.band))
+		or string.format("In your bags: %d     No auction data yet%s", G.count, G.flag == "noprice" and " (no price: no similar gear with one)" or "")
 	if G.cost then
 		local Price = T.SellPrice() or G.price
 		local Each = math.floor(Price * (1 - Core.Cut)) - G.cost
@@ -1016,6 +1025,8 @@ function T.DrawSell()
 		vendor = "|cff9d9d9dRec: Vendor. Vendoring pays more or about the same. Prefilled anyway, never below the vendor price after the cut.|r",
 		nodata = "|cff9d9d9dNo auction data for this item yet: prefilled at the vendor price after the cut (if known). Refresh prices to check the auction house.|r",
 		novendor = "|cffffd100Vendor price not loaded yet: check this is more than the vendor pays before posting.|r",
+		estimate = "|cffffd100Estimated price, not a market price: the median of similar gear that sells. Check it before posting.|r",
+		noprice = "|cffffd100No price: no market data and too few similar items with one. Prefilled at the vendor price after the cut (if known); set your own price.|r",
 	}
 	SellP.Hint:SetText(Hint[G.flag or ""] or "Prefilled: 1c under the cheapest listing.")
 	SellP.Info:SetText(Line)
@@ -1112,6 +1123,12 @@ function T.PostClick()
 		return
 	end
 	Sell.lossOk = nil
+	-- The prefilled estimate (no market data): posted only on a second click, so it's never used without seeing it.
+	if G.est and Price == G.price and Sell.estOk ~= G.id then
+		Sell.estOk = G.id
+		SaySell(string.format("~%s is an estimate from %d similar items, not a market price. Click Post again to post at it.", Core.MoneyColor(Price), G.est.n))
+		return
+	end
 	Qty = Qty and math.floor(Qty)
 	if not Qty or Qty < 1 then SaySell("Enter how many to post.") return end
 	if Qty > G.count then SaySell("You only have " .. G.count .. ".") return end
